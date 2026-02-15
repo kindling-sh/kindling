@@ -1,0 +1,236 @@
+# ─────────────────────────────────────────────────────────────────
+# dev-deploy.yml — Build and deploy all microservices to your local
+# Kind cluster via kindling.
+#
+# This workflow runs on your SELF-HOSTED runner (created by the
+# GithubActionRunnerPool CR). It builds four container images (three
+# Go services + a React dashboard) and applies four DevStagingEnvironment
+# CRs — the kindling operator provisions Postgres, MongoDB, and Redis
+# automatically.
+# ─────────────────────────────────────────────────────────────────
+name: Microservices Deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "**"
+      - ".github/workflows/dev-deploy.yml"
+  workflow_dispatch:
+
+jobs:
+  build-and-deploy:
+    runs-on: [self-hosted, "${{ github.actor }}"]
+
+    env:
+      TAG: "${{ github.actor }}-${{ github.sha }}"
+
+    steps:
+      # ── 1. Checkout ──────────────────────────────────────────────
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # ── 2. Build all service images ──────────────────────────────
+      - name: Build gateway image
+        run: |
+          docker build -t ms-gateway:$TAG gateway/
+          echo "✅ Built ms-gateway:$TAG"
+
+      - name: Build orders image
+        run: |
+          docker build -t ms-orders:$TAG orders/
+          echo "✅ Built ms-orders:$TAG"
+
+      - name: Build inventory image
+        run: |
+          docker build -t ms-inventory:$TAG inventory/
+          echo "✅ Built ms-inventory:$TAG"
+
+      - name: Build UI image
+        run: |
+          docker build -t ms-ui:$TAG ui/
+          echo "✅ Built ms-ui:$TAG"
+
+      # ── 3. Load images into Kind ─────────────────────────────────
+      - name: Load images into Kind
+        run: |
+          if command -v kind &> /dev/null; then
+            kind load docker-image ms-gateway:$TAG --name dev 2>/dev/null || true
+            kind load docker-image ms-orders:$TAG --name dev 2>/dev/null || true
+            kind load docker-image ms-inventory:$TAG --name dev 2>/dev/null || true
+            kind load docker-image ms-ui:$TAG --name dev 2>/dev/null || true
+          fi
+
+      # ── 4. Deploy Orders Service (Postgres + Redis) ──────────────
+      - name: Deploy orders service
+        run: |
+          cat <<EOF | kubectl apply -f -
+          apiVersion: apps.example.com/v1alpha1
+          kind: DevStagingEnvironment
+          metadata:
+            name: ${{ github.actor }}-orders
+            labels:
+              app.kubernetes.io/part-of: microservices-demo
+              app.kubernetes.io/component: orders
+              apps.example.com/github-username: ${{ github.actor }}
+          spec:
+            deployment:
+              image: ms-orders:$TAG
+              replicas: 1
+              port: 8081
+              healthCheck:
+                path: /healthz
+            service:
+              port: 8081
+              type: ClusterIP
+            dependencies:
+              - type: postgres
+                version: "16"
+              - type: redis
+          EOF
+          echo "✅ Orders DevStagingEnvironment applied"
+
+      # ── 5. Deploy Inventory Service (MongoDB + shared Redis) ─────
+      - name: Deploy inventory service
+        run: |
+          cat <<EOF | kubectl apply -f -
+          apiVersion: apps.example.com/v1alpha1
+          kind: DevStagingEnvironment
+          metadata:
+            name: ${{ github.actor }}-inventory
+            labels:
+              app.kubernetes.io/part-of: microservices-demo
+              app.kubernetes.io/component: inventory
+              apps.example.com/github-username: ${{ github.actor }}
+          spec:
+            deployment:
+              image: ms-inventory:$TAG
+              replicas: 1
+              port: 8082
+              env:
+                - name: REDIS_URL
+                  value: "redis://${{ github.actor }}-orders-redis:6379/0"
+              healthCheck:
+                path: /healthz
+            service:
+              port: 8082
+              type: ClusterIP
+            dependencies:
+              - type: mongodb
+          EOF
+          echo "✅ Inventory DevStagingEnvironment applied"
+
+      # ── 6. Deploy Gateway ────────────────────────────────────────
+      - name: Deploy gateway
+        run: |
+          cat <<EOF | kubectl apply -f -
+          apiVersion: apps.example.com/v1alpha1
+          kind: DevStagingEnvironment
+          metadata:
+            name: ${{ github.actor }}-gateway
+            labels:
+              app.kubernetes.io/part-of: microservices-demo
+              app.kubernetes.io/component: gateway
+              apps.example.com/github-username: ${{ github.actor }}
+          spec:
+            deployment:
+              image: ms-gateway:$TAG
+              replicas: 1
+              port: 8080
+              env:
+                - name: ORDERS_SERVICE_URL
+                  value: "http://${{ github.actor }}-orders:8081"
+                - name: INVENTORY_SERVICE_URL
+                  value: "http://${{ github.actor }}-inventory:8082"
+              healthCheck:
+                path: /healthz
+            service:
+              port: 8080
+              type: ClusterIP
+          EOF
+          echo "✅ Gateway DevStagingEnvironment applied"
+
+      # ── 7. Deploy UI Dashboard ──────────────────────────────────
+      - name: Deploy UI dashboard
+        run: |
+          cat <<EOF | kubectl apply -f -
+          apiVersion: apps.example.com/v1alpha1
+          kind: DevStagingEnvironment
+          metadata:
+            name: ${{ github.actor }}-ui
+            labels:
+              app.kubernetes.io/part-of: microservices-demo
+              app.kubernetes.io/component: ui
+              apps.example.com/github-username: ${{ github.actor }}
+          spec:
+            deployment:
+              image: ms-ui:$TAG
+              replicas: 1
+              port: 80
+              env:
+                - name: GATEWAY_URL
+                  value: "http://${{ github.actor }}-gateway:8080"
+              healthCheck:
+                path: /
+            service:
+              port: 80
+              type: ClusterIP
+            ingress:
+              enabled: true
+              host: ${{ github.actor }}-ui.localhost
+              ingressClassName: nginx
+          EOF
+          echo "✅ UI DevStagingEnvironment applied"
+
+      # ── 8. Wait for rollouts ─────────────────────────────────────
+      - name: Wait for all deployments
+        run: |
+          for svc in orders inventory gateway ui; do
+            echo "⏳ Waiting for ${{ github.actor }}-${svc}..."
+            kubectl rollout status deployment/${{ github.actor }}-${svc} \
+              --timeout=120s || true
+          done
+
+          echo ""
+          echo "📦 Pods:"
+          kubectl get pods -l app.kubernetes.io/part-of=microservices-demo
+
+          echo ""
+          echo "🌐 Services:"
+          kubectl get svc | grep -E "${{ github.actor }}-(gateway|orders|inventory|ui)"
+
+          echo ""
+          echo "🎯 DevStagingEnvironments:"
+          kubectl get devstagingenvironments -l app.kubernetes.io/part-of=microservices-demo
+
+      # ── 8. Smoke test ────────────────────────────────────────────
+      - name: Smoke test
+        run: |
+          kubectl port-forward svc/${{ github.actor }}-gateway 18080:8080 &
+          PF_PID=$!
+          sleep 3
+
+          echo "── Gateway health ─────────────────────"
+          curl -s http://localhost:18080/healthz | jq .
+
+          echo ""
+          echo "── Aggregated status ──────────────────"
+          curl -s http://localhost:18080/status | jq .
+
+          echo ""
+          echo "── Create an order ────────────────────"
+          curl -s -X POST http://localhost:18080/orders \
+            -H "Content-Type: application/json" \
+            -d '{"product":"widget-a","quantity":2}' | jq .
+
+          echo ""
+          echo "── Check inventory (stock decremented) ─"
+          sleep 2  # give the queue consumer a moment
+          curl -s http://localhost:18080/inventory | jq .
+
+          kill $PF_PID 2>/dev/null || true
+          echo ""
+          echo "🎉 All services deployed!"
+          echo "🎨 UI dashboard: http://${{ github.actor }}-ui.localhost"
+          echo "🌐 Gateway API:  http://${{ github.actor }}-gateway.localhost"
+          echo "📡 Fallback:     kubectl port-forward svc/${{ github.actor }}-gateway 8080:8080"

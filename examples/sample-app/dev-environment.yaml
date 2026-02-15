@@ -10,13 +10,12 @@
 #   # 2. Apply this manifest
 #   kubectl apply -f examples/sample-app/dev-environment.yaml
 #
-#   # 3. Wait for rollout and port-forward
+#   # 3. Wait for rollout
 #   kubectl rollout status deployment/sample-app-dev --timeout=120s
-#   kubectl port-forward svc/sample-app-dev 8080:8080
 #
-#   # 4. Hit the endpoints
-#   curl localhost:8080/healthz
-#   curl localhost:8080/status
+#   # 4. Hit the endpoints (via Ingress — no port-forward needed!)
+#   curl http://sample-app.localhost/healthz
+#   curl http://sample-app.localhost/status
 # ─────────────────────────────────────────────────────────────────
 apiVersion: apps.example.com/v1alpha1
 kind: DevStagingEnvironment
@@ -38,6 +37,14 @@ spec:
   service:
     port: 8080
     type: ClusterIP
+
+  # ── Ingress ────────────────────────────────────────────────────
+  # Works out of the box with ingress-nginx on Kind.
+  # Access via: http://sample-app.localhost
+  ingress:
+    enabled: true
+    host: sample-app.localhost
+    ingressClassName: nginx
 
   # ── Dependencies ────────────────────────────────────────────────
   # The operator auto-provisions each backing service and injects

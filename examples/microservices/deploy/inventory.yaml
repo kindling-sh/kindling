@@ -1,0 +1,52 @@
+# ─────────────────────────────────────────────────────────────────
+# DevStagingEnvironment CR — Inventory Service
+#
+# Manages product stock levels in MongoDB and runs a background worker
+# that consumes "order.created" events from a shared Redis queue to
+# automatically decrement inventory.
+#
+# The operator auto-provisions MongoDB and Redis and injects:
+#   MONGO_URL → mongodb://devuser:devpass@...:27017
+#   REDIS_URL → redis://...:6379/0
+#
+# NOTE: The Redis instance here points to the same Redis provisioned
+# by the orders service — in a real setup you would either share a
+# single Redis CR or point both env vars at the same host. For this
+# demo the REDIS_URL is overridden to point at the orders service's
+# Redis instance so both services share the same queue.
+# ─────────────────────────────────────────────────────────────────
+apiVersion: apps.example.com/v1alpha1
+kind: DevStagingEnvironment
+metadata:
+  name: microservices-inventory-dev
+  labels:
+    app.kubernetes.io/part-of: microservices-demo
+    app.kubernetes.io/component: inventory
+    app.kubernetes.io/managed-by: kindling
+spec:
+  deployment:
+    image: ms-inventory:dev
+    replicas: 1
+    port: 8082
+    env:
+      # Share the orders service's Redis so both use the same queue
+      - name: REDIS_URL
+        value: "redis://microservices-orders-dev-redis:6379/0"
+    healthCheck:
+      path: /healthz
+
+  service:
+    port: 8082
+    type: ClusterIP
+
+  # ── Ingress ────────────────────────────────────────────────────
+  # Optional: directly access the inventory API for debugging.
+  # Access via: http://inventory.localhost
+  ingress:
+    enabled: true
+    host: inventory.localhost
+    ingressClassName: nginx
+
+  # ── Dependencies ────────────────────────────────────────────────
+  dependencies:
+    - type: mongodb

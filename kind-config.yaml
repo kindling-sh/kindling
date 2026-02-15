@@ -1,0 +1,29 @@
+# ─────────────────────────────────────────────────────────────────
+# Kind cluster config with Ingress support.
+#
+# This maps container ports 80/443 to localhost so that the
+# ingress-nginx controller can receive traffic directly:
+#
+#   http://sample-app.localhost   → sample-app Service
+#   http://gateway.localhost      → microservices gateway Service
+#
+# Usage:
+#   kind create cluster --name dev --config kind-config.yaml
+# ─────────────────────────────────────────────────────────────────
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+    kubeadmConfigPatches:
+      - |
+        kind: InitConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            node-labels: "ingress-ready=true"
+    extraPortMappings:
+      - containerPort: 80
+        hostPort: 80
+        protocol: TCP
+      - containerPort: 443
+        hostPort: 443
+        protocol: TCP

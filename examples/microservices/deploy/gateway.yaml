@@ -1,0 +1,42 @@
+# ─────────────────────────────────────────────────────────────────
+# DevStagingEnvironment CR — API Gateway
+#
+# The gateway is the public-facing HTTP entry point. It reverse-proxies
+# to the orders and inventory services using their in-cluster DNS names.
+#
+# The operator resolves service URLs from sibling DevStagingEnvironments
+# via the ORDERS_SERVICE_URL and INVENTORY_SERVICE_URL env vars.
+# ─────────────────────────────────────────────────────────────────
+apiVersion: apps.example.com/v1alpha1
+kind: DevStagingEnvironment
+metadata:
+  name: microservices-gateway-dev
+  labels:
+    app.kubernetes.io/part-of: microservices-demo
+    app.kubernetes.io/component: gateway
+    app.kubernetes.io/managed-by: kindling
+spec:
+  deployment:
+    image: ms-gateway:dev
+    replicas: 1
+    port: 8080
+    env:
+      - name: ORDERS_SERVICE_URL
+        value: "http://microservices-orders-dev:8081"
+      - name: INVENTORY_SERVICE_URL
+        value: "http://microservices-inventory-dev:8082"
+    healthCheck:
+      path: /healthz
+
+  service:
+    port: 8080
+    type: ClusterIP
+
+  # ── Ingress ────────────────────────────────────────────────────
+  # The gateway is the public entry point — expose it via Ingress.
+  # Works out of the box with ingress-nginx on Kind.
+  # Access via: http://gateway.localhost
+  ingress:
+    enabled: true
+    host: gateway.localhost
+    ingressClassName: nginx

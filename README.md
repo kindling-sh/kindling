@@ -236,9 +236,19 @@ With the above, the operator creates:
 
 ### 1. Create a local Kind cluster
 
+Use the included config to enable Ingress support (maps ports 80/443 to localhost):
+
 ```bash
-kind create cluster --name dev
+kind create cluster --name dev --config kind-config.yaml
 ```
+
+Then install the ingress-nginx controller:
+
+```bash
+chmod +x setup-ingress.sh && ./setup-ingress.sh
+```
+
+> **Note:** If you skip this step and use a plain `kind create cluster`, everything still works — you’ll just use `kubectl port-forward` instead of `.localhost` hostnames.
 
 ### 2. Install the CRDs
 
@@ -341,6 +351,37 @@ curl http://localhost:8080/status | jq .
 
 See the full walkthrough in the [sample app README](examples/sample-app/README.md).
 
+### Try the microservices demo (multi-service + Redis queue)
+
+For a more realistic example, the repo includes a [microservices demo](examples/microservices/) with three interconnected services:
+
+| Service | Database | Role |
+|---|---|---|
+| **gateway** | — | Public API, reverse-proxies to backend services |
+| **orders** | Postgres 16 | Manages orders, publishes `order.created` events to a Redis queue |
+| **inventory** | MongoDB | Manages stock levels, consumes events from the Redis queue |
+
+```bash
+# Build and load all images
+for svc in gateway orders inventory; do
+  docker build -t ms-${svc}:dev examples/microservices/${svc}/
+  kind load docker-image ms-${svc}:dev --name dev
+done
+
+# Deploy all three services (operator provisions Postgres, MongoDB, Redis)
+kubectl apply -f examples/microservices/deploy/
+
+# Port-forward the gateway and try it
+kubectl port-forward svc/microservices-gateway-dev 8080:8080
+curl localhost:8080/status | jq .                          # all services healthy
+curl -X POST localhost:8080/orders \
+  -H 'Content-Type: application/json' \
+  -d '{"product":"widget-a","quantity":3}' | jq .           # create an order
+sleep 2 && curl localhost:8080/inventory | jq .             # stock decremented!
+```
+
+See the full walkthrough in the [microservices README](examples/microservices/README.md).
+
 ---
 
 ## Project Layout
@@ -353,13 +394,20 @@ See the full walkthrough in the [sample app README](examples/sample-app/README.m
 │   ├── groupversion_info.go             #   apps.example.com/v1alpha1 registration
 │   └── zz_generated.deepcopy.go         #   auto-generated DeepCopy methods
 ├── cmd/main.go                          # Operator entrypoint & controller wiring
-├── examples/sample-app/                 # Reference app — copy into your own repo
-│   ├── .github/workflows/dev-deploy.yml #   GH Actions workflow: build + deploy to Kind
-│   ├── main.go                          #   Go web server (Postgres + Redis)
-│   ├── Dockerfile                       #   Multi-stage build
-│   ├── dev-environment.yaml             #   DevStagingEnvironment CR for manual apply
-│   ├── go.mod                           #   Separate module
-│   └── README.md                        #   Full clone → configure → push guide
+├── examples/
+│   ├── sample-app/                      # Single-service reference app
+│   │   ├── .github/workflows/           #   GH Actions workflow: build + deploy
+│   │   ├── main.go                      #   Go web server (Postgres + Redis)
+│   │   ├── Dockerfile                   #   Multi-stage build
+│   │   ├── dev-environment.yaml         #   DevStagingEnvironment CR
+│   │   └── README.md                    #   Full walkthrough guide
+│   └── microservices/                   # Multi-service demo (3 services + queue)
+│       ├── gateway/                     #   API gateway — reverse proxy
+│       ├── orders/                      #   Orders API — Postgres + Redis publisher
+│       ├── inventory/                   #   Inventory API — MongoDB + Redis consumer
+│       ├── deploy/                      #   DevStagingEnvironment CRs for all services
+│       ├── .github/workflows/           #   GH Actions: build all + deploy
+│       └── README.md                    #   Architecture & walkthrough
 ├── internal/controller/
 │   ├── devstagingenvironment_controller.go   # Reconciler → Deployment + Service + Ingress + Deps
 │   └── githubactionrunnerpool_controller.go  # Reconciler → Runner Deployment + Docker

@@ -1,0 +1,30 @@
+# ─────────────────────────────────────────────────────────────────
+# UI — React dashboard for the microservices demo
+#
+# Served by nginx, which proxies /api/* to the gateway service.
+# The GATEWAY_URL env var is injected at container startup.
+# ─────────────────────────────────────────────────────────────────
+apiVersion: apps.example.com/v1alpha1
+kind: DevStagingEnvironment
+metadata:
+  name: microservices-ui-dev
+  labels:
+    app.kubernetes.io/part-of: microservices-demo
+    app.kubernetes.io/component: ui
+spec:
+  deployment:
+    image: ms-ui:dev
+    replicas: 1
+    port: 80
+    env:
+      - name: GATEWAY_URL
+        value: "http://microservices-gateway-dev:8080"
+    healthCheck:
+      path: /
+  service:
+    port: 80
+    type: ClusterIP
+  ingress:
+    enabled: true
+    host: ui.localhost
+    ingressClassName: nginx

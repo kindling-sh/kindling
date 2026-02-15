@@ -1,0 +1,43 @@
+# ─────────────────────────────────────────────────────────────────
+# DevStagingEnvironment CR — Orders Service
+#
+# Stores orders in PostgreSQL and publishes "order.created" events to
+# a Redis queue for downstream consumers (inventory service).
+#
+# The operator auto-provisions Postgres and Redis and injects:
+#   DATABASE_URL → postgres://devuser:devpass@...:5432/devdb
+#   REDIS_URL    → redis://...:6379/0
+# ─────────────────────────────────────────────────────────────────
+apiVersion: apps.example.com/v1alpha1
+kind: DevStagingEnvironment
+metadata:
+  name: microservices-orders-dev
+  labels:
+    app.kubernetes.io/part-of: microservices-demo
+    app.kubernetes.io/component: orders
+    app.kubernetes.io/managed-by: kindling
+spec:
+  deployment:
+    image: ms-orders:dev
+    replicas: 1
+    port: 8081
+    healthCheck:
+      path: /healthz
+
+  service:
+    port: 8081
+    type: ClusterIP
+
+  # ── Ingress ────────────────────────────────────────────────────
+  # Optional: directly access the orders API for debugging.
+  # Access via: http://orders.localhost
+  ingress:
+    enabled: true
+    host: orders.localhost
+    ingressClassName: nginx
+
+  # ── Dependencies ────────────────────────────────────────────────
+  dependencies:
+    - type: postgres
+      version: "16"
+    - type: redis
