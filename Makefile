@@ -137,8 +137,21 @@ quickstart: ## Create GitHub PAT secret + runner pool CR (requires GITHUB_USERNA
 	@printf 'apiVersion: apps.example.com/v1alpha1\nkind: GithubActionRunnerPool\nmetadata:\n  name: $(GITHUB_USERNAME)-runner-pool\nspec:\n  githubUsername: "$(GITHUB_USERNAME)"\n  repository: "$(GITHUB_REPO)"\n  tokenSecretRef:\n    name: github-runner-token\n    key: github-token\n  replicas: 1\n  labels:\n    - linux\n' | $(KUBECTL) apply -f -
 	@echo "✅ GithubActionRunnerPool applied"
 	@echo ""
-	@echo "⏳ Waiting for runner deployment..."
-	@$(KUBECTL) rollout status deployment/$(GITHUB_USERNAME)-runner --timeout=120s || true
+	@echo "⏳ Waiting for runner deployment to be created..."
+	@for i in $$(seq 1 30); do \
+		if $(KUBECTL) get deployment/$(GITHUB_USERNAME)-runner >/dev/null 2>&1; then \
+			break; \
+		fi; \
+		if [ $$i -eq 30 ]; then \
+			echo "❌ Timed out waiting for deployment/$(GITHUB_USERNAME)-runner to be created"; \
+			exit 1; \
+		fi; \
+		printf "."; \
+		sleep 2; \
+	done
+	@echo ""
+	@echo "⏳ Waiting for runner rollout to complete..."
+	@$(KUBECTL) rollout status deployment/$(GITHUB_USERNAME)-runner --timeout=120s
 	@echo ""
 	@echo "🎉 Runner is ready! Trigger a workflow at https://github.com/$(GITHUB_REPO)/actions"
 

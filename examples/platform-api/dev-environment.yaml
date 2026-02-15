@@ -1,0 +1,95 @@
+# ─────────────────────────────────────────────────────────────────
+# DevStagingEnvironment CRs for platform-api + its dashboard UI.
+#
+# Apply manually to test the operator without a GitHub Actions run:
+#
+#   # 1. Build and load the images into Kind
+#   docker build -t platform-api:dev examples/platform-api
+#   docker build -t platform-api-ui:dev examples/platform-api/ui
+#   kind load docker-image platform-api:dev --name dev
+#   kind load docker-image platform-api-ui:dev --name dev
+#
+#   # 2. Apply this manifest (both CRs)
+#   kubectl apply -f examples/platform-api/dev-environment.yaml
+#
+#   # 3. Wait for rollout
+#   kubectl rollout status deployment/platform-api-dev --timeout=180s
+#   kubectl rollout status deployment/platform-api-ui-dev --timeout=120s
+#
+#   # 4. Hit the endpoints (via Ingress — no port-forward needed!)
+#   curl http://platform-api.localhost/healthz
+#   curl http://platform-api.localhost/status
+#   open http://platform-ui.localhost        # ← the dashboard!
+# ─────────────────────────────────────────────────────────────────
+apiVersion: apps.example.com/v1alpha1
+kind: DevStagingEnvironment
+metadata:
+  name: platform-api-dev
+  labels:
+    app.kubernetes.io/part-of: platform-api
+    app.kubernetes.io/component: api
+    app.kubernetes.io/managed-by: kindling
+spec:
+  # ── Application ─────────────────────────────────────────────────
+  deployment:
+    image: platform-api:dev
+    replicas: 1
+    port: 8080
+    healthCheck:
+      path: /healthz
+
+  # ── Networking ──────────────────────────────────────────────────
+  service:
+    port: 8080
+    type: ClusterIP
+
+  # ── Ingress ────────────────────────────────────────────────────
+  ingress:
+    enabled: true
+    host: platform-api.localhost
+    ingressClassName: nginx
+
+  # ── Dependencies (5 services) ──────────────────────────────────
+  #   postgres        → DATABASE_URL
+  #   redis           → REDIS_URL
+  #   elasticsearch   → ELASTICSEARCH_URL
+  #   kafka           → KAFKA_BROKER_URL
+  #   vault           → VAULT_ADDR + VAULT_TOKEN
+  dependencies:
+    - type: postgres
+      version: "16"
+    - type: redis
+    - type: elasticsearch
+    - type: kafka
+    - type: vault
+
+---
+# ── Dashboard UI ─────────────────────────────────────────────────
+# React + TypeScript dashboard served by nginx. Proxies /api/* to
+# the platform-api service above.
+# Access via: http://platform-ui.localhost
+apiVersion: apps.example.com/v1alpha1
+kind: DevStagingEnvironment
+metadata:
+  name: platform-api-ui-dev
+  labels:
+    app.kubernetes.io/part-of: platform-api
+    app.kubernetes.io/component: ui
+    app.kubernetes.io/managed-by: kindling
+spec:
+  deployment:
+    image: platform-api-ui:dev
+    replicas: 1
+    port: 80
+    env:
+      - name: API_URL
+        value: "http://platform-api-dev:8080"
+    healthCheck:
+      path: /
+  service:
+    port: 80
+    type: ClusterIP
+  ingress:
+    enabled: true
+    host: platform-ui.localhost
+    ingressClassName: nginx

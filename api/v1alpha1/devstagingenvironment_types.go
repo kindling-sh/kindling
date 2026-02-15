@@ -160,16 +160,25 @@ type IngressTLSSpec struct {
 }
 
 // DependencyType represents a well-known service dependency.
-// +kubebuilder:validation:Enum=postgres;redis;mysql;mongodb;rabbitmq;minio
+// +kubebuilder:validation:Enum=postgres;redis;mysql;mongodb;rabbitmq;minio;elasticsearch;kafka;nats;memcached;cassandra;consul;vault;influxdb;jaeger
 type DependencyType string
 
 const (
-	DependencyPostgres DependencyType = "postgres"
-	DependencyRedis    DependencyType = "redis"
-	DependencyMySQL    DependencyType = "mysql"
-	DependencyMongoDB  DependencyType = "mongodb"
-	DependencyRabbitMQ DependencyType = "rabbitmq"
-	DependencyMinIO    DependencyType = "minio"
+	DependencyPostgres      DependencyType = "postgres"
+	DependencyRedis         DependencyType = "redis"
+	DependencyMySQL         DependencyType = "mysql"
+	DependencyMongoDB       DependencyType = "mongodb"
+	DependencyRabbitMQ      DependencyType = "rabbitmq"
+	DependencyMinIO         DependencyType = "minio"
+	DependencyElasticsearch DependencyType = "elasticsearch"
+	DependencyKafka         DependencyType = "kafka"
+	DependencyNATS          DependencyType = "nats"
+	DependencyMemcached     DependencyType = "memcached"
+	DependencyCassandra     DependencyType = "cassandra"
+	DependencyConsul        DependencyType = "consul"
+	DependencyVault         DependencyType = "vault"
+	DependencyInfluxDB      DependencyType = "influxdb"
+	DependencyJaeger        DependencyType = "jaeger"
 )
 
 // DependencySpec declares a supporting service (database, cache, queue, etc.)

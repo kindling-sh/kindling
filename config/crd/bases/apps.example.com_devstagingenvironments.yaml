@@ -247,6 +247,15 @@ spec:
                       - mongodb
                       - rabbitmq
                       - minio
+                      - elasticsearch
+                      - kafka
+                      - nats
+                      - memcached
+                      - cassandra
+                      - consul
+                      - vault
+                      - influxdb
+                      - jaeger
                       type: string
                     version:
                       description: Version is the image tag / version to deploy (e.g.

@@ -678,6 +678,97 @@ var dependencyRegistry = map[appsv1alpha1.DependencyType]dependencyDefaults{
 		},
 		Stateful: true,
 	},
+	appsv1alpha1.DependencyElasticsearch: {
+		Image:      "docker.elastic.co/elasticsearch/elasticsearch",
+		Port:       9200,
+		EnvVarName: "ELASTICSEARCH_URL",
+		Env: []corev1.EnvVar{
+			{Name: "discovery.type", Value: "single-node"},
+			{Name: "xpack.security.enabled", Value: "false"},
+			{Name: "ES_JAVA_OPTS", Value: "-Xms256m -Xmx256m"},
+		},
+		Stateful: true,
+	},
+	appsv1alpha1.DependencyKafka: {
+		Image:      "apache/kafka",
+		Port:       9092,
+		EnvVarName: "KAFKA_BROKER_URL",
+		Env: []corev1.EnvVar{
+			{Name: "KAFKA_NODE_ID", Value: "1"},
+			{Name: "KAFKA_PROCESS_ROLES", Value: "broker,controller"},
+			{Name: "KAFKA_CONTROLLER_QUORUM_VOTERS", Value: "1@localhost:9093"},
+			{Name: "KAFKA_LISTENERS", Value: "PLAINTEXT://:9092,CONTROLLER://:9093"},
+			{Name: "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP", Value: "PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT"},
+			{Name: "KAFKA_CONTROLLER_LISTENER_NAMES", Value: "CONTROLLER"},
+			{Name: "CLUSTER_ID", Value: "kindling-dev-kafka-cluster"},
+		},
+		Stateful: true,
+	},
+	appsv1alpha1.DependencyNATS: {
+		Image:      "nats",
+		Port:       4222,
+		EnvVarName: "NATS_URL",
+		Env:        nil,
+		Stateful:   false,
+	},
+	appsv1alpha1.DependencyMemcached: {
+		Image:      "memcached",
+		Port:       11211,
+		EnvVarName: "MEMCACHED_URL",
+		Env:        nil,
+		Stateful:   false,
+	},
+	appsv1alpha1.DependencyCassandra: {
+		Image:      "cassandra",
+		Port:       9042,
+		EnvVarName: "CASSANDRA_URL",
+		Env: []corev1.EnvVar{
+			{Name: "CASSANDRA_CLUSTER_NAME", Value: "DevCluster"},
+			{Name: "CASSANDRA_DC", Value: "dc1"},
+			{Name: "MAX_HEAP_SIZE", Value: "256M"},
+			{Name: "HEAP_NEWSIZE", Value: "64M"},
+		},
+		Stateful: true,
+	},
+	appsv1alpha1.DependencyConsul: {
+		Image:      "hashicorp/consul",
+		Port:       8500,
+		EnvVarName: "CONSUL_HTTP_ADDR",
+		Env:        nil,
+		Stateful:   false,
+	},
+	appsv1alpha1.DependencyVault: {
+		Image:      "hashicorp/vault",
+		Port:       8200,
+		EnvVarName: "VAULT_ADDR",
+		Env: []corev1.EnvVar{
+			{Name: "VAULT_DEV_ROOT_TOKEN_ID", Value: "dev-root-token"},
+			{Name: "VAULT_DEV_LISTEN_ADDRESS", Value: "0.0.0.0:8200"},
+		},
+		Stateful: false,
+	},
+	appsv1alpha1.DependencyInfluxDB: {
+		Image:      "influxdb",
+		Port:       8086,
+		EnvVarName: "INFLUXDB_URL",
+		Env: []corev1.EnvVar{
+			{Name: "DOCKER_INFLUXDB_INIT_MODE", Value: "setup"},
+			{Name: "DOCKER_INFLUXDB_INIT_USERNAME", Value: "devuser"},
+			{Name: "DOCKER_INFLUXDB_INIT_PASSWORD", Value: "devpass123"},
+			{Name: "DOCKER_INFLUXDB_INIT_ORG", Value: "devorg"},
+			{Name: "DOCKER_INFLUXDB_INIT_BUCKET", Value: "devbucket"},
+		},
+		Stateful: true,
+	},
+	appsv1alpha1.DependencyJaeger: {
+		Image:      "jaegertracing/all-in-one",
+		Port:       16686,
+		EnvVarName: "JAEGER_ENDPOINT",
+		Env: []corev1.EnvVar{
+			{Name: "COLLECTOR_OTLP_ENABLED", Value: "true"},
+		},
+		Stateful: false,
+	},
 }
 
 // dependencyName returns the child resource name for a given dependency.
@@ -805,6 +896,27 @@ func (r *DevStagingEnvironmentReconciler) reconcileDependencyDeployment(ctx cont
 			image = defaults.Image + ":3-management"
 		}
 	}
+	if dep.Type == appsv1alpha1.DependencyConsul {
+		args = []string{"agent", "-dev", "-client=0.0.0.0"}
+	}
+	if dep.Type == appsv1alpha1.DependencyVault {
+		args = []string{"server", "-dev"}
+	}
+	if dep.Type == appsv1alpha1.DependencyElasticsearch {
+		if dep.Image == "" && dep.Version == "" {
+			image = defaults.Image + ":8.12.0"
+		}
+	}
+	if dep.Type == appsv1alpha1.DependencyKafka {
+		if dep.Image == "" && dep.Version == "" {
+			image = defaults.Image + ":latest"
+		}
+	}
+	if dep.Type == appsv1alpha1.DependencyJaeger {
+		if dep.Image == "" && dep.Version == "" {
+			image = defaults.Image + ":latest"
+		}
+	}
 
 	container := corev1.Container{
 		Name:  string(dep.Type),
@@ -816,6 +928,27 @@ func (r *DevStagingEnvironmentReconciler) reconcileDependencyDeployment(ctx cont
 			ContainerPort: port,
 			Protocol:      corev1.ProtocolTCP,
 		}},
+	}
+
+	// Some services expose multiple ports that the app needs to reach.
+	switch dep.Type {
+	case appsv1alpha1.DependencyJaeger:
+		container.Ports = append(container.Ports,
+			corev1.ContainerPort{Name: "otlp-grpc", ContainerPort: 4317, Protocol: corev1.ProtocolTCP},
+			corev1.ContainerPort{Name: "otlp-http", ContainerPort: 4318, Protocol: corev1.ProtocolTCP},
+		)
+	case appsv1alpha1.DependencyKafka:
+		container.Ports = append(container.Ports,
+			corev1.ContainerPort{Name: "controller", ContainerPort: 9093, Protocol: corev1.ProtocolTCP},
+		)
+	case appsv1alpha1.DependencyRabbitMQ:
+		container.Ports = append(container.Ports,
+			corev1.ContainerPort{Name: "management", ContainerPort: 15672, Protocol: corev1.ProtocolTCP},
+		)
+	case appsv1alpha1.DependencyElasticsearch:
+		container.Ports = append(container.Ports,
+			corev1.ContainerPort{Name: "transport", ContainerPort: 9300, Protocol: corev1.ProtocolTCP},
+		)
 	}
 
 	// Apply resource requirements if provided
@@ -981,6 +1114,26 @@ func buildConnectionURL(crName string, dep appsv1alpha1.DependencySpec, defaults
 		return fmt.Sprintf("amqp://%s:%s@%s:%d/", user, pass, svcName, port)
 	case appsv1alpha1.DependencyMinIO:
 		return fmt.Sprintf("http://%s:%d", svcName, port)
+	case appsv1alpha1.DependencyElasticsearch:
+		return fmt.Sprintf("http://%s:%d", svcName, port)
+	case appsv1alpha1.DependencyKafka:
+		return fmt.Sprintf("%s:%d", svcName, port)
+	case appsv1alpha1.DependencyNATS:
+		return fmt.Sprintf("nats://%s:%d", svcName, port)
+	case appsv1alpha1.DependencyMemcached:
+		return fmt.Sprintf("%s:%d", svcName, port)
+	case appsv1alpha1.DependencyCassandra:
+		return fmt.Sprintf("%s:%d", svcName, port)
+	case appsv1alpha1.DependencyConsul:
+		return fmt.Sprintf("http://%s:%d", svcName, port)
+	case appsv1alpha1.DependencyVault:
+		return fmt.Sprintf("http://%s:%d", svcName, port)
+	case appsv1alpha1.DependencyInfluxDB:
+		user := envMap["DOCKER_INFLUXDB_INIT_USERNAME"]
+		pass := envMap["DOCKER_INFLUXDB_INIT_PASSWORD"]
+		return fmt.Sprintf("http://%s:%s@%s:%d", user, pass, svcName, port)
+	case appsv1alpha1.DependencyJaeger:
+		return fmt.Sprintf("http://%s:%d", svcName, port)
 	default:
 		return fmt.Sprintf("%s:%d", svcName, port)
 	}
@@ -1014,6 +1167,37 @@ func buildDependencyConnectionEnvVars(crName string, dep appsv1alpha1.Dependency
 		envVars = append(envVars,
 			corev1.EnvVar{Name: "S3_ACCESS_KEY", Value: envMap["MINIO_ROOT_USER"]},
 			corev1.EnvVar{Name: "S3_SECRET_KEY", Value: envMap["MINIO_ROOT_PASSWORD"]},
+		)
+	}
+
+	// For Vault, inject the dev root token.
+	if dep.Type == appsv1alpha1.DependencyVault {
+		envMap := envVarsToMap(defaults.Env)
+		for _, e := range dep.Env {
+			envMap[e.Name] = e.Value
+		}
+		envVars = append(envVars,
+			corev1.EnvVar{Name: "VAULT_TOKEN", Value: envMap["VAULT_DEV_ROOT_TOKEN_ID"]},
+		)
+	}
+
+	// For InfluxDB, inject org and bucket so the app can write metrics.
+	if dep.Type == appsv1alpha1.DependencyInfluxDB {
+		envMap := envVarsToMap(defaults.Env)
+		for _, e := range dep.Env {
+			envMap[e.Name] = e.Value
+		}
+		envVars = append(envVars,
+			corev1.EnvVar{Name: "INFLUXDB_ORG", Value: envMap["DOCKER_INFLUXDB_INIT_ORG"]},
+			corev1.EnvVar{Name: "INFLUXDB_BUCKET", Value: envMap["DOCKER_INFLUXDB_INIT_BUCKET"]},
+		)
+	}
+
+	// For Jaeger, inject the OTLP collector endpoint (gRPC port 4317).
+	if dep.Type == appsv1alpha1.DependencyJaeger {
+		svcName := dependencyName(crName, dep.Type)
+		envVars = append(envVars,
+			corev1.EnvVar{Name: "OTEL_EXPORTER_OTLP_ENDPOINT", Value: fmt.Sprintf("http://%s:4317", svcName)},
 		)
 	}
 

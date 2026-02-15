@@ -1,0 +1,247 @@
+# ─────────────────────────────────────────────────────────────────
+# dev-deploy.yml — Build platform-api + dashboard UI and deploy
+# both to your local Kind cluster via kindling.
+#
+# This workflow runs on your SELF-HOSTED runner (created by the
+# GithubActionRunnerPool CR). It uses Kaniko to build container
+# images and pushes them to the in-cluster registry at registry:5000.
+# It then applies two DevStagingEnvironment CRs:
+#   1. platform-api  — Go API with 5 backing services
+#   2. platform-ui   — React dashboard served by nginx
+#
+# No Docker daemon required — Kaniko builds in userspace pods.
+# ─────────────────────────────────────────────────────────────────
+name: Dev Deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "**"
+      - ".github/workflows/dev-deploy.yml"
+  workflow_dispatch: # allow manual triggers for testing
+
+jobs:
+  build-and-deploy:
+    runs-on: [self-hosted, "${{ github.actor }}"]
+
+    env:
+      APP_NAME: platform-api
+      UI_NAME: platform-api-ui
+      TAG: "${{ github.actor }}-${{ github.sha }}"
+      REGISTRY: "registry:5000"
+
+    steps:
+      # ── 0. Clean shared /builds dir from any previous run ────────
+      - name: Clean builds directory
+        run: |
+          echo "🧹 Cleaning stale signal files from /builds..."
+          rm -f /builds/*.done /builds/*.request /builds/*.processing \
+                /builds/*.apply /builds/*.apply-done /builds/*.apply-log \
+                /builds/*.apply-exitcode /builds/*.kubectl \
+                /builds/*.kubectl-done /builds/*.kubectl-log \
+                /builds/*.kubectl-exitcode /builds/*.exitcode \
+                /builds/*.log /builds/*.dest /builds/*.tar.gz \
+                /builds/*.yaml /builds/*.sh /builds/portfwd-ready \
+                /builds/portfwd-stop
+          echo "✅ /builds is clean"
+
+      # ── 1. Checkout ──────────────────────────────────────────────
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # ── 2a. Build API image via the build-agent sidecar ──────────
+      - name: Build & push API image via Kaniko
+        run: |
+          tar -czf /builds/$APP_NAME.tar.gz -C ${{ github.workspace }} \
+            --exclude=./ui .
+          echo "$REGISTRY/$APP_NAME:$TAG" > /builds/$APP_NAME.dest
+          touch /builds/$APP_NAME.request
+          echo "⏳ Waiting for API Kaniko build..."
+          while [ ! -f /builds/$APP_NAME.done ]; do sleep 2; done
+          EXIT_CODE=$(cat /builds/$APP_NAME.exitcode)
+          if [ "$EXIT_CODE" != "0" ]; then
+            echo "❌ API build failed:"; cat /builds/$APP_NAME.log; exit 1
+          fi
+          echo "✅ Built & pushed $APP_NAME:$TAG"
+
+      # ── 2b. Build UI image via the build-agent sidecar ──────────
+      - name: Build & push UI image via Kaniko
+        run: |
+          tar -czf /builds/$UI_NAME.tar.gz -C ${{ github.workspace }}/ui .
+          echo "$REGISTRY/$UI_NAME:$TAG" > /builds/$UI_NAME.dest
+          touch /builds/$UI_NAME.request
+          echo "⏳ Waiting for UI Kaniko build..."
+          while [ ! -f /builds/$UI_NAME.done ]; do sleep 2; done
+          EXIT_CODE=$(cat /builds/$UI_NAME.exitcode)
+          if [ "$EXIT_CODE" != "0" ]; then
+            echo "❌ UI build failed:"; cat /builds/$UI_NAME.log; exit 1
+          fi
+          echo "✅ Built & pushed $UI_NAME:$TAG"
+
+      # ── 3a. Deploy API DevStagingEnvironment CR ──────────────────
+      - name: Deploy API to local Kind cluster
+        run: |
+          ACTOR="${{ github.actor }}"
+          cat > /builds/$APP_NAME-dse.yaml <<EOF
+          apiVersion: apps.example.com/v1alpha1
+          kind: DevStagingEnvironment
+          metadata:
+            name: ${ACTOR}-$APP_NAME
+            labels:
+              app.kubernetes.io/part-of: $APP_NAME
+              app.kubernetes.io/component: api
+              apps.example.com/github-username: ${ACTOR}
+          spec:
+            deployment:
+              image: $REGISTRY/$APP_NAME:$TAG
+              replicas: 1
+              port: 8080
+              healthCheck:
+                path: /healthz
+            service:
+              port: 8080
+              type: ClusterIP
+            ingress:
+              enabled: true
+              host: ${ACTOR}-$APP_NAME.localhost
+              ingressClassName: nginx
+            dependencies:
+              - type: postgres
+                version: "16"
+              - type: redis
+              - type: elasticsearch
+              - type: kafka
+              - type: vault
+          EOF
+          touch /builds/$APP_NAME-dse.apply
+          while [ ! -f /builds/$APP_NAME-dse.apply-done ]; do sleep 1; done
+          EXIT_CODE=$(cat /builds/$APP_NAME-dse.apply-exitcode)
+          if [ "$EXIT_CODE" != "0" ]; then
+            echo "❌ API deploy failed:"; cat /builds/$APP_NAME-dse.apply-log; exit 1
+          fi
+          echo "✅ API DevStagingEnvironment applied"
+
+      # ── 3b. Deploy UI DevStagingEnvironment CR ───────────────────
+      - name: Deploy UI to local Kind cluster
+        run: |
+          ACTOR="${{ github.actor }}"
+          cat > /builds/$UI_NAME-dse.yaml <<EOF
+          apiVersion: apps.example.com/v1alpha1
+          kind: DevStagingEnvironment
+          metadata:
+            name: ${ACTOR}-$UI_NAME
+            labels:
+              app.kubernetes.io/part-of: $APP_NAME
+              app.kubernetes.io/component: ui
+              apps.example.com/github-username: ${ACTOR}
+          spec:
+            deployment:
+              image: $REGISTRY/$UI_NAME:$TAG
+              replicas: 1
+              port: 80
+              env:
+                - name: API_URL
+                  value: "http://${ACTOR}-$APP_NAME:8080"
+              healthCheck:
+                path: /
+            service:
+              port: 80
+              type: ClusterIP
+            ingress:
+              enabled: true
+              host: ${ACTOR}-platform-ui.localhost
+              ingressClassName: nginx
+          EOF
+          touch /builds/$UI_NAME-dse.apply
+          while [ ! -f /builds/$UI_NAME-dse.apply-done ]; do sleep 1; done
+          EXIT_CODE=$(cat /builds/$UI_NAME-dse.apply-exitcode)
+          if [ "$EXIT_CODE" != "0" ]; then
+            echo "❌ UI deploy failed:"; cat /builds/$UI_NAME-dse.apply-log; exit 1
+          fi
+          echo "✅ UI DevStagingEnvironment applied"
+
+      # ── 4. Wait for rollout via sidecar ──────────────────────────
+      - name: Wait for deployment rollout
+        run: |
+          ACTOR="${{ github.actor }}"
+          cat > /builds/rollout-wait.sh <<SCRIPT
+          #!/bin/bash
+          echo "⏳ Waiting for ${ACTOR}-$APP_NAME deployment..."
+          kubectl rollout status deployment/${ACTOR}-$APP_NAME \
+            --timeout=180s || true
+
+          echo ""
+          echo "⏳ Waiting for ${ACTOR}-$UI_NAME deployment..."
+          kubectl rollout status deployment/${ACTOR}-$UI_NAME \
+            --timeout=120s || true
+
+          echo ""
+          echo "📦 Pods:"
+          kubectl get pods -l app.kubernetes.io/part-of=$APP_NAME
+
+          echo ""
+          echo "🌐 Services:"
+          kubectl get svc | grep -E "${ACTOR}-(${APP_NAME}|${UI_NAME}|.*postgres|.*redis|.*elasticsearch|.*kafka|.*vault)"
+
+          echo ""
+          echo "🎯 DevStagingEnvironments:"
+          kubectl get devstagingenvironments -l app.kubernetes.io/part-of=$APP_NAME
+          SCRIPT
+          chmod +x /builds/rollout-wait.sh
+          touch /builds/rollout-wait.kubectl
+          while [ ! -f /builds/rollout-wait.kubectl-done ]; do sleep 2; done
+          cat /builds/rollout-wait.kubectl-log
+          EXIT_CODE=$(cat /builds/rollout-wait.kubectl-exitcode)
+          [ "$EXIT_CODE" = "0" ] || exit 1
+
+      # ── 5. Smoke test via sidecar ────────────────────────────────
+      - name: Smoke test
+        run: |
+          ACTOR="${{ github.actor }}"
+
+          cat > /builds/smoke-portfwd.sh <<SCRIPT
+          #!/bin/bash
+          kubectl port-forward svc/${ACTOR}-$APP_NAME 18080:8080 &
+          kubectl port-forward svc/${ACTOR}-$UI_NAME 18081:80 &
+          sleep 3
+          touch /builds/portfwd-ready
+          while [ ! -f /builds/portfwd-stop ]; do sleep 1; done
+          kill %1 %2 2>/dev/null || true
+          SCRIPT
+          chmod +x /builds/smoke-portfwd.sh
+          touch /builds/smoke-portfwd.kubectl
+          while [ ! -f /builds/portfwd-ready ]; do sleep 1; done
+
+          echo "── API Health check ───────────────────"
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:18080/healthz)
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "✅ API health check passed"
+          else
+            echo "❌ API health check failed (HTTP $HTTP_CODE)"
+            touch /builds/portfwd-stop
+            while [ ! -f /builds/smoke-portfwd.kubectl-done ]; do sleep 1; done
+            exit 1
+          fi
+
+          echo ""
+          echo "── API Status (all dependencies) ──────"
+          curl -sf http://localhost:18080/status | jq . || echo "(not available)"
+
+          echo ""
+          echo "── UI Health check ────────────────────"
+          UI_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:18081/)
+          if [ "$UI_CODE" = "200" ]; then
+            echo "✅ UI health check passed"
+          else
+            echo "❌ UI health check failed (HTTP $UI_CODE)"
+          fi
+
+          touch /builds/portfwd-stop
+          while [ ! -f /builds/smoke-portfwd.kubectl-done ]; do sleep 1; done
+
+          echo ""
+          echo "🎉 Deploy complete!"
+          echo "🌐 Dashboard: http://${ACTOR}-platform-ui.localhost"
+          echo "🌐 API:       http://${ACTOR}-$APP_NAME.localhost"
+          echo "📡 Fallback:  kubectl port-forward svc/${ACTOR}-$UI_NAME 8080:80"
