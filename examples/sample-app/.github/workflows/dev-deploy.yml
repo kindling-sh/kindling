@@ -1,0 +1,131 @@
+# ─────────────────────────────────────────────────────────────────
+# dev-deploy.yml — Build your app and deploy it to your local Kind
+# cluster via kindling.
+#
+# This workflow runs on your SELF-HOSTED runner (the one created by
+# the GithubActionRunnerPool CR on your laptop). The runner has:
+#   - Access to the host Docker socket for building images
+#   - kubectl access to the local Kind cluster
+#   - RBAC to create DevStagingEnvironment CRs
+#
+# To test without pushing, apply the CR manually:
+#   kubectl apply -f dev-environment.yaml
+# ─────────────────────────────────────────────────────────────────
+name: Dev Deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "**"
+      - ".github/workflows/dev-deploy.yml"
+  workflow_dispatch: # allow manual triggers for testing
+
+jobs:
+  build-and-deploy:
+    # Route this job to the developer's own laptop via their username label.
+    # The GithubActionRunnerPool operator auto-registers [self-hosted, <username>].
+    runs-on: [self-hosted, "${{ github.actor }}"]
+
+    env:
+      APP_NAME: sample-app
+      IMAGE_TAG: "${{ github.actor }}-${{ github.sha }}"
+
+    steps:
+      # ── 1. Checkout ──────────────────────────────────────────────
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # ── 2. Build the container image ─────────────────────────────
+      - name: Build Docker image
+        run: |
+          docker build -t $APP_NAME:$IMAGE_TAG .
+          echo "✅ Built $APP_NAME:$IMAGE_TAG"
+
+      # ── 3. Load image into Kind ─────────────────────────────────
+      # The runner uses the host Docker socket, so the image is
+      # already visible to Kind. This is a safety net for cases
+      # where Kind uses a separate containerd.
+      - name: Load image into Kind (if needed)
+        run: |
+          if command -v kind &> /dev/null; then
+            kind load docker-image $APP_NAME:$IMAGE_TAG --name dev 2>/dev/null || true
+          fi
+
+      # ── 4. Deploy DevStagingEnvironment CR ───────────────────────
+      - name: Deploy to local Kind cluster
+        run: |
+          cat <<EOF | kubectl apply -f -
+          apiVersion: apps.example.com/v1alpha1
+          kind: DevStagingEnvironment
+          metadata:
+            name: ${{ github.actor }}-dev
+            labels:
+              app.kubernetes.io/part-of: $APP_NAME
+              apps.example.com/github-username: ${{ github.actor }}
+          spec:
+            deployment:
+              image: $APP_NAME:$IMAGE_TAG
+              replicas: 1
+              port: 8080
+              healthCheck:
+                path: /healthz
+            service:
+              port: 8080
+              type: ClusterIP
+            dependencies:
+              - type: postgres
+                version: "16"
+              - type: redis
+          EOF
+
+          echo "✅ DevStagingEnvironment applied — operator will reconcile"
+
+      # ── 5. Wait for rollout ──────────────────────────────────────
+      - name: Wait for deployment rollout
+        run: |
+          echo "⏳ Waiting for app deployment..."
+          kubectl rollout status deployment/${{ github.actor }}-dev \
+            --timeout=120s || true
+
+          echo ""
+          echo "📦 Pods:"
+          kubectl get pods -l app.kubernetes.io/part-of=$APP_NAME
+
+          echo ""
+          echo "🌐 Services:"
+          kubectl get svc | grep -E "(${{ github.actor }}-dev|postgres|redis)"
+
+          echo ""
+          echo "🎯 DevStagingEnvironment:"
+          kubectl get devstagingenvironments ${{ github.actor }}-dev
+
+      # ── 6. Smoke test ────────────────────────────────────────────
+      - name: Smoke test
+        run: |
+          echo "🔍 Running smoke test..."
+
+          # Port-forward in the background
+          kubectl port-forward svc/${{ github.actor }}-dev 18080:8080 &
+          PF_PID=$!
+          sleep 3
+
+          # Hit the health endpoint
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:18080/healthz)
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "✅ Health check passed"
+          else
+            echo "❌ Health check failed (HTTP $HTTP_CODE)"
+            kill $PF_PID 2>/dev/null || true
+            exit 1
+          fi
+
+          # Hit the status endpoint to verify DB connectivity
+          echo ""
+          echo "📊 /status response:"
+          curl -s http://localhost:18080/status | jq .
+
+          # Cleanup
+          kill $PF_PID 2>/dev/null || true
+          echo ""
+          echo "🎉 Deploy complete — access via: kubectl port-forward svc/${{ github.actor }}-dev 8080:8080"

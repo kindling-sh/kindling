@@ -1,0 +1,20 @@
+apiVersion: apps.example.com/v1alpha1
+kind: DevStagingEnvironment
+metadata:
+  name: sample-app
+spec:
+  deployment:
+    image: nginx:1.25
+    replicas: 1
+    port: 80
+  service:
+    port: 80
+    type: ClusterIP
+
+  # ── Dependencies ──────────────────────────────────────────────────
+  # The operator auto-provisions each service and injects connection
+  # env vars (DATABASE_URL, REDIS_URL, etc.) into the app container.
+  dependencies:
+    - type: postgres
+      version: "16"
+    - type: redis

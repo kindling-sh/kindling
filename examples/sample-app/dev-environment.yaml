@@ -1,0 +1,50 @@
+# ─────────────────────────────────────────────────────────────────
+# DevStagingEnvironment CR for the sample-app.
+#
+# Apply manually to test the operator without a GitHub Actions run:
+#
+#   # 1. Build and load the image into Kind
+#   docker build -t sample-app:dev examples/sample-app
+#   kind load docker-image sample-app:dev --name dev
+#
+#   # 2. Apply this manifest
+#   kubectl apply -f examples/sample-app/dev-environment.yaml
+#
+#   # 3. Wait for rollout and port-forward
+#   kubectl rollout status deployment/sample-app-dev --timeout=120s
+#   kubectl port-forward svc/sample-app-dev 8080:8080
+#
+#   # 4. Hit the endpoints
+#   curl localhost:8080/healthz
+#   curl localhost:8080/status
+# ─────────────────────────────────────────────────────────────────
+apiVersion: apps.example.com/v1alpha1
+kind: DevStagingEnvironment
+metadata:
+  name: sample-app-dev
+  labels:
+    app.kubernetes.io/part-of: sample-app
+    app.kubernetes.io/managed-by: kindling
+spec:
+  # ── Application ─────────────────────────────────────────────────
+  deployment:
+    image: sample-app:dev
+    replicas: 1
+    port: 8080
+    healthCheck:
+      path: /healthz
+
+  # ── Networking ──────────────────────────────────────────────────
+  service:
+    port: 8080
+    type: ClusterIP
+
+  # ── Dependencies ────────────────────────────────────────────────
+  # The operator auto-provisions each backing service and injects
+  # connection env vars into the app container:
+  #   postgres → DATABASE_URL
+  #   redis    → REDIS_URL
+  dependencies:
+    - type: postgres
+      version: "16"
+    - type: redis

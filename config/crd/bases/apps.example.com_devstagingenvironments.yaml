@@ -1,0 +1,646 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.13.0
+  name: devstagingenvironments.apps.example.com
+spec:
+  group: apps.example.com
+  names:
+    kind: DevStagingEnvironment
+    listKind: DevStagingEnvironmentList
+    plural: devstagingenvironments
+    singular: devstagingenvironment
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.deployment.image
+      name: Image
+      type: string
+    - jsonPath: .spec.deployment.replicas
+      name: Replicas
+      type: integer
+    - jsonPath: .status.availableReplicas
+      name: Available
+      type: integer
+    - jsonPath: .status.deploymentReady
+      name: Ready
+      type: boolean
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: DevStagingEnvironment is the Schema for the devstagingenvironments
+          API
+        properties:
+          apiVersion:
+            description: 'APIVersion defines the versioned schema of this representation
+              of an object. Servers should convert recognized schemas to the latest
+              internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources'
+            type: string
+          kind:
+            description: 'Kind is a string value representing the REST resource this
+              object represents. Servers may infer this from the endpoint the client
+              submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds'
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: DevStagingEnvironmentSpec defines the desired state of DevStagingEnvironment
+            properties:
+              dependencies:
+                description: Dependencies declares supporting services (databases,
+                  caches, queues) that the operator will provision alongside the application.
+                  Connection env vars are automatically injected into the app container.
+                items:
+                  description: DependencySpec declares a supporting service (database,
+                    cache, queue, etc.) that the operator provisions alongside the
+                    main application.
+                  properties:
+                    env:
+                      description: Env provides extra environment variables for the
+                        dependency container. These are merged with (and can override)
+                        the operator's defaults.
+                      items:
+                        description: EnvVar represents an environment variable present
+                          in a Container.
+                        properties:
+                          name:
+                            description: Name of the environment variable. Must be
+                              a C_IDENTIFIER.
+                            type: string
+                          value:
+                            description: 'Variable references $(VAR_NAME) are expanded
+                              using the previously defined environment variables in
+                              the container and any service environment variables.
+                              If a variable cannot be resolved, the reference in the
+                              input string will be unchanged. Double $$ are reduced
+                              to a single $, which allows for escaping the $(VAR_NAME)
+                              syntax: i.e. "$$(VAR_NAME)" will produce the string
+                              literal "$(VAR_NAME)". Escaped references will never
+                              be expanded, regardless of whether the variable exists
+                              or not. Defaults to "".'
+                            type: string
+                          valueFrom:
+                            description: Source for the environment variable's value.
+                              Cannot be used if value is not empty.
+                            properties:
+                              configMapKeyRef:
+                                description: Selects a key of a ConfigMap.
+                                properties:
+                                  key:
+                                    description: The key to select.
+                                    type: string
+                                  name:
+                                    description: 'Name of the referent. More info:
+                                      https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                      TODO: Add other useful fields. apiVersion, kind,
+                                      uid?'
+                                    type: string
+                                  optional:
+                                    description: Specify whether the ConfigMap or
+                                      its key must be defined
+                                    type: boolean
+                                required:
+                                - key
+                                type: object
+                                x-kubernetes-map-type: atomic
+                              fieldRef:
+                                description: 'Selects a field of the pod: supports
+                                  metadata.name, metadata.namespace, `metadata.labels[''<KEY>'']`,
+                                  `metadata.annotations[''<KEY>'']`, spec.nodeName,
+                                  spec.serviceAccountName, status.hostIP, status.podIP,
+                                  status.podIPs.'
+                                properties:
+                                  apiVersion:
+                                    description: Version of the schema the FieldPath
+                                      is written in terms of, defaults to "v1".
+                                    type: string
+                                  fieldPath:
+                                    description: Path of the field to select in the
+                                      specified API version.
+                                    type: string
+                                required:
+                                - fieldPath
+                                type: object
+                                x-kubernetes-map-type: atomic
+                              resourceFieldRef:
+                                description: 'Selects a resource of the container:
+                                  only resources limits and requests (limits.cpu,
+                                  limits.memory, limits.ephemeral-storage, requests.cpu,
+                                  requests.memory and requests.ephemeral-storage)
+                                  are currently supported.'
+                                properties:
+                                  containerName:
+                                    description: 'Container name: required for volumes,
+                                      optional for env vars'
+                                    type: string
+                                  divisor:
+                                    anyOf:
+                                    - type: integer
+                                    - type: string
+                                    description: Specifies the output format of the
+                                      exposed resources, defaults to "1"
+                                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                    x-kubernetes-int-or-string: true
+                                  resource:
+                                    description: 'Required: resource to select'
+                                    type: string
+                                required:
+                                - resource
+                                type: object
+                                x-kubernetes-map-type: atomic
+                              secretKeyRef:
+                                description: Selects a key of a secret in the pod's
+                                  namespace
+                                properties:
+                                  key:
+                                    description: The key of the secret to select from.  Must
+                                      be a valid secret key.
+                                    type: string
+                                  name:
+                                    description: 'Name of the referent. More info:
+                                      https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                      TODO: Add other useful fields. apiVersion, kind,
+                                      uid?'
+                                    type: string
+                                  optional:
+                                    description: Specify whether the Secret or its
+                                      key must be defined
+                                    type: boolean
+                                required:
+                                - key
+                                type: object
+                                x-kubernetes-map-type: atomic
+                            type: object
+                        required:
+                        - name
+                        type: object
+                      type: array
+                    envVarName:
+                      description: EnvVarName overrides the name of the connection-string
+                        env var injected into the app container (e.g. "MY_DB_URL"
+                        instead of "DATABASE_URL").
+                      type: string
+                    image:
+                      description: Image overrides the default container image for
+                        this dependency. Use this when you need a custom or private
+                        image.
+                      type: string
+                    port:
+                      description: Port overrides the default service port for this
+                        dependency.
+                      format: int32
+                      type: integer
+                    resources:
+                      description: Resources defines CPU/memory requests and limits
+                        for the dependency container.
+                      properties:
+                        cpuLimit:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          description: CPULimit is the maximum CPU (e.g. "500m").
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        cpuRequest:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          description: CPURequest is the requested CPU (e.g. "100m").
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        memoryLimit:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          description: MemoryLimit is the maximum memory (e.g. "512Mi").
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        memoryRequest:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          description: MemoryRequest is the requested memory (e.g.
+                            "128Mi").
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                      type: object
+                    storageSize:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      description: StorageSize is the PVC size for stateful dependencies
+                        (default "1Gi").
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    type:
+                      description: Type is the well-known dependency kind (e.g. "postgres",
+                        "redis").
+                      enum:
+                      - postgres
+                      - redis
+                      - mysql
+                      - mongodb
+                      - rabbitmq
+                      - minio
+                      type: string
+                    version:
+                      description: Version is the image tag / version to deploy (e.g.
+                        "16", "7.2"). Each type has a sensible default if omitted.
+                      type: string
+                  required:
+                  - type
+                  type: object
+                type: array
+              deployment:
+                description: Deployment configures the application Deployment.
+                properties:
+                  args:
+                    description: Args are arguments passed to the container entrypoint.
+                    items:
+                      type: string
+                    type: array
+                  command:
+                    description: Command overrides the container entrypoint.
+                    items:
+                      type: string
+                    type: array
+                  env:
+                    description: Env is a list of environment variables to set in
+                      the container.
+                    items:
+                      description: EnvVar represents an environment variable present
+                        in a Container.
+                      properties:
+                        name:
+                          description: Name of the environment variable. Must be a
+                            C_IDENTIFIER.
+                          type: string
+                        value:
+                          description: 'Variable references $(VAR_NAME) are expanded
+                            using the previously defined environment variables in
+                            the container and any service environment variables. If
+                            a variable cannot be resolved, the reference in the input
+                            string will be unchanged. Double $$ are reduced to a single
+                            $, which allows for escaping the $(VAR_NAME) syntax: i.e.
+                            "$$(VAR_NAME)" will produce the string literal "$(VAR_NAME)".
+                            Escaped references will never be expanded, regardless
+                            of whether the variable exists or not. Defaults to "".'
+                          type: string
+                        valueFrom:
+                          description: Source for the environment variable's value.
+                            Cannot be used if value is not empty.
+                          properties:
+                            configMapKeyRef:
+                              description: Selects a key of a ConfigMap.
+                              properties:
+                                key:
+                                  description: The key to select.
+                                  type: string
+                                name:
+                                  description: 'Name of the referent. More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                    TODO: Add other useful fields. apiVersion, kind,
+                                    uid?'
+                                  type: string
+                                optional:
+                                  description: Specify whether the ConfigMap or its
+                                    key must be defined
+                                  type: boolean
+                              required:
+                              - key
+                              type: object
+                              x-kubernetes-map-type: atomic
+                            fieldRef:
+                              description: 'Selects a field of the pod: supports metadata.name,
+                                metadata.namespace, `metadata.labels[''<KEY>'']`,
+                                `metadata.annotations[''<KEY>'']`, spec.nodeName,
+                                spec.serviceAccountName, status.hostIP, status.podIP,
+                                status.podIPs.'
+                              properties:
+                                apiVersion:
+                                  description: Version of the schema the FieldPath
+                                    is written in terms of, defaults to "v1".
+                                  type: string
+                                fieldPath:
+                                  description: Path of the field to select in the
+                                    specified API version.
+                                  type: string
+                              required:
+                              - fieldPath
+                              type: object
+                              x-kubernetes-map-type: atomic
+                            resourceFieldRef:
+                              description: 'Selects a resource of the container: only
+                                resources limits and requests (limits.cpu, limits.memory,
+                                limits.ephemeral-storage, requests.cpu, requests.memory
+                                and requests.ephemeral-storage) are currently supported.'
+                              properties:
+                                containerName:
+                                  description: 'Container name: required for volumes,
+                                    optional for env vars'
+                                  type: string
+                                divisor:
+                                  anyOf:
+                                  - type: integer
+                                  - type: string
+                                  description: Specifies the output format of the
+                                    exposed resources, defaults to "1"
+                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                  x-kubernetes-int-or-string: true
+                                resource:
+                                  description: 'Required: resource to select'
+                                  type: string
+                              required:
+                              - resource
+                              type: object
+                              x-kubernetes-map-type: atomic
+                            secretKeyRef:
+                              description: Selects a key of a secret in the pod's
+                                namespace
+                              properties:
+                                key:
+                                  description: The key of the secret to select from.  Must
+                                    be a valid secret key.
+                                  type: string
+                                name:
+                                  description: 'Name of the referent. More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                    TODO: Add other useful fields. apiVersion, kind,
+                                    uid?'
+                                  type: string
+                                optional:
+                                  description: Specify whether the Secret or its key
+                                    must be defined
+                                  type: boolean
+                              required:
+                              - key
+                              type: object
+                              x-kubernetes-map-type: atomic
+                          type: object
+                      required:
+                      - name
+                      type: object
+                    type: array
+                  healthCheck:
+                    description: HealthCheck configures liveness and readiness probes.
+                    properties:
+                      initialDelaySeconds:
+                        default: 5
+                        description: InitialDelaySeconds is the delay before the first
+                          probe.
+                        format: int32
+                        type: integer
+                      path:
+                        default: /healthz
+                        description: Path is the HTTP path for the health check endpoint
+                          (e.g. "/healthz").
+                        type: string
+                      periodSeconds:
+                        default: 10
+                        description: PeriodSeconds is how often to perform the probe.
+                        format: int32
+                        type: integer
+                      port:
+                        description: Port overrides the probe port. Defaults to the
+                          container port.
+                        format: int32
+                        type: integer
+                    type: object
+                  image:
+                    description: Image is the container image to run (e.g. "nginx:1.25").
+                    minLength: 1
+                    type: string
+                  port:
+                    description: Port is the container port the application listens
+                      on.
+                    format: int32
+                    maximum: 65535
+                    minimum: 1
+                    type: integer
+                  replicas:
+                    default: 1
+                    description: Replicas is the desired number of pod replicas.
+                    format: int32
+                    minimum: 1
+                    type: integer
+                  resources:
+                    description: Resources defines CPU and memory requests/limits
+                      for the container.
+                    properties:
+                      cpuLimit:
+                        anyOf:
+                        - type: integer
+                        - type: string
+                        description: CPULimit is the maximum CPU (e.g. "500m").
+                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                        x-kubernetes-int-or-string: true
+                      cpuRequest:
+                        anyOf:
+                        - type: integer
+                        - type: string
+                        description: CPURequest is the requested CPU (e.g. "100m").
+                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                        x-kubernetes-int-or-string: true
+                      memoryLimit:
+                        anyOf:
+                        - type: integer
+                        - type: string
+                        description: MemoryLimit is the maximum memory (e.g. "512Mi").
+                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                        x-kubernetes-int-or-string: true
+                      memoryRequest:
+                        anyOf:
+                        - type: integer
+                        - type: string
+                        description: MemoryRequest is the requested memory (e.g. "128Mi").
+                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                        x-kubernetes-int-or-string: true
+                    type: object
+                required:
+                - image
+                - port
+                type: object
+              ingress:
+                description: Ingress configures external access via an Ingress resource.
+                properties:
+                  annotations:
+                    additionalProperties:
+                      type: string
+                    description: Annotations are additional annotations to set on
+                      the Ingress resource.
+                    type: object
+                  enabled:
+                    default: false
+                    description: Enabled controls whether an Ingress resource is created.
+                    type: boolean
+                  host:
+                    description: Host is the fully qualified domain name for the Ingress
+                      rule (e.g. "app.example.com").
+                    type: string
+                  ingressClassName:
+                    description: IngressClassName is the name of the IngressClass
+                      to use (e.g. "nginx").
+                    type: string
+                  path:
+                    default: /
+                    description: Path is the URL path prefix for the Ingress rule.
+                    type: string
+                  pathType:
+                    default: Prefix
+                    description: PathType determines how the path is matched.
+                    enum:
+                    - Prefix
+                    - Exact
+                    - ImplementationSpecific
+                    type: string
+                  tls:
+                    description: TLS configures TLS termination for the Ingress.
+                    properties:
+                      hosts:
+                        description: Hosts is the list of hosts covered by the TLS
+                          certificate.
+                        items:
+                          type: string
+                        type: array
+                      secretName:
+                        description: SecretName is the name of the Kubernetes Secret
+                          containing the TLS certificate.
+                        type: string
+                    required:
+                    - secretName
+                    type: object
+                type: object
+              service:
+                description: Service configures the Service fronting the Deployment.
+                properties:
+                  port:
+                    description: Port is the port the Service exposes.
+                    format: int32
+                    maximum: 65535
+                    minimum: 1
+                    type: integer
+                  targetPort:
+                    description: TargetPort is the container port traffic is routed
+                      to. Defaults to the Deployment port.
+                    format: int32
+                    type: integer
+                  type:
+                    default: ClusterIP
+                    description: Type is the Kubernetes Service type.
+                    enum:
+                    - ClusterIP
+                    - NodePort
+                    - LoadBalancer
+                    type: string
+                required:
+                - port
+                type: object
+            required:
+            - deployment
+            - service
+            type: object
+          status:
+            description: DevStagingEnvironmentStatus defines the observed state of
+              DevStagingEnvironment
+            properties:
+              availableReplicas:
+                description: AvailableReplicas is the number of ready pods.
+                format: int32
+                type: integer
+              conditions:
+                description: Conditions represent the latest available observations
+                  of the resource's state.
+                items:
+                  description: "Condition contains details for one aspect of the current
+                    state of this API Resource. --- This struct is intended for direct
+                    use as an array at the field path .status.conditions.  For example,
+                    \n type FooStatus struct{ // Represents the observations of a
+                    foo's current state. // Known .status.conditions.type are: \"Available\",
+                    \"Progressing\", and \"Degraded\" // +patchMergeKey=type // +patchStrategy=merge
+                    // +listType=map // +listMapKey=type Conditions []metav1.Condition
+                    `json:\"conditions,omitempty\" patchStrategy:\"merge\" patchMergeKey:\"type\"
+                    protobuf:\"bytes,1,rep,name=conditions\"` \n // other fields }"
+                  properties:
+                    lastTransitionTime:
+                      description: lastTransitionTime is the last time the condition
+                        transitioned from one status to another. This should be when
+                        the underlying condition changed.  If that is not known, then
+                        using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: message is a human readable message indicating
+                        details about the transition. This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: observedGeneration represents the .metadata.generation
+                        that the condition was set based upon. For instance, if .metadata.generation
+                        is currently 12, but the .status.conditions[x].observedGeneration
+                        is 9, the condition is out of date with respect to the current
+                        state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: reason contains a programmatic identifier indicating
+                        the reason for the condition's last transition. Producers
+                        of specific condition types may define expected values and
+                        meanings for this field, and whether the values are considered
+                        a guaranteed API. The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                        --- Many .condition.type values are consistent across resources
+                        like Available, but because arbitrary conditions can be useful
+                        (see .node.status.conditions), the ability to deconflict is
+                        important. The regex it matches is (dns1123SubdomainFmt/)?(qualifiedNameFmt)
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              dependenciesReady:
+                description: DependenciesReady indicates whether all declared dependencies
+                  are running.
+                type: boolean
+              deploymentReady:
+                description: DeploymentReady indicates whether the Deployment has
+                  reached the desired state.
+                type: boolean
+              ingressReady:
+                description: IngressReady indicates whether the Ingress is created
+                  (if enabled).
+                type: boolean
+              serviceReady:
+                description: ServiceReady indicates whether the Service is created.
+                type: boolean
+              url:
+                description: URL is the externally reachable URL if Ingress is configured.
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

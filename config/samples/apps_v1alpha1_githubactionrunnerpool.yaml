@@ -1,0 +1,56 @@
+apiVersion: apps.example.com/v1alpha1
+kind: GithubActionRunnerPool
+metadata:
+  name: jeff-runner-pool
+spec:
+  # The GitHub username of the developer who owns this local Kind cluster.
+  # The runner registers with this as a label so workflows can route to it
+  # using: runs-on: [self-hosted, jeffvincent]
+  githubUsername: "jeffvincent"
+
+  # The repository this runner polls for CI jobs
+  repository: "myorg/myrepo"
+
+  # Reference to a Secret containing the GitHub PAT (key: "github-token")
+  tokenSecretRef:
+    name: github-runner-token
+    key: github-token
+
+  # Single runner — one dev, one local Kind cluster
+  replicas: 1
+
+  # Runner image (defaults to the official GitHub Actions runner)
+  runnerImage: "ghcr.io/actions/actions-runner:latest"
+
+  # Extra labels (username is always added automatically)
+  labels:
+    - linux
+    - x64
+
+  # Resource limits for the runner pod
+  resources:
+    cpuRequest: "500m"
+    cpuLimit: "2"
+    memoryRequest: "512Mi"
+    memoryLimit: "4Gi"
+
+  # How the runner accesses Docker for building images:
+  #   "socket" (default) — mounts host Docker socket, lightest weight, best for Kind
+  #   "dind"             — Docker-in-Docker sidecar, fully isolated but heavier
+  #   "none"             — no Docker access (non-build runners)
+  dockerMode: socket
+
+  # The runner pod's service account needs permission to create
+  # DevStagingEnvironment CRs so the workflow job can spin up the dev env
+  serviceAccountName: runner-deployer
+
+---
+# The Secret containing your GitHub PAT — replace the value
+apiVersion: v1
+kind: Secret
+metadata:
+  name: github-runner-token
+type: Opaque
+stringData:
+  github-token: "ghp_REPLACE_WITH_YOUR_GITHUB_PAT"
+
