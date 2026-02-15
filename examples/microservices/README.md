@@ -135,7 +135,7 @@ microservices/
 
 - Local Kind cluster (`kind create cluster --name dev`)
 - **kindling** operator deployed ([Getting Started](../../README.md#getting-started))
-- `GithubActionRunnerPool` CR applied with your GitHub username
+- `GithubActionRunnerPool` CR applied with your GitHub username (PAT is auto-exchanged for a registration token — see [Token Exchange](../../README.md#3-create-the-github-token-secret))
 
 ### Option A — Deploy manually (no GitHub push)
 

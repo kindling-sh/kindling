@@ -63,7 +63,7 @@ The operator manages two CRDs in the `apps.example.com/v1alpha1` group:
 
 ### `GithubActionRunnerPool`
 
-Declares a self-hosted runner pool bound to a **single developer** and a **single GitHub repository**. The operator creates a Deployment running the [official GitHub Actions runner image](https://github.com/actions/runner) with access to the host Docker socket (or an optional DinD sidecar), and registers it with GitHub using the developer's username as a runner label.
+Declares a self-hosted runner pool bound to a **single developer** and a **single GitHub repository**. The operator creates a Deployment running the [official GitHub Actions runner image](https://github.com/actions/runner) with access to the host Docker socket (or an optional DinD sidecar). At startup each runner pod **automatically exchanges** the stored PAT for a short-lived registration token via the GitHub API, then registers with GitHub using the developer's username as a runner label. On shutdown a removal token is obtained to cleanly de-register.
 
 ```yaml
 apiVersion: apps.example.com/v1alpha1
@@ -74,7 +74,7 @@ spec:
   githubUsername: "jeffvincent"              # routes jobs to this dev's cluster
   repository: "myorg/myrepo"                 # repo to poll for workflow runs
   tokenSecretRef:
-    name: github-runner-token                # Secret with a GitHub PAT
+    name: github-runner-token                # Secret holding a GitHub PAT (repo scope)
   replicas: 1                                # one runner per developer
   dockerMode: socket                         # socket (default) | dind | none
   serviceAccountName: runner-deployer        # needs RBAC to create DevStagingEnvironments
@@ -82,6 +82,7 @@ spec:
   resources:
     cpuRequest: "500m"
     memoryLimit: "4Gi"
+  # githubURL: "https://github.example.com"  # uncomment for GitHub Enterprise Server
 ```
 
 Your GitHub Actions workflow routes jobs to a specific developer's machine:
@@ -122,7 +123,7 @@ jobs:
 |---|---|---|
 | `githubUsername` | *(required)* | Developer's GitHub handle — auto-added as a runner label |
 | `repository` | *(required)* | GitHub repo slug (`org/repo`) |
-| `tokenSecretRef` | *(required)* | Reference to a Secret holding a GitHub PAT |
+| `tokenSecretRef` | *(required)* | Reference to a Secret holding a GitHub PAT (`repo` scope). The runner auto-exchanges it for a short-lived registration token at startup. |
 | `replicas` | `1` | Number of runner pods |
 | `runnerImage` | `ghcr.io/actions/actions-runner:latest` | Runner container image |
 | `dockerMode` | `socket` | Docker strategy: `socket` (host mount, lightest), `dind` (sidecar), or `none` |
@@ -265,6 +266,10 @@ kubectl create secret generic github-runner-token \
   --from-literal=github-token=ghp_YOUR_TOKEN_HERE
 ```
 
+> **How token exchange works:** You provide a long-lived Personal Access Token (PAT) in the Secret. When the runner pod starts, it **automatically exchanges** the PAT for a short-lived GitHub runner registration token via the GitHub API (`POST /repos/{owner}/{repo}/actions/runners/registration-token`). The registration token is used once to register the runner with GitHub, and on shutdown the pod obtains a removal token to cleanly de-register. Your PAT never leaves the cluster — only the ephemeral registration/removal tokens are sent to `config.sh`.
+>
+> **GitHub Enterprise Server** is supported out of the box: set `spec.githubURL` in your `GithubActionRunnerPool` CR and the operator will hit `{your-ghe-host}/api/v3` instead of `api.github.com`.
+
 ### 4. Run the operator
 
 Run locally against your Kind cluster:
@@ -353,25 +358,27 @@ See the full walkthrough in the [sample app README](examples/sample-app/README.m
 
 ### Try the microservices demo (multi-service + Redis queue)
 
-For a more realistic example, the repo includes a [microservices demo](examples/microservices/) with three interconnected services:
+For a more realistic example, the repo includes a [microservices demo](examples/microservices/) with four services:
 
 | Service | Database | Role |
 |---|---|---|
+| **ui** | — | React + TypeScript dashboard — place orders, view inventory, watch activity |
 | **gateway** | — | Public API, reverse-proxies to backend services |
 | **orders** | Postgres 16 | Manages orders, publishes `order.created` events to a Redis queue |
 | **inventory** | MongoDB | Manages stock levels, consumes events from the Redis queue |
 
 ```bash
 # Build and load all images
-for svc in gateway orders inventory; do
+for svc in gateway orders inventory ui; do
   docker build -t ms-${svc}:dev examples/microservices/${svc}/
   kind load docker-image ms-${svc}:dev --name dev
 done
 
-# Deploy all three services (operator provisions Postgres, MongoDB, Redis)
+# Deploy all four services (operator provisions Postgres, MongoDB, Redis)
 kubectl apply -f examples/microservices/deploy/
 
-# Port-forward the gateway and try it
+# With Ingress: open http://ui.localhost in your browser
+# Without Ingress: port-forward the gateway
 kubectl port-forward svc/microservices-gateway-dev 8080:8080
 curl localhost:8080/status | jq .                          # all services healthy
 curl -X POST localhost:8080/orders \
@@ -401,12 +408,13 @@ See the full walkthrough in the [microservices README](examples/microservices/RE
 │   │   ├── Dockerfile                   #   Multi-stage build
 │   │   ├── dev-environment.yaml         #   DevStagingEnvironment CR
 │   │   └── README.md                    #   Full walkthrough guide
-│   └── microservices/                   # Multi-service demo (3 services + queue)
+│   └── microservices/                   # Multi-service demo (4 services + queue)
 │       ├── gateway/                     #   API gateway — reverse proxy
 │       ├── orders/                      #   Orders API — Postgres + Redis publisher
 │       ├── inventory/                   #   Inventory API — MongoDB + Redis consumer
+│       ├── ui/                          #   React + TypeScript dashboard (Vite → nginx)
 │       ├── deploy/                      #   DevStagingEnvironment CRs for all services
-│       ├── .github/workflows/           #   GH Actions: build all + deploy
+│       ├── .github/workflows/           #   GH Actions: build all 4 images + deploy
 │       └── README.md                    #   Architecture & walkthrough
 ├── internal/controller/
 │   ├── devstagingenvironment_controller.go   # Reconciler → Deployment + Service + Ingress + Deps
@@ -459,7 +467,7 @@ flowchart LR
 
 1. **Developer creates a Kind cluster** on their laptop and deploys the operator + a `GithubActionRunnerPool` CR with their GitHub username.
 
-2. **The operator spins up a runner Deployment** with the GitHub Actions runner image and mounts the host Docker socket (or a DinD sidecar, if configured). The runner self-registers with GitHub using labels `[self-hosted, <username>]`.
+2. **The operator spins up a runner Deployment** with the GitHub Actions runner image and mounts the host Docker socket (or a DinD sidecar, if configured). On startup the runner **exchanges the PAT for a short-lived registration token** and self-registers with GitHub using labels `[self-hosted, <username>]`.
 
 3. **Developer pushes code.** The GitHub Actions workflow fires with `runs-on: [self-hosted, <username>]`, routing the job to *that developer's laptop*.
 
@@ -522,6 +530,8 @@ kind delete cluster --name dev
 - [ ] Automatic TTL-based cleanup of stale `DevStagingEnvironment` CRs
 - [ ] Live status integration — update `GithubActionRunnerPool.status.activeJob` via the GitHub API
 - [x] Multi-service environments — deploy databases, caches, and queues alongside the app
+- [x] Automatic PAT → registration token exchange — no manual token juggling
+- [x] GitHub Enterprise Server support via `spec.githubURL`
 - [ ] CLI bootstrap tool — one command to create cluster + install operator + register runner
 - [ ] Webhook receiver for GitHub push events as an alternative to long-polling
 

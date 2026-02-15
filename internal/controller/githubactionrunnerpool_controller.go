@@ -178,7 +178,10 @@ func (r *GithubActionRunnerPoolReconciler) buildRunnerDeployment(cr *appsv1alpha
 	// ── Build environment variables for the runner container ───────────
 	env := []corev1.EnvVar{
 		{
-			Name: "RUNNER_TOKEN",
+			// The GitHub PAT (from the referenced Secret) is used at startup to
+			// obtain a short-lived runner registration token via the GitHub API.
+			// It is NOT passed directly to config.sh.
+			Name: "GITHUB_PAT",
 			ValueFrom: &corev1.EnvVarSource{
 				SecretKeyRef: &corev1.SecretKeySelector{
 					LocalObjectReference: corev1.LocalObjectReference{
@@ -201,6 +204,16 @@ func (r *GithubActionRunnerPoolReconciler) buildRunnerDeployment(cr *appsv1alpha
 			// Repository URL for runner registration
 			Name:  "RUNNER_REPOSITORY_URL",
 			Value: fmt.Sprintf("%s/%s", githubURL, spec.Repository),
+		},
+		{
+			// API base URL for token exchange (handles GHE vs github.com)
+			Name:  "GITHUB_API_URL",
+			Value: githubAPIURL(githubURL),
+		},
+		{
+			// Repo slug for API calls (e.g. "jeff-vincent/kindling")
+			Name:  "RUNNER_REPO_SLUG",
+			Value: spec.Repository,
 		},
 		{
 			// Expose the GitHub username to workflow steps so the job knows
@@ -242,9 +255,80 @@ func (r *GithubActionRunnerPoolReconciler) buildRunnerDeployment(cr *appsv1alpha
 		runnerImage = "ghcr.io/actions/actions-runner:latest"
 	}
 
+	// The official actions-runner image ships config.sh and run.sh but has
+	// no entrypoint that reads environment variables.  We provide a small
+	// inline startup script that:
+	//   1. Exchanges the GitHub PAT for a short-lived registration token
+	//   2. Calls config.sh to register the runner with GitHub
+	//   3. Sets up a SIGTERM trap so the runner de-registers on pod shutdown
+	//   4. Execs run.sh to start polling for jobs
+	startupScript := `#!/bin/bash
+set -uo pipefail
+
+# ── Exchange PAT for a short-lived runner registration token ──────
+echo "🔑 Exchanging PAT for runner registration token..."
+echo "   API: ${GITHUB_API_URL}/repos/${RUNNER_REPO_SLUG}/actions/runners/registration-token"
+
+HTTP_CODE=$(curl -sS -o /tmp/reg_response.json -w '%{http_code}' -X POST \
+  -H "Authorization: Bearer ${GITHUB_PAT}" \
+  -H "Accept: application/vnd.github+json" \
+  "${GITHUB_API_URL}/repos/${RUNNER_REPO_SLUG}/actions/runners/registration-token") || true
+
+echo "   HTTP status: ${HTTP_CODE}"
+
+if [ "${HTTP_CODE}" != "201" ]; then
+  echo "❌ GitHub API returned HTTP ${HTTP_CODE}:"
+  cat /tmp/reg_response.json 2>/dev/null || echo "(no response body)"
+  echo ""
+  echo "Make sure your PAT has the 'repo' scope (classic) or"
+  echo "'administration:write' permission (fine-grained)."
+  exit 1
+fi
+
+RUNNER_TOKEN=$(grep -o '"token": *"[^"]*"' /tmp/reg_response.json | head -1 | cut -d'"' -f4)
+rm -f /tmp/reg_response.json
+
+if [ -z "${RUNNER_TOKEN}" ]; then
+  echo "❌ Could not parse registration token from response"
+  exit 1
+fi
+echo "✅ Registration token obtained (expires in ~1 hour)"
+
+# De-register the runner on shutdown so it doesn't leave a ghost entry.
+# Obtain a fresh removal token since the registration token may have expired.
+cleanup() {
+  echo "🛑 Removing runner..."
+  REMOVE_TOKEN=$(curl -sS -X POST \
+    -H "Authorization: Bearer ${GITHUB_PAT}" \
+    -H "Accept: application/vnd.github+json" \
+    "${GITHUB_API_URL}/repos/${RUNNER_REPO_SLUG}/actions/runners/remove-token" 2>/dev/null \
+    | grep -o '"token": *"[^"]*"' | head -1 | cut -d'"' -f4) || true
+  ./config.sh remove --token "${REMOVE_TOKEN:-${RUNNER_TOKEN}}" || true
+}
+trap cleanup SIGTERM SIGINT
+
+# Build a runner name that fits GitHub's 64-char limit
+RUNNER_NAME="${RUNNER_NAME_PREFIX}-$(hostname | rev | cut -d- -f1,2 | rev)"
+RUNNER_NAME="${RUNNER_NAME:0:64}"
+
+# Configure the runner (non-interactive)
+./config.sh \
+  --url "${RUNNER_REPOSITORY_URL}" \
+  --token "${RUNNER_TOKEN}" \
+  --name "${RUNNER_NAME}" \
+  --labels "${RUNNER_LABELS}" \
+  --work "${RUNNER_WORKDIR}" \
+  --unattended \
+  --replace
+
+# Start the runner (exec so PID 1 gets signals)
+exec ./run.sh
+`
+
 	container := corev1.Container{
 		Name:         "runner",
 		Image:        runnerImage,
+		Command:      []string{"/bin/bash", "-c", startupScript},
 		Env:          env,
 		VolumeMounts: spec.VolumeMounts,
 	}
@@ -441,6 +525,18 @@ func int64Ptr(v int64) *int64 {
 
 func boolPtr(v bool) *bool {
 	return &v
+}
+
+// githubAPIURL returns the REST API base URL for a given GitHub instance.
+// For github.com it returns "https://api.github.com".
+// For GitHub Enterprise Server (e.g. "https://git.corp.com") it returns
+// "https://git.corp.com/api/v3".
+func githubAPIURL(githubURL string) string {
+	githubURL = strings.TrimRight(githubURL, "/")
+	if githubURL == "https://github.com" || githubURL == "" {
+		return "https://api.github.com"
+	}
+	return githubURL + "/api/v3"
 }
 
 // SetupWithManager sets up the controller with the Manager.
