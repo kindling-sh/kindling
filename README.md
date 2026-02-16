@@ -288,45 +288,89 @@ Generates and applies a `DevStagingEnvironment` CR. Replaces ~30 lines of YAML-g
 
 ---
 
+## Installation
+
+### Pre-built binaries (recommended)
+
+Download the latest release for your platform from [GitHub Releases](https://github.com/jeff-vincent/kindling/releases):
+
+```bash
+# macOS (Apple Silicon)
+curl -Lo kindling.tar.gz https://github.com/jeff-vincent/kindling/releases/latest/download/kindling_$(curl -s https://api.github.com/repos/jeff-vincent/kindling/releases/latest | grep tag_name | cut -d '"' -f4 | sed 's/^v//')_darwin_arm64.tar.gz
+tar xzf kindling.tar.gz
+sudo mv kindling /usr/local/bin/
+
+# macOS (Intel)
+curl -Lo kindling.tar.gz https://github.com/jeff-vincent/kindling/releases/latest/download/kindling_$(curl -s https://api.github.com/repos/jeff-vincent/kindling/releases/latest | grep tag_name | cut -d '"' -f4 | sed 's/^v//')_darwin_amd64.tar.gz
+tar xzf kindling.tar.gz
+sudo mv kindling /usr/local/bin/
+
+# Linux (amd64)
+curl -Lo kindling.tar.gz https://github.com/jeff-vincent/kindling/releases/latest/download/kindling_$(curl -s https://api.github.com/repos/jeff-vincent/kindling/releases/latest | grep tag_name | cut -d '"' -f4 | sed 's/^v//')_linux_amd64.tar.gz
+tar xzf kindling.tar.gz
+sudo mv kindling /usr/local/bin/
+```
+
+> **macOS Gatekeeper note:** If you see *"Apple could not verify kindling is free of malware"*, clear the quarantine flag:
+> ```bash
+> sudo xattr -d com.apple.quarantine /usr/local/bin/kindling
+> ```
+
+Verify the installation:
+
+```bash
+kindling version
+```
+
+### Build from source
+
+Requires Go 1.25+:
+
+```bash
+git clone https://github.com/jeff-vincent/kindling.git
+cd kindling
+make cli
+sudo mv bin/kindling /usr/local/bin/
+```
+
+---
+
 ## Getting Started
 
 ### Prerequisites
 
 | Tool | Version |
 |---|---|
-| [Go](https://go.dev/dl/) | 1.20+ |
 | [Kind](https://kind.sigs.k8s.io/) | 0.20+ |
 | [kubectl](https://kubernetes.io/docs/tasks/tools/) | 1.28+ |
 | [Docker](https://docs.docker.com/get-docker/) | 24+ (for building the operator image only — app images use Kaniko) |
+| [Go](https://go.dev/dl/) | 1.25+ (only needed if building from source) |
 
 ### Option A: Use the CLI (recommended)
 
 The `kindling` CLI wraps the entire bootstrap flow into simple commands:
 
 ```bash
-# Build the CLI
-make cli
-
 # Bootstrap everything: Kind cluster + ingress + registry + operator
-./bin/kindling init
+kindling init
 
 # With optional Kind flags
-./bin/kindling init --image kindest/node:v1.29.0 --wait 60s
+kindling init --image kindest/node:v1.29.0 --wait 60s
 
 # Register a self-hosted GitHub Actions runner
-./bin/kindling quickstart -u <github-user> -r <owner/repo> -t <pat>
+kindling quickstart -u <github-user> -r <owner/repo> -t <pat>
 
 # Deploy a dev staging environment
-./bin/kindling deploy -f examples/sample-app/dev-environment.yaml
+kindling deploy -f examples/sample-app/dev-environment.yaml
 
 # View cluster status at a glance
-./bin/kindling status
+kindling status
 
 # Tail the operator logs
-./bin/kindling logs
+kindling logs
 
 # Tear everything down
-./bin/kindling destroy
+kindling destroy
 ```
 
 <details>
@@ -567,7 +611,7 @@ make docker-build IMG=controller:dev
 
 ```bash
 # Via CLI
-./bin/kindling destroy
+kindling destroy
 
 # Or manually
 make undeploy             # Remove operator + managed resources
