@@ -16,7 +16,7 @@ CLUSTER_NAME="${E2E_CLUSTER_NAME:-kindling-e2e}"
 IMG="controller:latest"
 TIMEOUT=120s
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
 

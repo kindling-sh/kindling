@@ -655,8 +655,8 @@ done
 	// The runner container handles GH Actions jobs. The build-agent
 	// sidecar handles all kubectl/Kaniko work via a shared /builds volume.
 	podSpec := corev1.PodSpec{
-		Containers:                    []corev1.Container{container, buildAgent},
-		ServiceAccountName:            saName,
+		Containers:         []corev1.Container{container, buildAgent},
+		ServiceAccountName: saName,
 		Volumes: append([]corev1.Volume{
 			{
 				Name: "builds",

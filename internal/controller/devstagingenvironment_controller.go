@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"math/rand"
 	"strings"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -132,6 +133,13 @@ func (r *DevStagingEnvironmentReconciler) Reconcile(ctx context.Context, req ctr
 	// ── Step 6: Update status ──────────────────────────────────────────
 	if err := r.updateStatus(ctx, cr); err != nil {
 		return ctrl.Result{}, err
+	}
+
+	// If status is not fully ready yet, requeue to pick up child resource
+	// status changes (e.g. Deployment replicas becoming available).
+	if !cr.Status.DeploymentReady || !cr.Status.ServiceReady || !cr.Status.DependenciesReady {
+		logger.Info("Not all child resources are ready yet, requeueing")
+		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 	}
 
 	logger.Info("Reconciliation complete")

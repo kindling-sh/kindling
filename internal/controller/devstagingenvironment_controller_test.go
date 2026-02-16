@@ -30,7 +30,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	appsv1alpha1 "github.com/jeffvincent/kindling/api/v1alpha1"
 )
@@ -530,19 +529,12 @@ var _ = Describe("DevStagingEnvironment Reconciler", func() {
 			cr.Spec.Deployment.Image = "my-image:v2"
 			Expect(k8sClient.Update(ctx, cr)).To(Succeed())
 
-			// Manually trigger reconcile
-			reconciler := &DevStagingEnvironmentReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
-			}
-			_, err := reconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: types.NamespacedName{Name: cr.Name, Namespace: "default"},
-			})
-			Expect(err).NotTo(HaveOccurred())
-
-			// Verify the Deployment was updated
-			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: cr.Name, Namespace: "default"}, deploy)).To(Succeed())
-			Expect(deploy.Spec.Template.Spec.Containers[0].Image).To(Equal("my-image:v2"))
+			// Wait for the background controller to reconcile the update
+			Eventually(func(g Gomega) string {
+				d := &appsv1.Deployment{}
+				g.Expect(k8sClient.Get(ctx, types.NamespacedName{Name: cr.Name, Namespace: "default"}, d)).To(Succeed())
+				return d.Spec.Template.Spec.Containers[0].Image
+			}, timeout, interval).Should(Equal("my-image:v2"))
 
 			_ = k8sClient.Delete(ctx, cr)
 		})

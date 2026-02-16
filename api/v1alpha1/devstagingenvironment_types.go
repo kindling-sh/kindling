@@ -267,6 +267,7 @@ type DevStagingEnvironmentStatus struct {
 
 //+kubebuilder:object:root=true
 //+kubebuilder:subresource:status
+//+kubebuilder:resource:shortName=dse
 //+kubebuilder:printcolumn:name="Image",type=string,JSONPath=`.spec.deployment.image`
 //+kubebuilder:printcolumn:name="Replicas",type=integer,JSONPath=`.spec.deployment.replicas`
 //+kubebuilder:printcolumn:name="Available",type=integer,JSONPath=`.status.availableReplicas`

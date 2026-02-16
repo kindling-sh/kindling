@@ -11,6 +11,8 @@ spec:
     kind: DevStagingEnvironment
     listKind: DevStagingEnvironmentList
     plural: devstagingenvironments
+    shortNames:
+    - dse
     singular: devstagingenvironment
   scope: Namespaced
   versions:
