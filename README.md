@@ -380,6 +380,9 @@ kindling init --image kindest/node:v1.29.0 --wait 60s
 # Register a self-hosted GitHub Actions runner
 kindling quickstart -u <github-user> -r <owner/repo> -t <pat>
 
+# AI-generate a GitHub Actions workflow for your repo
+kindling generate -k <api-key> -r /path/to/my-app
+
 # Deploy a dev staging environment
 kindling deploy -f examples/sample-app/dev-environment.yaml
 
@@ -405,6 +408,7 @@ kindling destroy
 | `kindling init --retain` | Keep nodes on failure for debugging |
 | `kindling init --skip-cluster` | Skip cluster creation, use existing cluster |
 | `kindling quickstart` | Create GitHub PAT secret + runner pool CR |
+| `kindling generate -k <key> -r <path>` | AI-generate a dev-deploy.yml workflow for any repo |
 | `kindling deploy -f <file>` | Apply a DevStagingEnvironment from a YAML file |
 | `kindling status` | Dashboard view of cluster, operator, runners, environments, and ingress routes |
 | `kindling logs` | Tail the kindling controller logs (`-f` for follow, `--all` for all containers) |
@@ -569,10 +573,11 @@ flowchart TB
 
 1. **Developer bootstraps** — `kindling init` creates a Kind cluster, deploys the operator, registry, and ingress-nginx.
 2. **Runner registers** — `kindling quickstart` creates a `GithubActionRunnerPool` CR. The operator provisions a runner Deployment with a build-agent sidecar that self-registers with GitHub.
-3. **Developer pushes code** — GitHub routes the job to the developer's laptop via `runs-on: [self-hosted, <username>]`.
-4. **Workflow uses kindling actions** — `kindling-build` creates a tarball and signals the sidecar, which launches a Kaniko pod. `kindling-deploy` generates a DSE CR and signals the sidecar to `kubectl apply` it.
-5. **Operator reconciles** — creates the app Deployment, Service, Ingress, and auto-provisions all declared dependencies with connection env vars injected.
-6. **Developer hits localhost** — `http://<user>-<app>.localhost` via ingress-nginx.
+3. **Workflow generated** — `kindling generate` scans the repo and uses AI (OpenAI or Anthropic) to produce a `dev-deploy.yml` with correct build steps, deploy steps, dependencies, and timeouts for all detected services.
+4. **Developer pushes code** — GitHub routes the job to the developer's laptop via `runs-on: [self-hosted, <username>]`.
+5. **Workflow uses kindling actions** — `kindling-build` creates a tarball and signals the sidecar, which launches a Kaniko pod. `kindling-deploy` generates a DSE CR and signals the sidecar to `kubectl apply` it.
+6. **Operator reconciles** — creates the app Deployment, Service, Ingress, and auto-provisions all declared dependencies with connection env vars injected.
+7. **Developer hits localhost** — `http://<user>-<app>.localhost` via ingress-nginx.
 
 ---
 
@@ -650,7 +655,9 @@ kind delete cluster --name dev
 - [x] Build-agent sidecar architecture
 - [x] Auto-provisioned RBAC per runner pool
 - [x] In-cluster container registry
-- [x] CLI tool — `kindling init/quickstart/deploy/status/logs/destroy`
+- [x] CLI tool — `kindling init/quickstart/generate/deploy/status/logs/destroy`
+- [x] AI-powered workflow generation — `kindling generate` (OpenAI + Anthropic, 9 languages)
+- [x] Kaniko layer caching — `registry:5000/cache` for fast rebuilds
 - [x] Reusable GitHub Actions — `kindling-build` + `kindling-deploy`
 - [ ] Automatic TTL-based cleanup of stale `DevStagingEnvironment` CRs
 - [ ] Live status integration — `GithubActionRunnerPool.status.activeJob`

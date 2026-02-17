@@ -130,6 +130,29 @@ You should also see it listed under your repo's **Settings → Actions → Runne
 
 > **⚠️ Dockerfile required:** Your app must have a working Dockerfile that builds successfully on its own (e.g. `docker build .`). The `kindling-build` action runs this Dockerfile as-is via Kaniko inside the cluster — it does **not** generate or modify Dockerfiles. If it doesn't build locally, it won't build in kindling.
 
+### Option A: AI-generate the workflow (recommended)
+
+Use `kindling generate` to scan your repo and produce a complete workflow automatically:
+
+```bash
+kindling generate -k <your-api-key> -r /path/to/your-app
+```
+
+This detects all services, languages, dependencies, ports, and health-check
+endpoints, then writes `.github/workflows/dev-deploy.yml` with correct build
+steps, deploy steps, timeouts, and inter-service wiring. Supports OpenAI
+(default) and Anthropic providers.
+
+```bash
+# Use Anthropic instead
+kindling generate -k sk-ant-... -r . --provider anthropic
+
+# Preview without writing a file
+kindling generate -k sk-... -r . --dry-run
+```
+
+### Option B: Write the workflow manually
+
 In your app repository, create `.github/workflows/dev-deploy.yml`:
 
 ```yaml

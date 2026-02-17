@@ -131,6 +131,51 @@ kindling quickstart -u myuser -r myorg/myrepo -t ghp_xxxxx
 
 ---
 
+### `kindling generate`
+
+AI-generate a GitHub Actions workflow for any repository.
+
+```
+kindling generate [flags]
+```
+
+**What it does:**
+1. Scans the repository for Dockerfiles, dependency manifests, and source files
+2. Detects services, languages, ports, health-check endpoints, and backing dependencies
+3. Builds a detailed prompt and calls the AI provider (OpenAI or Anthropic)
+4. Writes a complete `dev-deploy.yml` workflow using `kindling-build` and `kindling-deploy` actions
+
+**Supported languages:** Go, TypeScript, Python, Java, Rust, Ruby, PHP, C#, Elixir
+
+**Flags:**
+
+| Flag | Short | Default | Description |
+|---|---|---|---|
+| `--api-key` | `-k` | — (required) | GenAI API key |
+| `--repo-path` | `-r` | `.` | Path to the local repository to analyze |
+| `--provider` | | `openai` | AI provider: `openai` or `anthropic` |
+| `--model` | | auto | Model name (default: `gpt-4o` for openai, `claude-sonnet-4-20250514` for anthropic) |
+| `--output` | `-o` | `<repo>/.github/workflows/dev-deploy.yml` | Output path for the workflow file |
+| `--dry-run` | | `false` | Print the generated workflow to stdout instead of writing a file |
+
+**Examples:**
+
+```bash
+# Generate with OpenAI (default)
+kindling generate -k sk-... -r /path/to/my-app
+
+# Use Anthropic
+kindling generate -k sk-ant-... -r . --provider anthropic
+
+# Preview without writing
+kindling generate -k sk-... -r . --dry-run
+
+# Custom output path
+kindling generate -k sk-... -r . -o ./my-workflow.yml
+```
+
+---
+
 ### `kindling deploy`
 
 Apply a DevStagingEnvironment from a YAML file.
@@ -298,18 +343,21 @@ kindling init
 # 2. Connect a GitHub repo
 kindling quickstart -u alice -r acme/myapp -t ghp_xxxxx
 
-# 3. Push code → CI builds + deploys automatically
+# 3. Generate a workflow for your app
+kindling generate -k sk-... -r /path/to/myapp
+
+# 4. Push code → CI builds + deploys automatically
 git push origin main
 
-# 4. Check status
+# 5. Check status
 kindling status
 
-# 5. View controller logs
+# 6. View controller logs
 kindling logs
 
-# 6. Manual deploy (without CI)
+# 7. Manual deploy (without CI)
 kindling deploy -f dev-environment.yaml
 
-# 7. Tear down when done
+# 8. Tear down when done
 kindling destroy -y
 ```
