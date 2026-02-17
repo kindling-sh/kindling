@@ -175,8 +175,8 @@ func ensureKustomize(dir string) (string, error) {
 		return "", fmt.Errorf("cannot create bin dir: %w", err)
 	}
 
-	osName := runtime.GOOS   // linux or darwin
-	arch := runtime.GOARCH    // amd64 or arm64
+	osName := runtime.GOOS // linux or darwin
+	arch := runtime.GOARCH // amd64 or arm64
 
 	version := "v5.5.0"
 	url := fmt.Sprintf(
