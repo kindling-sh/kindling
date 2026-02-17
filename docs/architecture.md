@@ -120,7 +120,14 @@ The two containers share an `emptyDir` volume mounted at `/builds/`.
 
 ### 4. Kaniko build-agent (sidecar)
 
-The build-agent sidecar watches for signal files in `/builds/`:
+The build-agent sidecar watches for signal files in `/builds/`.
+
+> **⚠️ Dockerfile requirement:** Kaniko executes the Dockerfile from the
+> build context exactly as-is. It does not generate or modify
+> Dockerfiles. Each service must ship a Dockerfile that builds
+> successfully on its own (`docker build .`). Kaniko is stricter than
+> local Docker — for example, `COPY`-ing a file that doesn't exist
+> (like a missing lockfile) will fail the build immediately.
 
 ```
 Signal file protocol:

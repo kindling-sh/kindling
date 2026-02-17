@@ -46,6 +46,18 @@ sudo cp bin/kindling /usr/local/bin/
 
 ## Step 3 — Bootstrap the cluster
 
+**Before you begin**, make sure Docker Desktop has enough resources allocated
+(Settings → Resources):
+
+| Workload | CPUs | Memory | Disk |
+|---|---|---|---|
+| Small (1–3 lightweight services) | 4 | 8 GB | 30 GB |
+| Medium (4–6 services, mixed languages) | 6 | 12 GB | 50 GB |
+| Large (7+ services, heavy compilers like Rust/Java/C#) | 8+ | 16 GB | 80 GB |
+
+> **Tip:** Kaniko layer caching means first builds are slow but rebuilds are
+> fast. Allocate enough disk for cached layers (2–5 GB per heavy-compiler service).
+
 ```bash
 kindling init
 ```
@@ -115,6 +127,8 @@ You should also see it listed under your repo's **Settings → Actions → Runne
 ---
 
 ## Step 5 — Create your app workflow
+
+> **⚠️ Dockerfile required:** Your app must have a working Dockerfile that builds successfully on its own (e.g. `docker build .`). The `kindling-build` action runs this Dockerfile as-is via Kaniko inside the cluster — it does **not** generate or modify Dockerfiles. If it doesn't build locally, it won't build in kindling.
 
 In your app repository, create `.github/workflows/dev-deploy.yml`:
 

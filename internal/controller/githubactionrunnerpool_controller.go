@@ -14,6 +14,15 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// TODO: Implement idle cluster scaling. Runner pods should scale down (e.g. to 0 replicas)
+// after a period of inactivity to free up resources when not in use, then scale back up
+// on demand when a workflow triggers. This is important now that Kaniko layer caching is
+// enabled (--cache=true, --cache-repo=registry:5000/cache) — the in-cluster registry
+// retains cached layers across pod restarts, so scale-down doesn't lose build cache.
+// Approach: watch for idle runners with no active jobs for N minutes, scale the
+// StatefulSet/Deployment to 0, and use a webhook or polling mechanism to scale back up
+// when a new workflow_dispatch or push event arrives.
+
 package controller
 
 import (
@@ -569,7 +578,8 @@ while true; do
       -- --context=tar://stdin \
          --destination="${DEST}" \
          --insecure \
-         --cache=false \
+         --cache=true \
+         --cache-repo=registry:5000/cache \
       > "${BUILDS_DIR}/${SERVICE}.log" 2>&1
     EXIT_CODE=$?
 

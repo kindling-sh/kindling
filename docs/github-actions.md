@@ -15,6 +15,8 @@ jeff-vincent/kindling/.github/actions/kindling-deploy@main
 
 Build and push a container image via the Kaniko build-agent sidecar.
 
+> **⚠️ Dockerfile required:** This action runs the `Dockerfile` found in the build context directory as-is using Kaniko. It does **not** generate or modify Dockerfiles. Each service must have a working Dockerfile that builds successfully on its own (e.g. `docker build .`). If it doesn't build locally, it won't build in kindling. Kaniko is stricter than local Docker in some cases — for example, `COPY`-ing a file that doesn't exist (like a missing lockfile) will fail immediately rather than being silently skipped.
+
 ### Inputs
 
 | Input | Required | Default | Description |

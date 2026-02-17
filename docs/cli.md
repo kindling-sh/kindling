@@ -36,6 +36,27 @@ Bootstrap a Kind cluster with the kindling operator.
 kindling init [flags]
 ```
 
+**Recommended resources:**
+
+Kindling runs a full Kubernetes cluster inside Docker via Kind. Allocate enough
+Docker Desktop resources for your workload:
+
+| Workload | CPUs | Memory | Disk |
+|---|---|---|---|
+| Small (1–3 lightweight services) | 4 | 8 GB | 30 GB |
+| Medium (4–6 services, mixed languages) | 6 | 12 GB | 50 GB |
+| Large (7+ services, heavy compilers like Rust/Java/C#) | 8+ | 16 GB | 80 GB |
+
+These resources are configured in **Docker Desktop → Settings → Resources**. The
+default Kind config uses a single control-plane node. For larger workloads, this
+is sufficient since all pods schedule on the same node — adding worker nodes
+doesn't help much in a local dev context and just splits the available memory.
+
+> **Tip:** Kaniko layer caching is enabled (`registry:5000/cache`), so first
+> builds are slow but subsequent rebuilds are fast. Make sure you have enough
+> disk for the cache — heavy stacks (Rust, Java) can use 2–5 GB of cached
+> layers per service.
+
 **What it does (in order):**
 1. Preflight checks (kind, kubectl, docker, make, go on PATH)
 2. `kind create cluster --name dev --config kind-config.yaml`

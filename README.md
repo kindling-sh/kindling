@@ -236,6 +236,8 @@ kindling ships two **composite actions** that eliminate workflow boilerplate. An
 
 Builds a container image via the Kaniko sidecar. Replaces ~15 lines of signal-file scripting with a single step.
 
+> **⚠️ Dockerfile required:** `kindling-build` runs the Dockerfile found in the build context directory as-is using Kaniko. It does **not** generate or modify Dockerfiles. Each service must have a working Dockerfile that builds successfully on its own (e.g. `docker build .`) — if it doesn't build locally, it won't build in kindling.
+
 ```yaml
 - uses: jeff-vincent/kindling/.github/actions/kindling-build@main
   with:
@@ -345,6 +347,24 @@ sudo mv bin/kindling /usr/local/bin/
 | [kubectl](https://kubernetes.io/docs/tasks/tools/) | 1.28+ |
 | [Docker](https://docs.docker.com/get-docker/) | 24+ (for building the operator image only — app images use Kaniko) |
 | [Go](https://go.dev/dl/) | 1.25+ (only needed if building from source) |
+
+### Recommended Docker Desktop resources
+
+Kindling runs a full Kubernetes cluster inside Docker via Kind. Before
+bootstrapping, allocate enough resources in **Docker Desktop → Settings →
+Resources**:
+
+| Workload | CPUs | Memory | Disk |
+|---|---|---|---|
+| Small (1–3 lightweight services) | 4 | 8 GB | 30 GB |
+| Medium (4–6 services, mixed languages) | 6 | 12 GB | 50 GB |
+| Large (7+ services, heavy compilers like Rust/Java/C#) | 8+ | 16 GB | 80 GB |
+
+The default Kind config uses a single control-plane node — this is intentional.
+Adding worker nodes doesn't help in a local context and just splits available
+memory. Kaniko layer caching is enabled (`registry:5000/cache`), so first builds
+are slow but subsequent rebuilds are fast. Make sure you have enough disk for the
+cache — heavy stacks can use 2–5 GB of cached layers per service.
 
 ### Option A: Use the CLI (recommended)
 
