@@ -200,7 +200,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 	fmt.Printf("  %s🎉 kindling is ready!%s\n", colorGreen+colorBold, colorReset)
 	fmt.Println()
 	fmt.Println("  Next steps:")
-	fmt.Printf("    %skindling quickstart -u <github-user> -r <owner/repo> -t <pat>%s\n", colorCyan, colorReset)
+	fmt.Printf("    %skindling runners -u <github-user> -r <owner/repo> -t <pat>%s\n", colorCyan, colorReset)
 	fmt.Printf("    %skindling deploy -f examples/sample-app/dev-environment.yaml%s\n", colorCyan, colorReset)
 	fmt.Printf("    %skindling status%s\n", colorCyan, colorReset)
 	fmt.Println()

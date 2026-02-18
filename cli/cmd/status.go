@@ -99,7 +99,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		"-o", "custom-columns=NAME:.metadata.name,USERNAME:.spec.githubUsername,REPO:.spec.repository",
 		"--no-headers")
 	if err != nil || rpOut == "" || strings.Contains(rpOut, "No resources") {
-		fmt.Printf("    %sNone — run:%s kindling quickstart\n", colorDim, colorReset)
+		fmt.Printf("    %sNone — run:%s kindling runners\n", colorDim, colorReset)
 	} else {
 		for _, line := range strings.Split(rpOut, "\n") {
 			line = strings.TrimSpace(line)

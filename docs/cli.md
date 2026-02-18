@@ -96,12 +96,12 @@ kindling init --skip-cluster
 
 ---
 
-### `kindling quickstart`
+### `kindling runners`
 
 Create a GitHub Actions runner pool in the cluster.
 
 ```
-kindling quickstart [flags]
+kindling runners [flags]
 ```
 
 **What it does:**
@@ -123,10 +123,10 @@ kindling quickstart [flags]
 
 ```bash
 # Interactive mode (prompts for missing values)
-kindling quickstart
+kindling runners
 
 # Non-interactive
-kindling quickstart -u myuser -r myorg/myrepo -t ghp_xxxxx
+kindling runners -u myuser -r myorg/myrepo -t ghp_xxxxx
 ```
 
 ---
@@ -341,7 +341,7 @@ go build -ldflags "-X github.com/jeffvincent/kindling/cli/cmd.Version=v1.0.0" -o
 kindling init
 
 # 2. Connect a GitHub repo
-kindling quickstart -u alice -r acme/myapp -t ghp_xxxxx
+kindling runners -u alice -r acme/myapp -t ghp_xxxxx
 
 # 3. Generate a workflow for your app
 kindling generate -k sk-... -r /path/to/myapp

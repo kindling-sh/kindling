@@ -24,7 +24,7 @@ self-hosted GitHub Actions runners.
 Common workflow:
 
   kindling init                           # create cluster + deploy operator
-  kindling quickstart -u <user> -r <repo> -t <pat>   # register a runner
+  kindling runners -u <user> -r <repo> -t <pat>      # register a runner
   kindling generate -k <api-key> -r .     # AI-generate a dev-deploy.yml
   kindling deploy -f dev-environment.yaml # spin up a staging environment
   kindling expose                         # public HTTPS tunnel for OAuth

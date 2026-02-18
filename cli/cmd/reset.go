@@ -14,10 +14,10 @@ var resetCmd = &cobra.Command{
 	Long: `Deletes the GithubActionRunnerPool CR and its token secret, leaving
 the cluster, operator, and any DevStagingEnvironments intact.
 
-After reset, run quickstart again to register a runner for a different repo:
+After reset, run runners again to register a runner for a different repo:
 
   kindling reset
-  kindling quickstart -u <user> -r <new-repo> -t <pat>`,
+  kindling runners -u <user> -r <new-repo> -t <pat>`,
 	RunE: runReset,
 }
 
@@ -91,7 +91,7 @@ func runReset(cmd *cobra.Command, args []string) error {
 	success("Runner pool removed")
 	fmt.Println()
 	fmt.Printf("  Re-register with a new repo:\n")
-	fmt.Printf("  %skindling quickstart -u <user> -r <new-repo> -t <pat>%s\n", colorCyan, colorReset)
+	fmt.Printf("  %skindling runners -u <user> -r <new-repo> -t <pat>%s\n", colorCyan, colorReset)
 	fmt.Println()
 
 	return nil

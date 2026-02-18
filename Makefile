@@ -119,11 +119,11 @@ ifndef ignore-not-found
   ignore-not-found = false
 endif
 
-# ── Quickstart ────────────────────────────────────────────────────
+# ── Runners ───────────────────────────────────────────────────────
 # One-command setup: creates the GitHub PAT secret and applies the
 # runner pool CR. Requires GITHUB_USERNAME, GITHUB_REPO, and GITHUB_PAT.
 #
-#   make quickstart \
+#   make runners \
 #     GITHUB_USERNAME=jeff-vincent \
 #     GITHUB_REPO=jeff-vincent/demo-kindling \
 #     GITHUB_PAT=ghp_xxxxxxxxxxxx
@@ -132,10 +132,10 @@ GITHUB_USERNAME ?=
 GITHUB_REPO ?=
 GITHUB_PAT ?=
 
-.PHONY: quickstart
-quickstart: ## Create GitHub PAT secret + runner pool CR (requires GITHUB_USERNAME, GITHUB_REPO, GITHUB_PAT).
+.PHONY: runners
+runners: ## Create GitHub PAT secret + runner pool CR (requires GITHUB_USERNAME, GITHUB_REPO, GITHUB_PAT).
 	@if [ -z "$(GITHUB_USERNAME)" ] || [ -z "$(GITHUB_REPO)" ] || [ -z "$(GITHUB_PAT)" ]; then \
-		echo "❌ Usage: make quickstart GITHUB_USERNAME=<user> GITHUB_REPO=<org/repo> GITHUB_PAT=<token>"; \
+		echo "❌ Usage: make runners GITHUB_USERNAME=<user> GITHUB_REPO=<org/repo> GITHUB_PAT=<token>"; \
 		exit 1; \
 	fi
 	@echo "🔑 Creating github-runner-token secret..."

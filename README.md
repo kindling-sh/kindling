@@ -378,7 +378,7 @@ kindling init
 kindling init --image kindest/node:v1.29.0 --wait 60s
 
 # Register a self-hosted GitHub Actions runner
-kindling quickstart -u <github-user> -r <owner/repo> -t <pat>
+kindling runners -u <github-user> -r <owner/repo> -t <pat>
 
 # AI-generate a GitHub Actions workflow for your repo
 kindling generate -k <api-key> -r /path/to/my-app
@@ -407,7 +407,7 @@ kindling destroy
 | `kindling init --wait <duration>` | Wait for control plane readiness (e.g. `60s`, `5m`) |
 | `kindling init --retain` | Keep nodes on failure for debugging |
 | `kindling init --skip-cluster` | Skip cluster creation, use existing cluster |
-| `kindling quickstart` | Create GitHub PAT secret + runner pool CR |
+| `kindling runners` | Create GitHub PAT secret + runner pool CR |
 | `kindling generate -k <key> -r <path>` | AI-generate a dev-deploy.yml workflow for any repo |
 | `kindling deploy -f <file>` | Apply a DevStagingEnvironment from a YAML file |
 | `kindling status` | Dashboard view of cluster, operator, runners, environments, and ingress routes |
@@ -448,7 +448,7 @@ make install deploy IMG=controller:latest
 Generate a [GitHub PAT](https://github.com/settings/tokens) with **`repo`** scope:
 
 ```bash
-make quickstart \
+make runners \
   GITHUB_USERNAME=your-github-username \
   GITHUB_REPO=your-org/your-repo \
   GITHUB_PAT=ghp_YOUR_TOKEN_HERE
@@ -572,7 +572,7 @@ flowchart TB
 ```
 
 1. **Developer bootstraps** — `kindling init` creates a Kind cluster, deploys the operator, registry, and ingress-nginx.
-2. **Runner registers** — `kindling quickstart` creates a `GithubActionRunnerPool` CR. The operator provisions a runner Deployment with a build-agent sidecar that self-registers with GitHub.
+2. **Runner registers** — `kindling runners` creates a `GithubActionRunnerPool` CR. The operator provisions a runner Deployment with a build-agent sidecar that self-registers with GitHub.
 3. **Workflow generated** — `kindling generate` scans the repo and uses AI (OpenAI or Anthropic) to produce a `dev-deploy.yml` with correct build steps, deploy steps, dependencies, and timeouts for all detected services.
 4. **Developer pushes code** — GitHub routes the job to the developer's laptop via `runs-on: [self-hosted, <username>]`.
 5. **Workflow uses kindling actions** — `kindling-build` creates a tarball and signals the sidecar, which launches a Kaniko pod. `kindling-deploy` generates a DSE CR and signals the sidecar to `kubectl apply` it.
@@ -595,7 +595,7 @@ flowchart TB
 │   └── zz_generated.deepcopy.go         #   auto-generated DeepCopy methods
 ├── cli/                                 # kindling CLI tool (cobra)
 │   ├── main.go                          #   CLI entrypoint
-│   └── cmd/                             #   Commands: init, quickstart, deploy,
+│   └── cmd/                             #   Commands: init, runners, deploy,
 │       ├── init.go                      #     status, logs, destroy, version
 │       └── ...
 ├── cmd/main.go                          # Operator entrypoint
@@ -655,7 +655,7 @@ kind delete cluster --name dev
 - [x] Build-agent sidecar architecture
 - [x] Auto-provisioned RBAC per runner pool
 - [x] In-cluster container registry
-- [x] CLI tool — `kindling init/quickstart/generate/deploy/status/logs/destroy`
+- [x] CLI tool — `kindling init/runners/generate/deploy/status/logs/destroy`
 - [x] AI-powered workflow generation — `kindling generate` (OpenAI + Anthropic, 9 languages)
 - [x] Kaniko layer caching — `registry:5000/cache` for fast rebuilds
 - [x] Reusable GitHub Actions — `kindling-build` + `kindling-deploy`
