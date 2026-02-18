@@ -422,6 +422,7 @@ func cleanupTunnel() {
 // ── Ingress patching ──────────────────────────────────────────
 
 const originalHostAnnotation = "kindling.dev/original-host"
+const originalTLSAnnotation = "kindling.dev/original-tls"
 
 // patchIngressesForTunnel replaces the host on every Ingress in the default
 // namespace with the tunnel hostname, saving the original host as an annotation
@@ -472,15 +473,29 @@ func patchIngressesForTunnel(publicURL string) {
 			continue
 		}
 
-		// Save original host as annotation, then patch the rule
-		patch := fmt.Sprintf(
-			`[{"op":"add","path":"/metadata/annotations/%s","value":"%s"},{"op":"replace","path":"/spec/rules/0/host","value":"%s"}]`,
-			strings.ReplaceAll(originalHostAnnotation, "/", "~1"),
-			currentHost,
-			hostname,
-		)
+		// Build the JSON-patch operations:
+		// 1. Save original host as annotation
+		// 2. Replace ingress rule host with tunnel hostname
+		ops := []map[string]interface{}{
+			{"op": "add", "path": "/metadata/annotations/" + strings.ReplaceAll(originalHostAnnotation, "/", "~1"), "value": currentHost},
+			{"op": "replace", "path": "/spec/rules/0/host", "value": hostname},
+		}
+
+		// 3. If the ingress has a TLS block (cert-manager, etc.), save it as
+		//    an annotation and remove it — cloudflared terminates TLS at the edge.
+		tlsJSON, _ := runSilent("kubectl", "get", "ingress", name,
+			"-o", "jsonpath={.spec.tls}")
+		tlsJSON = strings.TrimSpace(tlsJSON)
+		if tlsJSON != "" && tlsJSON != "[]" {
+			ops = append(ops,
+				map[string]interface{}{"op": "add", "path": "/metadata/annotations/" + strings.ReplaceAll(originalTLSAnnotation, "/", "~1"), "value": tlsJSON},
+				map[string]interface{}{"op": "remove", "path": "/spec/tls"},
+			)
+		}
+
+		patchBytes, _ := json.Marshal(ops)
 		if _, err := runSilent("kubectl", "patch", "ingress", name,
-			"--type=json", "-p="+patch); err == nil {
+			"--type=json", "-p="+string(patchBytes)); err == nil {
 			step("🔀", fmt.Sprintf("Routing tunnel → ingress/%s", name))
 			patched++
 			// Only one ingress can own a given host+path in nginx,
@@ -511,14 +526,32 @@ func restoreIngresses() {
 			continue
 		}
 
-		// Restore original host and remove the annotation
-		patch := fmt.Sprintf(
-			`[{"op":"replace","path":"/spec/rules/0/host","value":"%s"},{"op":"remove","path":"/metadata/annotations/%s"}]`,
-			originalHost,
-			strings.ReplaceAll(originalHostAnnotation, "/", "~1"),
+		// Build restore operations:
+		// 1. Put the original host back
+		// 2. Remove the host annotation
+		ops := []map[string]interface{}{
+			{"op": "replace", "path": "/spec/rules/0/host", "value": originalHost},
+			{"op": "remove", "path": "/metadata/annotations/" + strings.ReplaceAll(originalHostAnnotation, "/", "~1")},
+		}
+
+		// 3. If a saved TLS block exists, restore it and remove the annotation
+		tlsJSON, _ := runSilent("kubectl", "get", "ingress", name,
+			"-o", `go-template={{index .metadata.annotations "kindling.dev/original-tls"}}`,
 		)
+		tlsJSON = strings.TrimSpace(tlsJSON)
+		if tlsJSON != "" && !strings.Contains(tlsJSON, "no value") {
+			var tlsBlock interface{}
+			if json.Unmarshal([]byte(tlsJSON), &tlsBlock) == nil {
+				ops = append(ops,
+					map[string]interface{}{"op": "add", "path": "/spec/tls", "value": tlsBlock},
+					map[string]interface{}{"op": "remove", "path": "/metadata/annotations/" + strings.ReplaceAll(originalTLSAnnotation, "/", "~1")},
+				)
+			}
+		}
+
+		patchBytes, _ := json.Marshal(ops)
 		if _, err := runSilent("kubectl", "patch", "ingress", name,
-			"--type=json", "-p="+patch); err == nil {
+			"--type=json", "-p="+string(patchBytes)); err == nil {
 			restored++
 		}
 	}
