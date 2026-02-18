@@ -157,6 +157,42 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// ── Unhealthy Pods ──────────────────────────────────────────
+	// Show CrashLoopBackOff / Error pods with their last log lines
+	// so the developer doesn't have to manually run kubectl logs.
+	crashPods, _ := runCapture("kubectl", "get", "pods",
+		"--field-selector=status.phase!=Running,status.phase!=Succeeded",
+		"-o", "custom-columns=NAME:.metadata.name,STATUS:.status.phase,REASON:.status.containerStatuses[0].state.waiting.reason",
+		"--no-headers")
+	if crashPods != "" {
+		hasCrash := false
+		for _, line := range strings.Split(crashPods, "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.Contains(line, "<none>") {
+				continue
+			}
+			if !hasCrash {
+				header("Unhealthy Pods")
+				hasCrash = true
+			}
+			parts := strings.Fields(line)
+			podName := parts[0]
+			fmt.Printf("    %s❌ %s%s\n", colorRed, line, colorReset)
+
+			// Show last few log lines for this pod
+			logs, _ := runCapture("kubectl", "logs", podName, "--tail=10")
+			if logs != "" {
+				for _, logLine := range strings.Split(logs, "\n") {
+					logLine = strings.TrimSpace(logLine)
+					if logLine != "" {
+						fmt.Printf("       %s%s%s\n", colorDim, logLine, colorReset)
+					}
+				}
+				fmt.Println()
+			}
+		}
+	}
+
 	// ── Ingress Routes ──────────────────────────────────────────
 	header("Ingress Routes")
 
