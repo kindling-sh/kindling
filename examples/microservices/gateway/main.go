@@ -41,7 +41,7 @@ func main() {
 	mux.HandleFunc("/inventory/", proxy(conf.InventoryURL, ""))
 
 	// aggregated health across backends
-	mux.HandleFunc("/-/status", func(w http.ResponseWriter, r *http.Request) {
+	statusHandler := func(w http.ResponseWriter, r *http.Request) {
 		out := map[string]interface{}{
 			"service": "gateway",
 			"time":    time.Now().UTC().Format(time.RFC3339),
@@ -60,14 +60,16 @@ func main() {
 				resp, err = c.Get(base + "/api/v1/health")
 			}
 			if err != nil {
-				out[name] = "unreachable"
+				out[name] = map[string]string{"status": "unreachable"}
 				continue
 			}
 			resp.Body.Close()
-			out[name] = fmt.Sprintf("ok (%d)", resp.StatusCode)
+			out[name] = map[string]string{"status": fmt.Sprintf("ok (%d)", resp.StatusCode)}
 		}
 		respond(w, 200, out)
-	})
+	}
+	mux.HandleFunc("/status", statusHandler)
+	mux.HandleFunc("/-/status", statusHandler)
 
 	log.Printf("gateway listening on %s", conf.ListenAddr)
 	log.Fatal(http.ListenAndServe(conf.ListenAddr, mux))

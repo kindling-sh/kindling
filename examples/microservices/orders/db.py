@@ -25,7 +25,7 @@ def _bootstrap(conn):
             CREATE TABLE IF NOT EXISTS orders (
                 id         TEXT PRIMARY KEY,
                 product    TEXT NOT NULL,
-                qty        INTEGER NOT NULL DEFAULT 1,
+                quantity   INTEGER NOT NULL DEFAULT 1,
                 status     TEXT NOT NULL DEFAULT 'pending',
                 created_at TIMESTAMPTZ DEFAULT NOW()
             )
@@ -38,7 +38,7 @@ def insert_order(order_id: str, product: str, qty: int) -> bool:
         return False
     with conn.cursor() as cur:
         cur.execute(
-            "INSERT INTO orders (id, product, qty, status) VALUES (%s, %s, %s, 'confirmed')",
+            "INSERT INTO orders (id, product, quantity, status) VALUES (%s, %s, %s, 'confirmed')",
             (order_id, product, qty),
         )
     return True
@@ -50,7 +50,7 @@ def recent_orders(limit: int = 50):
         return []
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute(
-            "SELECT id, product, qty, status, created_at FROM orders "
+            "SELECT id, product, quantity, status, created_at FROM orders "
             "ORDER BY created_at DESC LIMIT %s",
             (limit,),
         )
