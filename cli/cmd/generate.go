@@ -91,6 +91,12 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 		warn("No Dockerfile found — the AI will attempt to infer a build strategy")
 	}
 
+	if len(repoCtx.externalSecrets) > 0 {
+		step("🔑", fmt.Sprintf("Detected %d external credential reference(s): %s",
+			len(repoCtx.externalSecrets), strings.Join(repoCtx.externalSecrets, ", ")))
+		step("💡", "Run 'kindling secrets set <NAME> <VALUE>' to configure these before deploying")
+	}
+
 	// ── Call the AI ──────────────────────────────────────────────
 	header("Generating workflow with AI")
 	step("🤖", fmt.Sprintf("Provider: %s, Model: %s", genProvider, genModel))
@@ -156,6 +162,7 @@ type repoContext struct {
 	sourceSnippets  map[string]string // relative path → truncated content
 	dockerfileCount int
 	depFileCount    int
+	externalSecrets []string // detected external credential env var names
 }
 
 // Directories to skip during scanning.
@@ -393,6 +400,9 @@ func scanRepo(repoPath string) (*repoContext, error) {
 		}
 	}
 
+	// Detect external credential references
+	ctx.externalSecrets = detectExternalSecrets(repoPath, ctx)
+
 	return ctx, nil
 }
 
@@ -569,6 +579,20 @@ For multi-service repos (multiple Dockerfiles in subdirectories), generate one
 build step per service and one deploy step per service, with inter-service env
 vars wired up (e.g. API_URL pointing to the other service's cluster-internal DNS name).
 
+External credentials and secrets:
+When the user's code references external credentials (API keys, tokens, DSNs, etc.),
+wire them into the deploy step's "env" input as Kubernetes Secret references.
+Use this pattern for each detected credential:
+  <VAR_NAME>:
+    secretKeyRef:
+      name: kindling-secret-<lowercase-var-name>
+      key: value
+These secrets are managed by "kindling secrets set <NAME> <VALUE>" and stored as
+Kubernetes Secrets with the label app.kubernetes.io/managed-by=kindling.
+Include a YAML comment above the env block noting which secrets need to be set:
+  # Requires: kindling secrets set <NAME> <VALUE>
+Do NOT hardcode placeholder values for secrets. Always use secretKeyRef.
+
 Return ONLY the raw YAML content of the workflow file. No markdown code fences,
 no explanation text, no commentary. Just the YAML.`
 
@@ -617,6 +641,17 @@ no explanation text, no commentary. Just the YAML.`
 			ext := strings.TrimPrefix(filepath.Ext(path), ".")
 			b.WriteString(fmt.Sprintf("### %s\n```%s\n%s\n```\n\n", path, ext, ctx.sourceSnippets[path]))
 		}
+	}
+
+	// Detected external credentials
+	if len(ctx.externalSecrets) > 0 {
+		b.WriteString("## Detected external credentials\n\n")
+		b.WriteString("The following environment variables appear to be external credentials.\n")
+		b.WriteString("Wire each one into the deploy step(s) using secretKeyRef:\n\n")
+		for _, name := range ctx.externalSecrets {
+			b.WriteString(fmt.Sprintf("- %s → kindling-secret-%s\n", name, strings.ToLower(strings.ReplaceAll(name, "_", "-"))))
+		}
+		b.WriteString("\n")
 	}
 
 	// Reference examples
@@ -798,4 +833,146 @@ func cleanYAMLResponse(s string) string {
 	}
 
 	return strings.TrimSpace(s)
+}
+
+// ── External credential detection ───────────────────────────────
+
+// credentialPatterns are suffixes that indicate an env var is an external credential.
+var credentialSuffixes = []string{
+	"_API_KEY", "_APIKEY", "_SECRET", "_SECRET_KEY",
+	"_TOKEN", "_ACCESS_TOKEN", "_AUTH_TOKEN", "_REFRESH_TOKEN",
+	"_DSN", "_CONNECTION_STRING", "_CONN_STR",
+	"_PASSWORD", "_PASSWD",
+	"_CLIENT_ID", "_CLIENT_SECRET",
+	"_PRIVATE_KEY", "_SIGNING_KEY",
+	"_WEBHOOK_SECRET",
+}
+
+// credentialExactNames are full env var names that indicate external credentials.
+var credentialExactNames = map[string]bool{
+	"DATABASE_URL":          true,
+	"REDIS_URL":             true,
+	"MONGO_URL":             true,
+	"MONGODB_URI":           true,
+	"AMQP_URL":              true,
+	"RABBITMQ_URL":          true,
+	"KAFKA_BROKERS":         true,
+	"ELASTICSEARCH_URL":     true,
+	"STRIPE_KEY":            true,
+	"SENDGRID_API_KEY":      true,
+	"TWILIO_AUTH_TOKEN":     true,
+	"AWS_SECRET_ACCESS_KEY": true,
+	"AWS_ACCESS_KEY_ID":     true,
+	"GITHUB_TOKEN":          true,
+	"SENTRY_DSN":            true,
+	"AUTH0_DOMAIN":          true,
+	"AUTH0_CLIENT_ID":       true,
+	"AUTH0_CLIENT_SECRET":   true,
+	"OKTA_DOMAIN":           true,
+	"FIREBASE_API_KEY":      true,
+	"OPENAI_API_KEY":        true,
+	"ANTHROPIC_API_KEY":     true,
+}
+
+// detectExternalSecrets scans source files, Dockerfiles, compose files, and .env
+// files for references to external credentials.
+func detectExternalSecrets(repoPath string, ctx *repoContext) []string {
+	seen := make(map[string]bool)
+
+	// Scan all collected content for env var patterns
+	allContent := make(map[string]string)
+	for k, v := range ctx.dockerfiles {
+		allContent[k] = v
+	}
+	for k, v := range ctx.depFiles {
+		allContent[k] = v
+	}
+	for k, v := range ctx.sourceSnippets {
+		allContent[k] = v
+	}
+	if ctx.composeFile != "" {
+		allContent["docker-compose.yml"] = ctx.composeFile
+	}
+
+	// Also scan .env files
+	envFiles := []string{".env", ".env.example", ".env.sample", ".env.development", ".env.local"}
+	for _, envFile := range envFiles {
+		path := filepath.Join(repoPath, envFile)
+		if content, err := readFileCapped(path, 100); err == nil {
+			allContent[envFile] = content
+		}
+	}
+
+	for _, content := range allContent {
+		for _, line := range strings.Split(content, "\n") {
+			// Look for ENV VAR_NAME, os.Getenv("VAR"), process.env.VAR, etc.
+			words := extractEnvVarNames(line)
+			for _, w := range words {
+				if isExternalCredential(w) && !seen[w] {
+					seen[w] = true
+				}
+			}
+		}
+	}
+
+	// Sort for deterministic output
+	var result []string
+	for name := range seen {
+		result = append(result, name)
+	}
+	sort.Strings(result)
+	return result
+}
+
+// extractEnvVarNames pulls env-var-like names from a line of code.
+func extractEnvVarNames(line string) []string {
+	var names []string
+
+	// Match patterns like:
+	//   os.Getenv("FOO_BAR")
+	//   process.env.FOO_BAR
+	//   ENV FOO_BAR
+	//   FOO_BAR=
+	//   ${FOO_BAR}
+	//   getenv("FOO_BAR")
+	//   env("FOO_BAR")
+	//   Environment.GetEnvironmentVariable("FOO_BAR")
+	//   System.getenv("FOO_BAR")
+	for i := 0; i < len(line); i++ {
+		// Find sequences of UPPER_CASE characters
+		if isUpperOrUnderscore(line[i]) {
+			start := i
+			for i < len(line) && (isUpperOrUnderscore(line[i]) || isDigit(line[i])) {
+				i++
+			}
+			candidate := line[start:i]
+			// Must contain at least one underscore and be 4+ chars
+			if len(candidate) >= 4 && strings.Contains(candidate, "_") {
+				names = append(names, candidate)
+			}
+		}
+	}
+	return names
+}
+
+func isUpperOrUnderscore(b byte) bool {
+	return (b >= 'A' && b <= 'Z') || b == '_'
+}
+
+func isDigit(b byte) bool {
+	return b >= '0' && b <= '9'
+}
+
+// isExternalCredential checks if an env var name matches credential patterns.
+func isExternalCredential(name string) bool {
+	if credentialExactNames[name] {
+		return true
+	}
+	upper := strings.ToUpper(name)
+	for _, suffix := range credentialSuffixes {
+		if strings.HasSuffix(upper, suffix) {
+			return true
+		}
+	}
+	return false
 }
