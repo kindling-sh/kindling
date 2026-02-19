@@ -1,8 +1,9 @@
 # sample-app
 
-A tiny Go web server that demonstrates the full **kindling** developer
-loop in about 100 lines of code. It connects to Postgres and Redis
-(auto-provisioned by the operator) and exposes a few HTTP endpoints.
+A small Go web server that demonstrates the full **kindling** developer
+loop. It connects to Postgres and Redis (auto-provisioned by the operator),
+serves a dashboard UI with live dependency status, a Redis-backed visit
+counter, and a simple notes feature persisted in Postgres.
 
 The goal is to show the shortest path from `git push` to a working app
 with real dependencies, running on your local Kind cluster.
@@ -16,9 +17,11 @@ with real dependencies, running on your local Kind cluster.
  └──────┬───────┘       └───────────────┘       └──────────┘
         │
         ▼
-  GET /          → Hello message
-  GET /healthz   → Liveness probe
-  GET /status    → Postgres + Redis connectivity report
+  GET /            → Dashboard UI (status, visits, notes)
+  GET /healthz     → Liveness probe (JSON)
+  GET /api/status  → Postgres + Redis connectivity (JSON)
+  GET /api/notes   → Notes list (JSON)
+  POST /api/notes  → Add a note (form submit)
 ```
 
 ## Files
@@ -96,22 +99,23 @@ kubectl rollout status deployment/sample-app-dev --timeout=120s
 
 ### Try it out
 
+Open in a browser for the full dashboard:
+
+```
+http://<username>-sample-app.localhost/
+```
+
+Or hit the JSON APIs:
+
 ```bash
-curl http://<username>-sample-app.localhost/
 curl http://<username>-sample-app.localhost/healthz
-curl http://<username>-sample-app.localhost/status | jq .
+curl http://<username>-sample-app.localhost/api/status | jq .
 ```
 
-Expected `/status` output:
-
-```json
-{
-  "app": "sample-app",
-  "time": "2026-02-15T12:00:00Z",
-  "postgres": { "status": "connected" },
-  "redis": { "status": "connected" }
-}
-```
+The dashboard shows:
+- **Postgres / Redis status** — green dots when connected
+- **Visit counter** — incremented in Redis on every page load
+- **Notes** — add notes via the form, persisted in Postgres
 
 ## What the operator creates
 

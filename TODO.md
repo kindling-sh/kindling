@@ -1,27 +1,5 @@
 # Kindling — Roadmap
 
-## Generate: Helm-native deploy
-
-When scanning a repo, detect existing Helm charts (`Chart.yaml`). Default
-behavior: apply the chart directly to the cluster via `helm install/upgrade` in
-the deploy step of the generated workflow — this avoids env drift by using the
-chart as the source of truth at deploy time.
-
-Run `helm template` during scanning to extract env vars, ports, service names,
-and dependencies, then pass that rendered context to the LLM so it can:
-
-1. Populate build steps with template-derived env vars
-2. Generate a deploy step that runs `helm upgrade --install` instead of raw
-   `kubectl apply`
-
-Add a `--no-helm` override flag to fall back to DSE-based generation even when a
-chart is present.
-
-Also detect kustomize configs — same pattern: `kustomize build` to extract
-context, deploy via `kubectl apply -k` by default.
-
----
-
 ## CLI: kindling export (production-ready manifests from cluster state)
 
 Generate a Helm chart or Kustomize overlay from the live cluster that gives
@@ -182,81 +160,15 @@ Anthropic / local). Keep the LLM call optional — `kindling diagnose` without
 
 ---
 
-## Generate: smarter ingress heuristics
+## Generate: interactive ingress selection
 
-If no existing manifests are found, proceed with current AI-based generation but
-improve heuristics for identifying which services should get ingress routes:
+During `kindling generate`, after discovering all services in a multi-service
+repo, prompt the user to select which services should get ingress routes instead
+of trying to auto-detect user-facing services. Present a checklist of discovered
+services and let the developer pick.
 
-- **Frontends**: React, Next.js, Vue, Angular, static file servers
-- **SSR frameworks**: Rails views, Django templates, PHP
-- **API gateways**: services named `gateway`, `api-gateway`, `bff`, etc.
-
-Only services identified as user-facing get ingress entries by default.
-
----
-
-## Generate: --ingress-all flag
-
-Add a `--ingress-all` flag (or similar) to `kindling generate` that wires up
-every service with a default ingress route including health endpoints (e.g.
-`/healthz`, `/actuator/health`). Without the flag, only heuristically-identified
-user-facing services get routes. This gives users an easy override when the
-heuristics miss something.
-
----
-
-## ~~CLI: kindling secrets subcommand~~ ✅
-
-Implemented `kindling secrets` with four subcommands:
-
-- `kindling secrets set <NAME> <VALUE>` — creates K8s Secret + local backup
-- `kindling secrets list` — shows managed secret names and keys
-- `kindling secrets delete <NAME>` — removes from cluster + local backup
-- `kindling secrets restore` — re-creates K8s Secrets from local backup after
-  cluster rebuild
-
----
-
-## Generate: detect external credentials
-
-During `kindling generate` repo scanning, detect references to external
-credentials — env vars matching patterns like `*_API_KEY`, `*_SECRET`,
-`*_TOKEN`, `*_DSN`, `*_CONNECTION_STRING` in source code, Dockerfiles,
-docker-compose, and `.env` files.
-
-For each detected external secret:
-
-1. Emit a `# TODO: run kindling secrets set <name>` comment in the generated
-   workflow
-2. In interactive mode, prompt the user to provide the value immediately
-3. Wire the secret ref into the generated K8s manifests as a `secretKeyRef`
-
----
-
-## ~~Config: .kindling/secrets.yaml~~ ✅
-
-Implemented as part of `kindling secrets`. File is stored at
-`.kindling/secrets.yaml` (auto-gitignored). Values are base64-encoded.
-`kindling secrets restore` reads this file and re-creates K8s Secrets.
-
----
-
-## TLS + public exposure for OAuth
-
-Support TLS with a publicly accessible IP/hostname for local dev environments so
-external identity providers (Auth0, Okta, Firebase Auth, etc.) can call back into
-the cluster.
-
-1. `kindling expose` sets up a tunnel (cloudflared, ngrok, or similar) from a
-   public HTTPS URL to the Kind cluster's ingress — the tunnel provider handles
-   TLS termination
-2. For direct IP exposure, deploy cert-manager with Let's Encrypt into the
-   cluster
-3. The generated workflow and DSE spec accept an optional `publicHost` field so
-   ingress rules use the real hostname instead of `*.localhost`
-4. `kindling generate` detects OAuth callback URLs, Auth0 config, OIDC discovery
-   endpoints in source code and flags that TLS/public exposure is required,
-   prompting the user to run `kindling expose`
+For non-interactive / CI usage, add a `--ingress-all` flag that wires up every
+service with a default ingress route.
 
 ---
 
@@ -327,6 +239,43 @@ External service calls https://jeff.relay.kindling.dev/auth/callback
   avoids this entirely
 - **Free tier sustainability**: a Cloudflare Worker handles this trivially
   within free tier limits for individual devs
+
+---
+
+## Expose: live service switching
+
+Today `kindling expose --service <name>` patches the ingress to route tunnel
+traffic to a specific service, but it only works at tunnel-start time. If the
+tunnel is already running and the developer wants to point it at a different
+service (or the target service wasn't deployed yet when they first ran expose),
+they have to `expose --stop` and re-run.
+
+Allow re-targeting the tunnel to a different service while it stays up:
+
+```
+kindling expose --service orders       # initial — starts tunnel, routes to orders
+kindling expose --service gateway      # re-patch ingress to route to gateway (tunnel stays)
+kindling expose --service ui           # switch again, no restart
+```
+
+### Approach
+
+1. If a tunnel is already running (pid file exists, process alive), skip
+   starting a new tunnel — just re-patch the ingress host/rules to point
+   at the requested service
+2. Save/restore the original ingress state per-service so switching back
+   works cleanly (extend the existing `kindling.dev/original-host` annotation
+   pattern)
+3. Print the current routing clearly:
+   ```
+   🔀  Tunnel traffic now routes to service/gateway (port 8080)
+       https://plans-bios-improvement-atmosphere.trycloudflare.com → gateway
+   ```
+
+### Flags
+
+- `kindling expose --service <name>` — if tunnel running: re-route; if not: start + route
+- `kindling expose --service` (no arg) — show which service the tunnel currently points to
 
 ---
 
