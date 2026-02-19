@@ -278,6 +278,26 @@ Every `git push` triggers a new build + deploy. The operator updates the
 Deployment in-place, and Kubernetes rolls out the new image with zero
 downtime.
 
+**Useful commands while iterating:**
+
+```bash
+# Check status — includes crash diagnostics for unhealthy pods
+kindling status
+
+# Set env vars on a running deployment without redeploying
+kindling env set myapp-dev DATABASE_PORT=5432
+
+# List env vars
+kindling env list myapp-dev
+
+# Stop the tunnel
+kindling expose --stop
+
+# Switch to a different GitHub repo without destroying the cluster
+kindling reset
+kindling runners -u myuser -r neworg/newrepo -t ghp_xxxxx
+```
+
 ---
 
 ## Manual deploy (without GitHub Actions)

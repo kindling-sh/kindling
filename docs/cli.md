@@ -77,12 +77,16 @@ doesn't help much in a local dev context and just splits the available memory.
 | `--kubeconfig` | — | Path to write kubeconfig instead of default location |
 | `--wait` | — | Wait for control plane to be ready (e.g. `60s`, `5m`) |
 | `--retain` | `false` | Retain cluster nodes for debugging on creation failure |
+| `--expose` | `false` | Start a public HTTPS tunnel after bootstrap (runs `kindling expose`) |
 
 **Examples:**
 
 ```bash
 # Default: create "dev" cluster
 kindling init
+
+# Bootstrap and immediately start a public tunnel
+kindling init --expose
 
 # Use a specific Kubernetes version
 kindling init --image kindest/node:v1.29.0
@@ -236,6 +240,8 @@ kindling status
 - **Dev Environments** — DevStagingEnvironment CRs (image, replicas,
   ready state)
 - **Pods** — All pods in the default namespace with status and age
+- **Unhealthy Pods** — Pods in CrashLoopBackOff, Error, or other non-Running
+  states with their last 10 log lines for quick diagnosis
 
 **Example output:**
 
@@ -353,8 +359,17 @@ kindling expose [flags]
 1. Detects an available tunnel provider (cloudflared or ngrok)
 2. Verifies the Kind cluster is running
 3. Starts a tunnel from a public HTTPS URL to `localhost:<port>`
-4. Prints the public URL and saves it to `.kindling/tunnel.yaml`
-5. Waits for Ctrl+C, then gracefully stops the tunnel
+4. Auto-patches the active ingress with the tunnel hostname
+5. Saves the original ingress host (and TLS config if present) as annotations for later restoration
+6. Saves tunnel state to a ConfigMap (`kindling-tunnel`) in the cluster
+7. Runs in the background — the CLI returns immediately
+
+**TLS handling:** If the ingress has `spec.tls` (e.g. cert-manager), the tunnel
+automatically saves and strips it (cloudflared handles TLS at the edge). On
+`--stop`, the original TLS config is restored.
+
+**Self-healing:** On each start, restores any ingresses left with stale tunnel
+hostnames from a previous tunnel that died without cleanup.
 
 **Supported providers:**
 
@@ -369,6 +384,8 @@ kindling expose [flags]
 |---|---|---|
 | `--provider` | auto-detect | Tunnel provider: `cloudflared` or `ngrok` |
 | `--port` | `80` | Local port to expose (default: ingress controller) |
+| `--stop` | `false` | Stop a running tunnel and restore original ingress configuration |
+| `--service` | — | Ingress name to route tunnel traffic to (default: first ingress found) |
 
 **Examples:**
 
@@ -379,11 +396,91 @@ kindling expose
 # Use cloudflared explicitly
 kindling expose --provider cloudflared
 
-# Use ngrok
-kindling expose --provider ngrok
+# Route tunnel to a specific ingress
+kindling expose --service ui-ingress
+
+# Stop the tunnel and restore ingresses
+kindling expose --stop
 
 # Expose a different port
 kindling expose --port 443
+```
+
+---
+
+### `kindling env`
+
+Manage environment variables on running deployments without redeploying.
+
+```
+kindling env <subcommand> <deployment> [args]
+```
+
+**Subcommands:**
+
+| Subcommand | Description |
+|---|---|
+| `set <deployment> KEY=VALUE [...]` | Set one or more environment variables |
+| `list <deployment>` | List all environment variables on a deployment |
+| `unset <deployment> KEY [...]` | Remove one or more environment variables |
+
+**How it works:**
+
+- Uses `kubectl set env` under the hood
+- Triggers a rolling restart automatically so new values take effect immediately
+- No need to rebuild or push — changes are live in seconds
+
+**Examples:**
+
+```bash
+# Set a single env var
+kindling env set myapp-dev DATABASE_PORT=5432
+
+# Set multiple at once
+kindling env set myapp-dev DATABASE_PORT=5432 REDIS_HOST=redis-svc LOG_LEVEL=debug
+
+# List all env vars on a deployment
+kindling env list myapp-dev
+
+# Remove env vars
+kindling env unset myapp-dev LOG_LEVEL
+```
+
+---
+
+### `kindling reset`
+
+Remove the runner pool so you can point it at a new repo.
+
+```
+kindling reset [flags]
+```
+
+**What it does:**
+1. Deletes all `GithubActionRunnerPool` CRs in the cluster
+2. Deletes the `github-runner-token` Secret
+3. Leaves the cluster, operator, and DevStagingEnvironments intact
+
+Use this when you want to switch to a different GitHub repository without
+tearing down the entire cluster.
+
+**Flags:**
+
+| Flag | Short | Default | Description |
+|---|---|---|---|
+| `--force` | `-y` | `false` | Skip confirmation prompt |
+
+**Examples:**
+
+```bash
+# Interactive confirmation
+kindling reset
+
+# Skip confirmation
+kindling reset -y
+
+# Then re-point at a new repo
+kindling runners -u myuser -r neworg/newrepo -t ghp_xxxxx
 ```
 
 ---
@@ -397,9 +494,10 @@ kindling destroy [flags]
 ```
 
 **What it does:**
-1. Checks cluster exists
-2. Prompts for confirmation (type cluster name)
-3. `kind delete cluster --name <cluster>`
+1. Stops any running tunnel (restores ingresses)
+2. Checks cluster exists
+3. Prompts for confirmation (type cluster name)
+4. `kind delete cluster --name <cluster>`
 
 **Flags:**
 
@@ -469,15 +567,25 @@ kindling expose
 # 7. Push code → CI builds + deploys automatically
 git push origin main
 
-# 8. Check status
+# 8. Check status (includes crash diagnostics for unhealthy pods)
 kindling status
 
-# 9. View controller logs
+# 9. Set env vars on a running deployment without redeploying
+kindling env set myapp-dev DATABASE_PORT=5432
+
+# 10. View controller logs
 kindling logs
 
-# 10. Manual deploy (without CI)
+# 11. Stop the tunnel when done
+kindling expose --stop
+
+# 12. Re-point runners at a different repo
+kindling reset
+kindling runners -u alice -r acme/other-app -t ghp_xxxxx
+
+# 13. Manual deploy (without CI)
 kindling deploy -f dev-environment.yaml
 
-# 11. Tear down when done
+# 14. Tear down when done
 kindling destroy -y
 ```

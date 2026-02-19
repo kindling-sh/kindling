@@ -409,11 +409,9 @@ kindling destroy
 | Command | Description |
 |---|---|
 | `kindling init` | Create Kind cluster, install ingress + registry, build & deploy operator |
-| `kindling init --image <img>` | Use a specific Kind node image (e.g. `kindest/node:v1.29.0`) |
-| `kindling init --kubeconfig <path>` | Write kubeconfig to a custom path |
-| `kindling init --wait <duration>` | Wait for control plane readiness (e.g. `60s`, `5m`) |
-| `kindling init --retain` | Keep nodes on failure for debugging |
+| `kindling init --expose` | Also start a public HTTPS tunnel after bootstrap |
 | `kindling init --skip-cluster` | Skip cluster creation, use existing cluster |
+| `kindling init --image <img>` | Use a specific Kind node image (e.g. `kindest/node:v1.29.0`) |
 | `kindling runners` | Create GitHub PAT secret + runner pool CR |
 | `kindling generate -k <key> -r <path>` | AI-generate a dev-deploy.yml workflow for any repo |
 | `kindling generate --ingress-all` | Wire every service with an ingress route (not just frontends) |
@@ -423,8 +421,14 @@ kindling destroy
 | `kindling secrets delete <name>` | Remove a secret from the cluster and local backup |
 | `kindling secrets restore` | Re-create K8s Secrets from the local `.kindling/secrets.yaml` backup |
 | `kindling expose` | Create a public HTTPS tunnel (cloudflared/ngrok) for OAuth callbacks |
+| `kindling expose --stop` | Stop a running tunnel and restore original ingress configuration |
+| `kindling expose --service <name>` | Route tunnel traffic to a specific ingress |
+| `kindling env set <deploy> K=V ...` | Set environment variables on a running deployment |
+| `kindling env list <deploy>` | List environment variables on a deployment |
+| `kindling env unset <deploy> K ...` | Remove environment variables from a deployment |
+| `kindling reset` | Remove the runner pool to re-point at a new repo (keeps cluster intact) |
 | `kindling deploy -f <file>` | Apply a DevStagingEnvironment from a YAML file |
-| `kindling status` | Dashboard view of cluster, operator, runners, environments, and ingress routes |
+| `kindling status` | Dashboard view of cluster, operator, runners, environments, unhealthy pods, and ingress routes |
 | `kindling logs` | Tail the kindling controller logs (`-f` for follow, `--all` for all containers) |
 | `kindling destroy` | Delete the Kind cluster (with confirmation prompt, or `-y` to skip) |
 | `kindling version` | Print CLI version |
@@ -775,6 +779,16 @@ kind delete cluster --name dev
 - [x] External credential detection — scans for API keys, tokens, DSNs during generate
 - [x] `kindling expose` — public HTTPS tunnels (cloudflared/ngrok) for OAuth/OIDC callbacks
 - [x] OAuth/OIDC detection — flags Auth0, Okta, Firebase, NextAuth patterns and suggests `kindling expose`
+- [x] `kindling env` — set/list/unset environment variables on running deployments without redeploying
+- [x] `kindling reset` — remove runner pool to re-point at a new repo (keeps cluster intact)
+- [x] TLS-aware ingress patching — saves/strips/restores `spec.tls` when tunnel is active
+- [x] Self-healing orphaned ingresses — auto-restores ingresses left with stale tunnel hostnames
+- [x] Crash log diagnostics — surfaces pod crash reasons in deploy action output and `kindling status`
+- [x] `--expose` flag on `kindling init` — also start a tunnel after bootstrap
+- [x] `--stop` / `--service` flags on `kindling expose` — stop tunnels and target specific ingresses
+- [ ] `kindling export` — generate production-ready Helm chart or Kustomize overlay from cluster state
+- [ ] `kindling diagnose` — scan cluster for errors with optional LLM-powered remediation
+- [ ] Stable callback URL relay — persistent URL for OAuth callbacks across tunnel reconnections
 - [ ] Automatic TTL-based cleanup of stale `DevStagingEnvironment` CRs
 - [ ] Live status integration — `GithubActionRunnerPool.status.activeJob`
 - [ ] Webhook receiver for GitHub push events as an alternative to long-polling
