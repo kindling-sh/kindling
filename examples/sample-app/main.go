@@ -23,8 +23,8 @@ import (
 )
 
 var (
-	db  *sql.DB
-	rdb *redis.Client
+	db   *sql.DB
+	rdb  *redis.Client
 	tmpl *template.Template
 )
 
@@ -268,7 +268,7 @@ var pageHTML = fmt.Sprintf(`<!DOCTYPE html>
 </body>
 </html>`, cssStyles)
 
-var cssStyles = ` + "`" + `
+var cssStyles = `
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
   background:#0f172a;color:#e2e8f0;min-height:100vh;display:flex;
@@ -308,4 +308,4 @@ footer{text-align:center;color:#64748b;font-size:.8rem}
 footer a{color:#3b82f6;text-decoration:none}
 footer a:hover{text-decoration:underline}
 footer strong{color:#94a3b8}
-` + "`"
+`
