@@ -191,11 +191,16 @@ func (r *DevStagingEnvironmentReconciler) buildDeployment(cr *appsv1alpha1.DevSt
 	labels := labelsForCR(cr)
 	spec := cr.Spec.Deployment
 
-	// Merge user-provided env vars with auto-injected dependency connection strings
-	allEnv := append([]corev1.EnvVar{}, spec.Env...)
+	// Merge dependency connection strings with user-provided env vars.
+	// Dependency vars (DATABASE_URL, REDIS_URL, etc.) must come first so that
+	// user env vars can reference them via Kubernetes $(VAR) expansion —
+	// e.g. PG_DSN: "$(DATABASE_URL)" only resolves if DATABASE_URL is
+	// defined earlier in the env list.
+	var allEnv []corev1.EnvVar
 	for _, dep := range cr.Spec.Dependencies {
 		allEnv = append(allEnv, buildDependencyConnectionEnvVars(cr.Name, dep)...)
 	}
+	allEnv = append(allEnv, spec.Env...)
 
 	container := corev1.Container{
 		Name:    cr.Name,
