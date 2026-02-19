@@ -97,6 +97,18 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 		step("💡", "Run 'kindling secrets set <NAME> <VALUE>' to configure these before deploying")
 	}
 
+	if repoCtx.needsPublicExpose {
+		fmt.Println()
+		step("🔐", fmt.Sprintf("Detected %s%d OAuth/OIDC indicator(s)%s in source code:",
+			colorBold, len(repoCtx.oauthHints), colorReset))
+		for _, hint := range repoCtx.oauthHints {
+			fmt.Printf("       • %s\n", hint)
+		}
+		fmt.Println()
+		step("💡", fmt.Sprintf("Run %skindling expose%s to create a public HTTPS tunnel for OAuth callbacks",
+			colorCyan, colorReset))
+	}
+
 	// ── Call the AI ──────────────────────────────────────────────
 	header("Generating workflow with AI")
 	step("🤖", fmt.Sprintf("Provider: %s, Model: %s", genProvider, genModel))
@@ -154,15 +166,17 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 // repoContext holds all the information gathered from scanning a repository
 // that will be sent to the AI as context.
 type repoContext struct {
-	name            string
-	tree            string
-	dockerfiles     map[string]string // relative path → content
-	depFiles        map[string]string // relative path → content
-	composeFile     string            // docker-compose.yml content (if found)
-	sourceSnippets  map[string]string // relative path → truncated content
-	dockerfileCount int
-	depFileCount    int
-	externalSecrets []string // detected external credential env var names
+	name              string
+	tree              string
+	dockerfiles       map[string]string // relative path → content
+	depFiles          map[string]string // relative path → content
+	composeFile       string            // docker-compose.yml content (if found)
+	sourceSnippets    map[string]string // relative path → truncated content
+	dockerfileCount   int
+	depFileCount      int
+	externalSecrets   []string // detected external credential env var names
+	needsPublicExpose bool     // true if OAuth/OIDC patterns detected
+	oauthHints        []string // descriptions of detected OAuth indicators
 }
 
 // Directories to skip during scanning.
@@ -403,6 +417,9 @@ func scanRepo(repoPath string) (*repoContext, error) {
 	// Detect external credential references
 	ctx.externalSecrets = detectExternalSecrets(repoPath, ctx)
 
+	// Detect OAuth/OIDC patterns that need public exposure
+	ctx.oauthHints, ctx.needsPublicExpose = detectOAuthRequirements(ctx)
+
 	return ctx, nil
 }
 
@@ -593,6 +610,14 @@ Include a YAML comment above the env block noting which secrets need to be set:
   # Requires: kindling secrets set <NAME> <VALUE>
 Do NOT hardcode placeholder values for secrets. Always use secretKeyRef.
 
+OAuth / public exposure:
+If the repository uses OAuth or OIDC (Auth0, Okta, Firebase Auth, NextAuth, etc.),
+services that handle OAuth callbacks need a publicly accessible URL instead of
+*.localhost. When the user indicates a public URL is available, use it for the
+ingress-host of the auth-handling service. If no public URL is specified but OAuth
+patterns are detected, add a YAML comment noting:
+  # NOTE: OAuth detected — run 'kindling expose' for a public HTTPS URL
+
 Return ONLY the raw YAML content of the workflow file. No markdown code fences,
 no explanation text, no commentary. Just the YAML.`
 
@@ -652,6 +677,17 @@ no explanation text, no commentary. Just the YAML.`
 			b.WriteString(fmt.Sprintf("- %s → kindling-secret-%s\n", name, strings.ToLower(strings.ReplaceAll(name, "_", "-"))))
 		}
 		b.WriteString("\n")
+	}
+
+	// OAuth / OIDC indicators
+	if ctx.needsPublicExpose && len(ctx.oauthHints) > 0 {
+		b.WriteString("## Detected OAuth / OIDC indicators\n\n")
+		b.WriteString("This repository appears to use external authentication. Detected:\n\n")
+		for _, hint := range ctx.oauthHints {
+			b.WriteString(fmt.Sprintf("- %s\n", hint))
+		}
+		b.WriteString("\nThe user may not have a public URL yet. Add a YAML comment noting that\n")
+		b.WriteString("`kindling expose` should be run if OAuth callbacks need to reach the cluster.\n\n")
 	}
 
 	// Reference examples
@@ -975,4 +1011,89 @@ func isExternalCredential(name string) bool {
 		}
 	}
 	return false
+}
+
+// ── OAuth / OIDC detection ──────────────────────────────────────
+
+// oauthPatterns maps search strings to human-readable descriptions.
+var oauthPatterns = []struct {
+	pattern string
+	desc    string
+}{
+	// Provider SDKs / packages
+	{"auth0", "Auth0 SDK or configuration"},
+	{"okta", "Okta SDK or configuration"},
+	{"firebase/auth", "Firebase Authentication"},
+	{"firebase-admin", "Firebase Admin SDK"},
+	{"@auth0", "Auth0 npm package"},
+	{"passport-oauth", "Passport.js OAuth strategy"},
+	{"passport-google", "Passport.js Google strategy"},
+	{"passport-github", "Passport.js GitHub strategy"},
+	{"next-auth", "NextAuth.js"},
+	{"@nextauth", "NextAuth.js"},
+	{"clerk", "Clerk authentication"},
+	{"supabase/auth", "Supabase Auth"},
+	{"keycloak", "Keycloak integration"},
+
+	// OIDC / OAuth protocols
+	{"openid-connect", "OpenID Connect"},
+	{"oidc", "OIDC discovery/configuration"},
+	{"oauth2", "OAuth 2.0 flow"},
+	{"authorization_code", "OAuth authorization code flow"},
+	{"/callback", "OAuth callback endpoint"},
+	{"/auth/callback", "Auth callback route"},
+	{"redirect_uri", "OAuth redirect URI"},
+	{"REDIRECT_URI", "OAuth redirect URI env var"},
+	{"CALLBACK_URL", "OAuth callback URL env var"},
+
+	// Environment variables
+	{"AUTH0_DOMAIN", "Auth0 domain config"},
+	{"AUTH0_CLIENT_ID", "Auth0 client ID"},
+	{"OKTA_DOMAIN", "Okta domain config"},
+	{"OKTA_CLIENT_ID", "Okta client ID"},
+	{"GOOGLE_CLIENT_ID", "Google OAuth client ID"},
+	{"GITHUB_CLIENT_ID", "GitHub OAuth client ID"},
+	{"NEXTAUTH_URL", "NextAuth.js public URL"},
+	{"NEXTAUTH_SECRET", "NextAuth.js secret"},
+
+	// Well-known endpoints
+	{".well-known/openid-configuration", "OIDC discovery endpoint"},
+	{"/authorize", "OAuth authorize endpoint"},
+	{"/oauth/token", "OAuth token endpoint"},
+}
+
+// detectOAuthRequirements scans all collected content for OAuth/OIDC patterns.
+func detectOAuthRequirements(ctx *repoContext) (hints []string, needsExpose bool) {
+	// Combine all scanned content
+	allContent := make(map[string]string)
+	for k, v := range ctx.dockerfiles {
+		allContent[k] = v
+	}
+	for k, v := range ctx.depFiles {
+		allContent[k] = v
+	}
+	for k, v := range ctx.sourceSnippets {
+		allContent[k] = v
+	}
+	if ctx.composeFile != "" {
+		allContent["docker-compose.yml"] = ctx.composeFile
+	}
+
+	seen := make(map[string]bool)
+	for _, content := range allContent {
+		lower := strings.ToLower(content)
+		for _, p := range oauthPatterns {
+			if seen[p.desc] {
+				continue
+			}
+			if strings.Contains(lower, strings.ToLower(p.pattern)) {
+				seen[p.desc] = true
+				hints = append(hints, p.desc)
+			}
+		}
+	}
+
+	sort.Strings(hints)
+	needsExpose = len(hints) > 0
+	return hints, needsExpose
 }

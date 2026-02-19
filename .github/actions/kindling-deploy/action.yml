@@ -58,6 +58,10 @@ inputs:
     description: "Rollout wait timeout"
     required: false
     default: "180s"
+  tunnel:
+    description: "Route tunnel traffic to this service (set to 'true' to use the active kindling tunnel hostname as the ingress host)"
+    required: false
+    default: ""
 
 runs:
   using: "composite"
@@ -78,8 +82,22 @@ runs:
         DSE_SVC_TYPE: ${{ inputs.service-type }}
         DSE_WAIT: ${{ inputs.wait }}
         DSE_WAIT_TIMEOUT: ${{ inputs.wait-timeout }}
+        DSE_TUNNEL: ${{ inputs.tunnel }}
       run: |
         echo "🚀 Deploying ${DSE_NAME}"
+
+        # ── Tunnel override ──────────────────────────────────────
+        # If tunnel: true and a kindling tunnel is active, replace the
+        # ingress host with the tunnel hostname so external traffic
+        # (OAuth callbacks, webhooks, etc.) reaches this service.
+        if [ "${DSE_TUNNEL}" = "true" ] && [ -n "${DSE_INGRESS_HOST}" ]; then
+          TUNNEL_HOST=$(kubectl get configmap kindling-tunnel -o jsonpath='{.data.hostname}' 2>/dev/null || true)
+          if [ -n "${TUNNEL_HOST}" ]; then
+            echo "🔗 Tunnel active — routing tunnel traffic to ${DSE_NAME}"
+            echo "   ${DSE_INGRESS_HOST} → ${TUNNEL_HOST}"
+            DSE_INGRESS_HOST="${TUNNEL_HOST}"
+          fi
+        fi
 
         # ── Generate DSE YAML ────────────────────────────────────
         YAML_FILE="/builds/${DSE_NAME}-dse.yaml"
@@ -187,6 +205,42 @@ runs:
         EXIT_CODE=$(cat /builds/${DSE_NAME}-rollout.kubectl-exitcode 2>/dev/null || echo "1")
         if [ "${EXIT_CODE}" != "0" ]; then
           echo "⚠️  Rollout for ${DSE_NAME} did not complete within timeout"
+          echo ""
+
+          # ── Surface crash diagnostics ────────────────────────
+          # Grab the first pod's status + logs so the developer
+          # sees *why* it failed right here in the CI output.
+          echo "─── Pod status ───"
+          cat > /builds/${DSE_NAME}-diag.sh <<'DIAGSCRIPT'
+          #!/bin/bash
+          POD=$(kubectl get pods -l app.kubernetes.io/name=DSE_NAME_PLACEHOLDER \
+                --sort-by=.metadata.creationTimestamp -o jsonpath='{.items[-1].metadata.name}' 2>/dev/null)
+          if [ -z "$POD" ]; then
+            echo "  No pods found for DSE_NAME_PLACEHOLDER"
+            exit 0
+          fi
+          echo "  Pod: $POD"
+          STATUS=$(kubectl get pod "$POD" -o jsonpath='{.status.containerStatuses[0].state}' 2>/dev/null)
+          REASON=$(kubectl get pod "$POD" -o jsonpath='{.status.containerStatuses[0].state.waiting.reason}' 2>/dev/null)
+          LAST_REASON=$(kubectl get pod "$POD" -o jsonpath='{.status.containerStatuses[0].lastState.terminated.reason}' 2>/dev/null)
+          LAST_EXIT=$(kubectl get pod "$POD" -o jsonpath='{.status.containerStatuses[0].lastState.terminated.exitCode}' 2>/dev/null)
+          [ -n "$REASON" ] && echo "  Status: $REASON"
+          [ -n "$LAST_REASON" ] && echo "  Last terminated: $LAST_REASON (exit $LAST_EXIT)"
+          echo ""
+          echo "─── Last 30 log lines ───"
+          kubectl logs "$POD" --tail=30 2>/dev/null || echo "  (no logs available)"
+          DIAGSCRIPT
+          # Replace placeholder with actual name
+          sed -i "s/DSE_NAME_PLACEHOLDER/${DSE_NAME}/g" /builds/${DSE_NAME}-diag.sh
+          chmod +x /builds/${DSE_NAME}-diag.sh
+          touch /builds/${DSE_NAME}-diag.kubectl
+          DWAIT=0
+          while [ ! -f /builds/${DSE_NAME}-diag.kubectl-done ]; do
+            sleep 1
+            DWAIT=$((DWAIT+1))
+            if [ ${DWAIT} -ge 30 ]; then break; fi
+          done
+          cat /builds/${DSE_NAME}-diag.kubectl-log 2>/dev/null || true
         else
           echo "✅ ${DSE_NAME} is running"
         fi

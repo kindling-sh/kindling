@@ -11,18 +11,15 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var quickstartCmd = &cobra.Command{
-	Use:   "quickstart",
+var runnersCmd = &cobra.Command{
+	Use:   "runners",
 	Short: "Create a GitHub Actions runner pool in the cluster",
 	Long: `Creates the GitHub PAT secret and applies a GithubActionRunnerPool CR
 so a self-hosted runner registers with your repo.
 
-Equivalent to:
-  make quickstart GITHUB_USERNAME=<user> GITHUB_REPO=<repo> GITHUB_PAT=<pat>
-
 Flags can be provided on the command line or the CLI will prompt
 interactively for any missing values.`,
-	RunE: runQuickstart,
+	RunE: runRunners,
 }
 
 var (
@@ -32,13 +29,13 @@ var (
 )
 
 func init() {
-	quickstartCmd.Flags().StringVarP(&ghUsername, "username", "u", "", "GitHub username")
-	quickstartCmd.Flags().StringVarP(&ghRepo, "repo", "r", "", "GitHub repository (owner/repo)")
-	quickstartCmd.Flags().StringVarP(&ghPAT, "token", "t", "", "GitHub Personal Access Token")
-	rootCmd.AddCommand(quickstartCmd)
+	runnersCmd.Flags().StringVarP(&ghUsername, "username", "u", "", "GitHub username")
+	runnersCmd.Flags().StringVarP(&ghRepo, "repo", "r", "", "GitHub repository (owner/repo)")
+	runnersCmd.Flags().StringVarP(&ghPAT, "token", "t", "", "GitHub Personal Access Token")
+	rootCmd.AddCommand(runnersCmd)
 }
 
-func runQuickstart(cmd *cobra.Command, args []string) error {
+func runRunners(cmd *cobra.Command, args []string) error {
 	reader := bufio.NewReader(os.Stdin)
 
 	// ── Collect missing values interactively ────────────────────

@@ -42,6 +42,12 @@ func runDestroy(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Stop any running tunnel before tearing down the cluster.
+	if info, _ := readTunnelInfo(); info != nil && info.PID > 0 && processAlive(info.PID) {
+		step("🛑", "Stopping tunnel...")
+		_ = stopTunnel()
+	}
+
 	step("💥", fmt.Sprintf("kind delete cluster --name %s", clusterName))
 	if err := run("kind", "delete", "cluster", "--name", clusterName); err != nil {
 		return fmt.Errorf("failed to delete cluster: %w", err)

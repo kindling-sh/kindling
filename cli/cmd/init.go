@@ -37,6 +37,7 @@ var (
 	kindKubeconfig string
 	kindWait       string
 	kindRetain     bool
+	initExpose     bool
 )
 
 func init() {
@@ -45,6 +46,7 @@ func init() {
 	initCmd.Flags().StringVar(&kindKubeconfig, "kubeconfig", "", "Path to write kubeconfig instead of default location")
 	initCmd.Flags().StringVar(&kindWait, "wait", "", "Wait for control plane to be ready (e.g. 60s, 5m)")
 	initCmd.Flags().BoolVar(&kindRetain, "retain", false, "Retain cluster nodes for debugging on creation failure")
+	initCmd.Flags().BoolVar(&initExpose, "expose", false, "Start a public HTTPS tunnel after bootstrap (runs kindling expose)")
 	rootCmd.AddCommand(initCmd)
 }
 
@@ -198,10 +200,15 @@ func runInit(cmd *cobra.Command, args []string) error {
 	fmt.Printf("  %s🎉 kindling is ready!%s\n", colorGreen+colorBold, colorReset)
 	fmt.Println()
 	fmt.Println("  Next steps:")
-	fmt.Printf("    %skindling quickstart -u <github-user> -r <owner/repo> -t <pat>%s\n", colorCyan, colorReset)
+	fmt.Printf("    %skindling runners -u <github-user> -r <owner/repo> -t <pat>%s\n", colorCyan, colorReset)
 	fmt.Printf("    %skindling deploy -f examples/sample-app/dev-environment.yaml%s\n", colorCyan, colorReset)
 	fmt.Printf("    %skindling status%s\n", colorCyan, colorReset)
 	fmt.Println()
+
+	// ── Optional: start tunnel ──────────────────────────────────
+	if initExpose {
+		return runExpose(cmd, nil)
+	}
 
 	return nil
 }

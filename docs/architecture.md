@@ -384,10 +384,12 @@ kindling/
 │   ├── cmd/
 │   │   ├── root.go
 │   │   ├── init.go
-│   │   ├── quickstart.go
+│   │   ├── runners.go
 │   │   ├── generate.go         # AI workflow generation + Helm/Kustomize/credential/OAuth scanning
 │   │   ├── secrets.go          # Secret management (set/list/delete/restore)
 │   │   ├── expose.go           # Public HTTPS tunnel (cloudflared/ngrok)
+│   │   ├── env.go              # Live env var management
+│   │   ├── reset.go            # Reset runner pool without destroying cluster
 │   │   ├── deploy.go
 │   │   ├── status.go
 │   │   ├── logs.go

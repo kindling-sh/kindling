@@ -107,7 +107,7 @@ kindling status
 You need a GitHub Personal Access Token (PAT) with the `repo` scope.
 
 ```bash
-kindling quickstart -u <your-github-username> -r <owner/repo> -t <your-pat>
+kindling runners -u <your-github-username> -r <owner/repo> -t <your-pat>
 ```
 
 This creates:

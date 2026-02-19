@@ -64,6 +64,7 @@ jobs:
             app.kubernetes.io/component: api
             apps.example.com/github-username: ${{ github.actor }}
           ingress-host: "${{ github.actor }}-platform-api.localhost"
+          tunnel: "true"
           dependencies: |
             - type: postgres
               version: "16"
