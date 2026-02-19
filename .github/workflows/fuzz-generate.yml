@@ -281,3 +281,4 @@ jobs:
       - name: Delete Kind cluster
         if: always() && inputs.skip_e2e != '1'
         run: kind delete cluster --name ${{ env.FUZZ_CLUSTER }} || true
+
