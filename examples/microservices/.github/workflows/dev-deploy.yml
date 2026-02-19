@@ -41,12 +41,11 @@ jobs:
         shell: bash
         run: |
           MSG=$(git log -1 --format=%B)
-          TAG=$(echo "$MSG" | grep -oE '\[kindling:[^]]+\]' | head -1 || true)
-          if [ -z "$TAG" ]; then
+          SVCS=$(echo "$MSG" | sed -n 's/.*\[kindling:\([a-zA-Z0-9_,.-]*\)\].*/\1/p' | head -1)
+          if [ -z "$SVCS" ]; then
             echo "services=all" >> "$GITHUB_OUTPUT"
             echo "📦 Full rebuild — all services"
           else
-            SVCS=$(echo "$TAG" | sed 's/\[kindling://;s/\]//')
             echo "services=$SVCS" >> "$GITHUB_OUTPUT"
             echo "🏷️  Selective rebuild: $SVCS"
           fi
