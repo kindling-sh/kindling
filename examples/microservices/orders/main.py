@@ -14,7 +14,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 import db
-import queue as q  # shadow builtin is fine — we never use it
+import event_queue as q
 
 app = FastAPI(title="orders-service", docs_url=None, redoc_url=None)
 
