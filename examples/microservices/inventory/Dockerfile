@@ -1,17 +1,11 @@
-# ── Build stage ──────────────────────────────────────────────────
-FROM golang:1.25-alpine AS builder
+# Single-stage — no build step, just install + run.
+FROM node:20-alpine
 
 WORKDIR /app
-COPY go.mod go.sum* ./
-RUN go mod download 2>/dev/null || true
-COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -o /inventory .
+COPY package.json package-lock.json* ./
+RUN npm ci --production 2>/dev/null || npm install --production
+COPY config.js server.js ./
 
-# ── Runtime stage ────────────────────────────────────────────────
-FROM alpine:3.19
-
-RUN apk add --no-cache ca-certificates
-COPY --from=builder /inventory /usr/local/bin/inventory
-
-EXPOSE 8082
-ENTRYPOINT ["inventory"]
+# Port is hardcoded in config.js — blame the original dev.
+EXPOSE 3000
+CMD ["node", "server.js"]

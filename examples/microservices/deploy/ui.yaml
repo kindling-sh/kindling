@@ -18,7 +18,7 @@ spec:
     port: 80
     env:
       - name: GATEWAY_URL
-        value: "http://microservices-gateway-dev:8080"
+        value: "http://microservices-gateway-dev:9090"
     healthCheck:
       path: /
   service:

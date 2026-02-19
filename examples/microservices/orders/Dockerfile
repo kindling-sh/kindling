@@ -1,17 +1,17 @@
-# ── Build stage ──────────────────────────────────────────────────
-FROM golang:1.25-alpine AS builder
+# ── Install deps ─────────────────────────────────────────────────
+FROM python:3.12-slim AS deps
 
 WORKDIR /app
-COPY go.mod go.sum* ./
-RUN go mod download 2>/dev/null || true
-COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -o /orders .
+COPY requirements.txt .
+RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 
-# ── Runtime stage ────────────────────────────────────────────────
-FROM alpine:3.19
+# ── Runtime ──────────────────────────────────────────────────────
+FROM python:3.12-slim
 
-RUN apk add --no-cache ca-certificates
-COPY --from=builder /orders /usr/local/bin/orders
+COPY --from=deps /install /usr/local
+WORKDIR /app
+COPY *.py ./
 
-EXPOSE 8081
-ENTRYPOINT ["orders"]
+# APP_PORT is read by config.py — default 5000
+EXPOSE 5000
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "5000"]

@@ -27,16 +27,19 @@ spec:
   deployment:
     image: ms-inventory:dev
     replicas: 1
-    port: 8082
+    port: 3000
     env:
-      # Share the orders service's Redis so both use the same queue
-      - name: REDIS_URL
+      # The app reads MONGODB_URI, not MONGO_URL — map operator's injection
+      - name: MONGODB_URI
+        value: "$(MONGO_URL)"
+      # Share orders' Redis for the event queue; app reads EVENT_STORE_URL
+      - name: EVENT_STORE_URL
         value: "redis://microservices-orders-dev-redis:6379/0"
     healthCheck:
-      path: /healthz
+      path: /healthcheck
 
   service:
-    port: 8082
+    port: 3000
     type: ClusterIP
 
   # ── Ingress ────────────────────────────────────────────────────

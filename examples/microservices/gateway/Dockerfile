@@ -13,5 +13,5 @@ FROM alpine:3.19
 RUN apk add --no-cache ca-certificates
 COPY --from=builder /gateway /usr/local/bin/gateway
 
-EXPOSE 8080
+EXPOSE 9090
 ENTRYPOINT ["gateway"]

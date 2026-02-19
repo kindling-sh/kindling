@@ -19,17 +19,17 @@ spec:
   deployment:
     image: ms-gateway:dev
     replicas: 1
-    port: 8080
+    port: 9090
     env:
-      - name: ORDERS_SERVICE_URL
-        value: "http://microservices-orders-dev:8081"
-      - name: INVENTORY_SERVICE_URL
-        value: "http://microservices-inventory-dev:8082"
+      - name: ORDERS_URL
+        value: "http://microservices-orders-dev:5000"
+      - name: INVENTORY_URL
+        value: "http://microservices-inventory-dev:3000"
     healthCheck:
-      path: /healthz
+      path: /-/ready
 
   service:
-    port: 8080
+    port: 9090
     type: ClusterIP
 
   # ── Ingress ────────────────────────────────────────────────────

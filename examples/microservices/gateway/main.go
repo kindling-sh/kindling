@@ -1,6 +1,7 @@
-// gateway is the public-facing API for the microservices demo.
-// It proxies requests to the orders and inventory services via their
-// in-cluster Service DNS names, which are injected as env vars.
+// gateway is the public-facing reverse proxy for the microservices demo.
+//
+// It fans out requests to the orders and inventory backends based on
+// URL prefix. Configuration lives in config.go.
 package main
 
 import (
@@ -13,98 +14,83 @@ import (
 	"time"
 )
 
+var conf cfg
+
 func main() {
-	port := envOr("PORT", "8080")
+	conf = loadConfig()
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", handleRoot)
-	mux.HandleFunc("/healthz", handleHealth)
 
-	// ── Proxy routes ────────────────────────────────────────────
-	mux.HandleFunc("/orders", proxyTo("ORDERS_SERVICE_URL", "/orders"))
-	mux.HandleFunc("/orders/", proxyTo("ORDERS_SERVICE_URL", ""))
-	mux.HandleFunc("/inventory", proxyTo("INVENTORY_SERVICE_URL", "/inventory"))
-	mux.HandleFunc("/inventory/", proxyTo("INVENTORY_SERVICE_URL", ""))
-
-	// ── Aggregated status ───────────────────────────────────────
-	mux.HandleFunc("/status", handleStatus)
-
-	log.Printf("gateway listening on :%s", port)
-	log.Fatal(http.ListenAndServe(":"+port, mux))
-}
-
-// ── Handlers ────────────────────────────────────────────────────
-
-func handleRoot(w http.ResponseWriter, _ *http.Request) {
-	respond(w, http.StatusOK, map[string]string{
-		"service": "gateway",
-		"message": "Microservices demo — powered by kindling 🔥",
-		"routes":  "GET /orders, POST /orders, GET /inventory, GET /status",
+	// landing page
+	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
+		respond(w, 200, map[string]string{
+			"service": "gateway",
+			"version": "0.2.0",
+		})
 	})
-}
 
-func handleHealth(w http.ResponseWriter, _ *http.Request) {
-	respond(w, http.StatusOK, map[string]string{"status": "ok"})
-}
+	// readiness probe — k8s hits this
+	mux.HandleFunc("/-/ready", func(w http.ResponseWriter, _ *http.Request) {
+		respond(w, 200, map[string]string{"ready": "true"})
+	})
 
-func handleStatus(w http.ResponseWriter, r *http.Request) {
-	status := map[string]interface{}{
-		"service": "gateway",
-		"time":    time.Now().UTC().Format(time.RFC3339),
-	}
+	// ── fan-out routes ──────────────────────────────────────────
+	mux.HandleFunc("/orders", proxy(conf.OrdersURL, "/orders"))
+	mux.HandleFunc("/orders/", proxy(conf.OrdersURL, ""))
+	mux.HandleFunc("/inventory", proxy(conf.InventoryURL, "/inventory"))
+	mux.HandleFunc("/inventory/", proxy(conf.InventoryURL, ""))
 
-	client := &http.Client{Timeout: 3 * time.Second}
-
-	for _, svc := range []struct {
-		name   string
-		envVar string
-	}{
-		{"orders", "ORDERS_SERVICE_URL"},
-		{"inventory", "INVENTORY_SERVICE_URL"},
-	} {
-		base := os.Getenv(svc.envVar)
-		if base == "" {
-			status[svc.name] = map[string]string{"status": "not configured", "env": svc.envVar}
-			continue
+	// aggregated health across backends
+	mux.HandleFunc("/-/status", func(w http.ResponseWriter, r *http.Request) {
+		out := map[string]interface{}{
+			"service": "gateway",
+			"time":    time.Now().UTC().Format(time.RFC3339),
 		}
-		resp, err := client.Get(base + "/healthz")
-		if err != nil {
-			status[svc.name] = map[string]string{"status": "unreachable", "error": err.Error()}
-			continue
+		c := &http.Client{Timeout: 3 * time.Second}
+		for name, base := range map[string]string{
+			"orders":    conf.OrdersURL,
+			"inventory": conf.InventoryURL,
+		} {
+			resp, err := c.Get(base + "/-/ready")
+			if err != nil {
+				// fall back to generic health paths
+				resp, err = c.Get(base + "/healthcheck")
+			}
+			if err != nil {
+				resp, err = c.Get(base + "/api/v1/health")
+			}
+			if err != nil {
+				out[name] = "unreachable"
+				continue
+			}
+			resp.Body.Close()
+			out[name] = fmt.Sprintf("ok (%d)", resp.StatusCode)
 		}
-		resp.Body.Close()
-		status[svc.name] = map[string]string{"status": fmt.Sprintf("ok (HTTP %d)", resp.StatusCode)}
-	}
+		respond(w, 200, out)
+	})
 
-	respond(w, http.StatusOK, status)
+	log.Printf("gateway listening on %s", conf.ListenAddr)
+	log.Fatal(http.ListenAndServe(conf.ListenAddr, mux))
 }
 
-// ── Reverse proxy helper ────────────────────────────────────────
-
-func proxyTo(envVar, pathOverride string) http.HandlerFunc {
+// proxy fans out to a backend service.
+func proxy(base, pathOverride string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		base := os.Getenv(envVar)
-		if base == "" {
-			http.Error(w, fmt.Sprintf("%s not configured", envVar), http.StatusBadGateway)
-			return
-		}
-
 		target := base + r.URL.Path
 		if pathOverride != "" {
 			target = base + pathOverride
 		}
 
-		proxyReq, err := http.NewRequestWithContext(r.Context(), r.Method, target, r.Body)
+		req, err := http.NewRequestWithContext(r.Context(), r.Method, target, r.Body)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			http.Error(w, err.Error(), 500)
 			return
 		}
-		proxyReq.Header = r.Header.Clone()
+		req.Header = r.Header.Clone()
 
-		client := &http.Client{Timeout: 10 * time.Second}
-		resp, err := client.Do(proxyReq)
+		resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadGateway)
+			http.Error(w, err.Error(), 502)
 			return
 		}
 		defer resp.Body.Close()
@@ -119,13 +105,22 @@ func proxyTo(envVar, pathOverride string) http.HandlerFunc {
 	}
 }
 
-// ── Helpers ─────────────────────────────────────────────────────
+// ── helpers ─────────────────────────────────────────────────────
 
 func envOr(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
 	}
 	return fallback
+}
+
+func mustEnv(key string) string {
+	v := os.Getenv(key)
+	if v == "" {
+		log.Printf("WARN: %s not set — backend will be unreachable", key)
+		return "http://localhost:0" // placeholder so proxy doesn't panic
+	}
+	return v
 }
 
 func respond(w http.ResponseWriter, code int, data interface{}) {

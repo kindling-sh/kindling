@@ -72,11 +72,17 @@ jobs:
         with:
           name: "${{ github.actor }}-orders"
           image: "${{ env.REGISTRY }}/ms-orders:${{ env.TAG }}"
-          port: "8081"
+          port: "5000"
+          health-check-path: "/api/v1/health"
           labels: |
             app.kubernetes.io/part-of: microservices-demo
             app.kubernetes.io/component: orders
             apps.example.com/github-username: ${{ github.actor }}
+          env: |
+            - name: PG_DSN
+              value: "$(DATABASE_URL)"
+            - name: QUEUE_URL
+              value: "$(REDIS_URL)"
           dependencies: |
             - type: postgres
               version: "16"
@@ -87,13 +93,16 @@ jobs:
         with:
           name: "${{ github.actor }}-inventory"
           image: "${{ env.REGISTRY }}/ms-inventory:${{ env.TAG }}"
-          port: "8082"
+          port: "3000"
+          health-check-path: "/healthcheck"
           labels: |
             app.kubernetes.io/part-of: microservices-demo
             app.kubernetes.io/component: inventory
             apps.example.com/github-username: ${{ github.actor }}
           env: |
-            - name: REDIS_URL
+            - name: MONGODB_URI
+              value: "$(MONGO_URL)"
+            - name: EVENT_STORE_URL
               value: "redis://${{ github.actor }}-orders-redis:6379/0"
           dependencies: |
             - type: mongodb
@@ -103,16 +112,17 @@ jobs:
         with:
           name: "${{ github.actor }}-gateway"
           image: "${{ env.REGISTRY }}/ms-gateway:${{ env.TAG }}"
-          port: "8080"
+          port: "9090"
+          health-check-path: "/-/ready"
           labels: |
             app.kubernetes.io/part-of: microservices-demo
             app.kubernetes.io/component: gateway
             apps.example.com/github-username: ${{ github.actor }}
           env: |
-            - name: ORDERS_SERVICE_URL
-              value: "http://${{ github.actor }}-orders:8081"
-            - name: INVENTORY_SERVICE_URL
-              value: "http://${{ github.actor }}-inventory:8082"
+            - name: ORDERS_URL
+              value: "http://${{ github.actor }}-orders:5000"
+            - name: INVENTORY_URL
+              value: "http://${{ github.actor }}-inventory:3000"
 
       - name: Deploy UI dashboard
         uses: jeff-vincent/kindling/.github/actions/kindling-deploy@main
@@ -127,7 +137,7 @@ jobs:
             apps.example.com/github-username: ${{ github.actor }}
           env: |
             - name: GATEWAY_URL
-              value: "http://${{ github.actor }}-gateway:8080"
+              value: "http://${{ github.actor }}-gateway:9090"
           ingress-host: "${{ github.actor }}-ui.localhost"
 
       # ── 3. Summary ──────────────────────────────────────────────
@@ -137,4 +147,4 @@ jobs:
           echo "🎉 Deploy complete!"
           echo ""
           echo "🎨 UI dashboard: http://${{ github.actor }}-ui.localhost"
-          echo "📡 Fallback:     kubectl port-forward svc/${{ github.actor }}-gateway 8080:8080"
+          echo "📡 Fallback:     kubectl port-forward svc/${{ github.actor }}-gateway 9090:9090"
