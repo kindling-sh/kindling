@@ -28,6 +28,7 @@ Common workflow:
   kindling generate -k <api-key> -r .     # AI-generate a dev-deploy.yml
   kindling secrets set STRIPE_KEY sk_...  # store an external secret
   kindling deploy -f dev-environment.yaml # spin up a staging environment
+  kindling push -s orders                 # git push, rebuild orders only
   kindling expose                         # public HTTPS tunnel for OAuth
   kindling status                         # view everything at a glance
   kindling logs                           # tail the controller

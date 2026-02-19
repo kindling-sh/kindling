@@ -35,9 +35,26 @@ jobs:
                 /builds/*.log /builds/*.dest /builds/*.tar.gz \
                 /builds/*.yaml /builds/*.sh
 
+      # ── 0b. Parse [kindling:svc1,svc2] tag from commit message ─
+      - name: Detect selective services
+        id: filter
+        shell: bash
+        run: |
+          MSG=$(git log -1 --format=%B)
+          TAG=$(echo "$MSG" | grep -oE '\[kindling:[^]]+\]' | head -1 || true)
+          if [ -z "$TAG" ]; then
+            echo "services=all" >> "$GITHUB_OUTPUT"
+            echo "📦 Full rebuild — all services"
+          else
+            SVCS=$(echo "$TAG" | sed 's/\[kindling://;s/\]//')
+            echo "services=$SVCS" >> "$GITHUB_OUTPUT"
+            echo "🏷️  Selective rebuild: $SVCS"
+          fi
+
       # ── 1. Build images ─────────────────────────────────────────
 
       - name: Build orders image
+        if: contains(steps.filter.outputs.services, 'all') || contains(steps.filter.outputs.services, 'orders')
         uses: jeff-vincent/kindling/.github/actions/kindling-build@main
         with:
           name: ms-orders
@@ -45,6 +62,7 @@ jobs:
           image: "${{ env.REGISTRY }}/ms-orders:${{ env.TAG }}"
 
       - name: Build inventory image
+        if: contains(steps.filter.outputs.services, 'all') || contains(steps.filter.outputs.services, 'inventory')
         uses: jeff-vincent/kindling/.github/actions/kindling-build@main
         with:
           name: ms-inventory
@@ -52,6 +70,7 @@ jobs:
           image: "${{ env.REGISTRY }}/ms-inventory:${{ env.TAG }}"
 
       - name: Build gateway image
+        if: contains(steps.filter.outputs.services, 'all') || contains(steps.filter.outputs.services, 'gateway')
         uses: jeff-vincent/kindling/.github/actions/kindling-build@main
         with:
           name: ms-gateway
@@ -59,6 +78,7 @@ jobs:
           image: "${{ env.REGISTRY }}/ms-gateway:${{ env.TAG }}"
 
       - name: Build UI image
+        if: contains(steps.filter.outputs.services, 'all') || contains(steps.filter.outputs.services, 'ui')
         uses: jeff-vincent/kindling/.github/actions/kindling-build@main
         with:
           name: ms-ui
@@ -68,6 +88,7 @@ jobs:
       # ── 2. Deploy services ──────────────────────────────────────
 
       - name: Deploy orders
+        if: contains(steps.filter.outputs.services, 'all') || contains(steps.filter.outputs.services, 'orders')
         uses: jeff-vincent/kindling/.github/actions/kindling-deploy@main
         with:
           name: "${{ github.actor }}-orders"
@@ -84,6 +105,7 @@ jobs:
             - type: redis
 
       - name: Deploy inventory
+        if: contains(steps.filter.outputs.services, 'all') || contains(steps.filter.outputs.services, 'inventory')
         uses: jeff-vincent/kindling/.github/actions/kindling-deploy@main
         with:
           name: "${{ github.actor }}-inventory"
@@ -101,6 +123,7 @@ jobs:
             - type: mongodb
 
       - name: Deploy gateway
+        if: contains(steps.filter.outputs.services, 'all') || contains(steps.filter.outputs.services, 'gateway')
         uses: jeff-vincent/kindling/.github/actions/kindling-deploy@main
         with:
           name: "${{ github.actor }}-gateway"
@@ -118,6 +141,7 @@ jobs:
               value: "http://${{ github.actor }}-inventory:3000"
 
       - name: Deploy UI dashboard
+        if: contains(steps.filter.outputs.services, 'all') || contains(steps.filter.outputs.services, 'ui')
         uses: jeff-vincent/kindling/.github/actions/kindling-deploy@main
         with:
           name: "${{ github.actor }}-ui"
