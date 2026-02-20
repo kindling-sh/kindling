@@ -59,21 +59,21 @@ func runDashboard(cmd *cobra.Command, args []string) error {
 
 	// ── API routes (actions) ────────────────────────────────────
 	mux.HandleFunc("/api/deploy", handleDeployAction)
-	mux.HandleFunc("/api/dses/", handleDeleteDSE)        // DELETE /api/dses/{ns}/{name}
+	mux.HandleFunc("/api/dses/", handleDeleteDSE) // DELETE /api/dses/{ns}/{name}
 	mux.HandleFunc("/api/secrets/create", handleCreateSecret)
-	mux.HandleFunc("/api/secrets/", handleDeleteSecret)   // DELETE /api/secrets/{ns}/{name}
+	mux.HandleFunc("/api/secrets/", handleDeleteSecret) // DELETE /api/secrets/{ns}/{name}
 	mux.HandleFunc("/api/runners/create", handleCreateRunner)
 	mux.HandleFunc("/api/reset-runners", handleResetRunners)
 	mux.HandleFunc("/api/env/set", handleEnvSet)
 	mux.HandleFunc("/api/env/unset", handleEnvUnset)
-	mux.HandleFunc("/api/env/list/", handleEnvList)       // GET /api/env/list/{ns}/{dep}
-	mux.HandleFunc("/api/expose", handleExposeAction)     // POST=start, DELETE=stop
+	mux.HandleFunc("/api/env/list/", handleEnvList)   // GET /api/env/list/{ns}/{dep}
+	mux.HandleFunc("/api/expose", handleExposeAction) // POST=start, DELETE=stop
 	mux.HandleFunc("/api/expose/status", handleExposeStatus)
 	mux.HandleFunc("/api/cluster/destroy", handleDestroyCluster)
 	mux.HandleFunc("/api/init", handleInitCluster)
 	mux.HandleFunc("/api/restart/", handleRestartDeployment)
 	mux.HandleFunc("/api/scale/", handleScaleDeployment)
-	mux.HandleFunc("/api/pods/", handleDeletePod)         // DELETE /api/pods/{ns}/{name}
+	mux.HandleFunc("/api/pods/", handleDeletePod) // DELETE /api/pods/{ns}/{name}
 	mux.HandleFunc("/api/apply", handleApplyYAML)
 
 	// ── Static frontend ─────────────────────────────────────────

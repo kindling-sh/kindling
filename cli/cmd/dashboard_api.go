@@ -11,11 +11,11 @@ import (
 
 func handleCluster(w http.ResponseWriter, r *http.Request) {
 	type clusterInfo struct {
-		Name      string `json:"name"`
-		Exists    bool   `json:"exists"`
-		Context   string `json:"context"`
-		Operator  interface{} `json:"operator,omitempty"`
-		Registry  interface{} `json:"registry,omitempty"`
+		Name     string      `json:"name"`
+		Exists   bool        `json:"exists"`
+		Context  string      `json:"context"`
+		Operator interface{} `json:"operator,omitempty"`
+		Registry interface{} `json:"registry,omitempty"`
 	}
 
 	info := clusterInfo{
