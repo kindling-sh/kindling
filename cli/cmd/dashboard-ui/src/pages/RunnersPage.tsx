@@ -1,9 +1,41 @@
-import { useApi } from '../api';
+import { useState } from 'react';
+import { useApi, apiPost } from '../api';
 import type { K8sList, RunnerPool } from '../types';
 import { StatusBadge, ConditionsTable, EmptyState, TimeAgo } from './shared';
+import { ActionButton, ActionModal, ConfirmDialog, useToast } from './actions';
 
 export function RunnersPage() {
-  const { data, loading } = useApi<K8sList<RunnerPool>>('/api/runners');
+  const { data, loading, refresh } = useApi<K8sList<RunnerPool>>('/api/runners');
+  const { toast } = useToast();
+  const [showCreate, setShowCreate] = useState(false);
+  const [showReset, setShowReset] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [form, setForm] = useState({ username: '', repo: '', token: '' });
+
+  async function handleCreate() {
+    setCreating(true);
+    const result = await apiPost('/api/runners/create', form);
+    setCreating(false);
+    if (result.ok) {
+      toast('Runner pool created', 'success');
+      setShowCreate(false);
+      setForm({ username: '', repo: '', token: '' });
+      refresh();
+    } else {
+      toast(result.error || 'Failed to create runner', 'error');
+    }
+  }
+
+  async function handleReset() {
+    setShowReset(false);
+    const result = await apiPost('/api/reset-runners');
+    if (result.ok) {
+      toast('Runners reset', 'success');
+      refresh();
+    } else {
+      toast(result.error || 'Reset failed', 'error');
+    }
+  }
 
   if (loading) return <div className="loading">Loading runner pools…</div>;
 
@@ -11,7 +43,46 @@ export function RunnersPage() {
 
   return (
     <div className="page">
-      <h1>GitHub Actions Runner Pools</h1>
+      <div className="page-header">
+        <h1>GitHub Actions Runner Pools</h1>
+        <div className="page-actions">
+          <ActionButton icon="➕" label="Create Runner" onClick={() => setShowCreate(true)} />
+          {pools.length > 0 && (
+            <ActionButton icon="🔄" label="Reset All" onClick={() => setShowReset(true)} danger />
+          )}
+        </div>
+      </div>
+
+      {showCreate && (
+        <ActionModal
+          title="Create Runner Pool"
+          submitLabel="Create"
+          loading={creating}
+          onSubmit={handleCreate}
+          onClose={() => setShowCreate(false)}
+        >
+          <label className="form-label">GitHub Username</label>
+          <input className="form-input" placeholder="your-username" value={form.username}
+            onChange={(e) => setForm({ ...form, username: e.target.value })} />
+          <label className="form-label">Repository (owner/repo)</label>
+          <input className="form-input" placeholder="owner/repo" value={form.repo}
+            onChange={(e) => setForm({ ...form, repo: e.target.value })} />
+          <label className="form-label">GitHub PAT</label>
+          <input className="form-input" type="password" placeholder="ghp_..." value={form.token}
+            onChange={(e) => setForm({ ...form, token: e.target.value })} />
+        </ActionModal>
+      )}
+
+      {showReset && (
+        <ConfirmDialog
+          title="Reset Runner Pools"
+          message="This will delete all runner pools and the GitHub token secret. Runners will be de-registered."
+          confirmLabel="Reset"
+          danger
+          onConfirm={handleReset}
+          onCancel={() => setShowReset(false)}
+        />
+      )}
 
       {pools.length === 0 ? (
         <EmptyState message="No runner pools configured. Create one with: kindling runners" />

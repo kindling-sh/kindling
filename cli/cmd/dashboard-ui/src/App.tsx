@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { ReactNode } from 'react';
+import { ToastProvider } from './pages/actions';
 import { OverviewPage } from './pages/OverviewPage';
 import { DSEPage } from './pages/DSEPage';
 import { RunnersPage } from './pages/RunnersPage';
@@ -50,6 +51,7 @@ function App() {
   const ActiveComponent = PAGES[activePage];
 
   return (
+    <ToastProvider>
     <div className="app">
       <aside className="sidebar">
         <div className="sidebar-brand">
@@ -76,6 +78,7 @@ function App() {
         <ActiveComponent />
       </main>
     </div>
+    </ToastProvider>
   );
 }
 

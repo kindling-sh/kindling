@@ -1,9 +1,42 @@
-import { useApi } from '../api';
+import { useState } from 'react';
+import { useApi, apiPost, apiDelete } from '../api';
 import type { K8sList, DSE } from '../types';
 import { StatusBadge, ConditionsTable, EmptyState, TimeAgo } from './shared';
+import { ActionButton, ActionModal, ConfirmDialog, useToast } from './actions';
 
 export function DSEPage() {
-  const { data, loading } = useApi<K8sList<DSE>>('/api/dses');
+  const { data, loading, refresh } = useApi<K8sList<DSE>>('/api/dses');
+  const { toast } = useToast();
+  const [showDeploy, setShowDeploy] = useState(false);
+  const [yaml, setYaml] = useState('');
+  const [deploying, setDeploying] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<{ ns: string; name: string } | null>(null);
+
+  async function handleDeploy() {
+    setDeploying(true);
+    const result = await apiPost('/api/deploy', { yaml });
+    setDeploying(false);
+    if (result.ok) {
+      toast('Environment deployed', 'success');
+      setShowDeploy(false);
+      setYaml('');
+      refresh();
+    } else {
+      toast(result.error || 'Deploy failed', 'error');
+    }
+  }
+
+  async function handleDelete() {
+    if (!deleteTarget) return;
+    const result = await apiDelete(`/api/dses/${deleteTarget.ns}/${deleteTarget.name}`);
+    if (result.ok) {
+      toast(`Deleted ${deleteTarget.name}`, 'success');
+      refresh();
+    } else {
+      toast(result.error || 'Delete failed', 'error');
+    }
+    setDeleteTarget(null);
+  }
 
   if (loading) return <div className="loading">Loading DSEs…</div>;
 
@@ -11,14 +44,49 @@ export function DSEPage() {
 
   return (
     <div className="page">
-      <h1>Dev Staging Environments</h1>
+      <div className="page-header">
+        <h1>Dev Staging Environments</h1>
+        <div className="page-actions">
+          <ActionButton icon="➕" label="Deploy" onClick={() => setShowDeploy(true)} />
+        </div>
+      </div>
+
+      {showDeploy && (
+        <ActionModal
+          title="Deploy Environment"
+          submitLabel="Deploy"
+          loading={deploying}
+          onSubmit={handleDeploy}
+          onClose={() => setShowDeploy(false)}
+        >
+          <label className="form-label">YAML Manifest</label>
+          <textarea
+            className="form-textarea"
+            rows={12}
+            placeholder="Paste your DevStagingEnvironment YAML here..."
+            value={yaml}
+            onChange={(e) => setYaml(e.target.value)}
+          />
+        </ActionModal>
+      )}
+
+      {deleteTarget && (
+        <ConfirmDialog
+          title="Delete Environment"
+          message={`Delete '${deleteTarget.name}' and all its resources?`}
+          confirmLabel="Delete"
+          danger
+          onConfirm={handleDelete}
+          onCancel={() => setDeleteTarget(null)}
+        />
+      )}
 
       {dses.length === 0 ? (
         <EmptyState message="No DevStagingEnvironments found. Deploy one with: kindling deploy -f <file.yaml>" />
       ) : (
         <div className="dse-list">
           {dses.map((dse) => (
-            <DSECard key={dse.metadata.name} dse={dse} />
+            <DSECard key={dse.metadata.name} dse={dse} onDelete={(ns, name) => setDeleteTarget({ ns, name })} />
           ))}
         </div>
       )}
@@ -26,7 +94,7 @@ export function DSEPage() {
   );
 }
 
-function DSECard({ dse }: { dse: DSE }) {
+function DSECard({ dse, onDelete }: { dse: DSE; onDelete: (ns: string, name: string) => void }) {
   const s = dse.status;
   const allReady = s?.deploymentReady && s?.serviceReady &&
     (s?.ingressReady || !dse.spec.ingress?.enabled) &&
@@ -121,6 +189,7 @@ function DSECard({ dse }: { dse: DSE }) {
       </div>
       <div className="card-footer">
         <TimeAgo timestamp={dse.metadata.creationTimestamp} />
+        <ActionButton icon="🗑" label="Delete" onClick={() => onDelete(dse.metadata.namespace || 'default', dse.metadata.name)} danger small />
       </div>
     </div>
   );

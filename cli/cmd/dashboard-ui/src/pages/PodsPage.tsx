@@ -1,13 +1,16 @@
 import { useState } from 'react';
-import { useApi, fetchLogs } from '../api';
+import { useApi, fetchLogs, apiDelete } from '../api';
 import type { K8sList, K8sPod } from '../types';
 import { StatusBadge, TimeAgo, EmptyState } from './shared';
+import { ConfirmDialog, useToast } from './actions';
 
 export function PodsPage() {
-  const { data, loading } = useApi<K8sList<K8sPod>>('/api/pods');
+  const { data, loading, refresh } = useApi<K8sList<K8sPod>>('/api/pods');
+  const { toast } = useToast();
   const [logPod, setLogPod] = useState<{ ns: string; name: string } | null>(null);
   const [logs, setLogs] = useState<string>('');
   const [logLoading, setLogLoading] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<{ ns: string; name: string } | null>(null);
 
   async function showLogs(ns: string, name: string) {
     setLogPod({ ns, name });
@@ -26,9 +29,32 @@ export function PodsPage() {
 
   const items = data?.items || [];
 
+  async function handleDeletePod() {
+    if (!deleteTarget) return;
+    const result = await apiDelete(`/api/pods/${deleteTarget.ns}/${deleteTarget.name}`);
+    if (result.ok) {
+      toast(`Pod ${deleteTarget.name} deleted`, 'success');
+      refresh();
+    } else {
+      toast(result.error || 'Delete failed', 'error');
+    }
+    setDeleteTarget(null);
+  }
+
   return (
     <div className="page">
       <h1>Pods</h1>
+
+      {deleteTarget && (
+        <ConfirmDialog
+          title="Delete Pod"
+          message={`Delete pod '${deleteTarget.name}'? It will be recreated by its controller.`}
+          confirmLabel="Delete"
+          danger
+          onConfirm={handleDeletePod}
+          onCancel={() => setDeleteTarget(null)}
+        />
+      )}
 
       {logPod && (
         <div className="log-viewer">
@@ -86,6 +112,13 @@ export function PodsPage() {
                       onClick={() => showLogs(p.metadata.namespace!, p.metadata.name)}
                     >
                       📋 Logs
+                    </button>
+                    <button
+                      className="btn btn-sm btn-danger"
+                      onClick={() => setDeleteTarget({ ns: p.metadata.namespace || 'default', name: p.metadata.name })}
+                      style={{ marginLeft: 4 }}
+                    >
+                      🗑
                     </button>
                   </td>
                 </tr>
