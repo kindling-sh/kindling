@@ -51,7 +51,7 @@ brews:
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     directory: Formula
     homepage: "https://github.com/kindling-sh/kindling"
-    description: "Local Kubernetes dev environments powered by Kind — push code, your laptop builds & runs it"
+    description: "Local Kubernetes dev environments powered by Kind"
     license: "Apache-2.0"
     commit_author:
       name: kindling-bot
