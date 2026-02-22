@@ -25,10 +25,11 @@ on:
         required: false
         type: string
       repos:
-        description: "Repo list: 'curated' uses repos.txt, 'discover' runs find-repos.py first"
+        description: "Repo list: 'curated' uses repos.txt, 'e2e' uses repos-e2e.txt, 'discover' runs find-repos.py first"
         type: choice
         options:
           - curated
+          - e2e
           - discover
         default: curated
       discover_limit:
@@ -96,7 +97,12 @@ jobs:
 
       - name: Use curated repos
         if: inputs.repos != 'discover'
-        run: echo "REPOS_FILE=repos.txt" >> "$GITHUB_ENV"
+        run: |
+          if [[ "${{ inputs.repos }}" == "e2e" ]]; then
+            echo "REPOS_FILE=repos-e2e.txt" >> "$GITHUB_ENV"
+          else
+            echo "REPOS_FILE=repos.txt" >> "$GITHUB_ENV"
+          fi
 
       # ── Set up Kind cluster (full mode only) ─────────────────
       - name: Create Kind cluster
