@@ -1,7 +1,7 @@
 .hero {
   position: relative;
   overflow: hidden;
-  padding: 3rem 2rem 4rem;
+  padding: 4rem 2rem 3rem;
   background: linear-gradient(
     135deg,
     #0f0f1a 0%,
@@ -9,9 +9,8 @@
     #1f0f20 60%,
     #0f0f1a 100%
   );
-  min-height: 80vh;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
 }
 
 .heroInner {
