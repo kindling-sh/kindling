@@ -115,7 +115,7 @@ jobs:
         run: |
           kindling init --cluster fuzz --skip-cluster
           echo "Waiting for operator..."
-          kubectl wait --for=condition=available deployment/kindling-operator \
+          kubectl wait --for=condition=available deployment/kindling-controller-manager \
             -n kindling-system --timeout=120s
           kubectl get pods -n kindling-system
 
@@ -206,7 +206,7 @@ jobs:
         run: |
           kindling init --cluster fuzz --skip-cluster
           echo "Waiting for operator..."
-          kubectl wait --for=condition=available deployment/kindling-operator \
+          kubectl wait --for=condition=available deployment/kindling-controller-manager \
             -n kindling-system --timeout=120s
           kubectl get pods -n kindling-system
 
