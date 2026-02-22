@@ -1,23 +1,30 @@
 #!/usr/bin/env python3
 """
-find-repos.py — Search GitHub for multi-service repos with Dockerfiles
+find-repos.py — Search GitHub for repos with self-contained Dockerfiles
 that are good candidates for kindling generate fuzz testing.
+
+The key insight: we dig deep into fewer repos rather than skimming many.
+For each candidate we actually read the Dockerfiles and docker-compose,
+check for self-containment (no pre-build steps), and score buildability.
 
 Criteria:
   1. Has a docker-compose.yml with "build:" directives (multi-service, buildable)
-  2. OR has multiple Dockerfiles in subdirectories (microservice layout)
+  2. OR has ≥1 Dockerfile that is self-contained (builds from fresh clone)
   3. Not archived, not a fork, has recent activity
-  4. Reasonable size (not a monorepo monster)
+  4. No Nx/Turborepo/Bazel/Lerna monorepo tooling
+  5. Dockerfiles don't COPY from build-artifact dirs (dist/, build/, out/, target/)
 
 Usage:
-  python3 find-repos.py [--token GITHUB_TOKEN] [--out repos.txt] [--limit 100]
+  python3 find-repos.py [--token GITHUB_TOKEN] [--out repos-candidates.txt] [--limit 30]
 
 Without a token you get 10 search requests/min. With a token: 30/min.
 """
 
 import argparse
+import base64
 import json
 import os
+import re
 import sys
 import time
 import urllib.request
@@ -140,30 +147,286 @@ def search_repos_docker_topic(token: str | None, lang: str, page: int = 1) -> li
     return data.get("items", [])
 
 
-def check_repo_has_compose_with_build(token: str | None, owner: str, repo: str) -> bool:
-    """Check if the repo's docker-compose.yml has build: directives."""
-    # Try to fetch docker-compose.yml content
+def check_repo_has_compose_with_build(token: str | None, owner: str, repo: str) -> dict | None:
+    """Fetch and parse docker-compose.yml. Returns parsed content or None."""
     for name in ["docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"]:
         data = api_get(f"/repos/{owner}/{repo}/contents/{name}", token)
         if "content" not in data:
             continue
-        import base64
         try:
             content = base64.b64decode(data["content"]).decode("utf-8", errors="replace")
             if "build:" in content or "build :" in content:
-                return True
+                return {"filename": name, "content": content}
         except Exception:
             continue
-    return False
+    return None
 
 
-def count_dockerfiles(token: str | None, owner: str, repo: str) -> int:
-    """Count Dockerfiles in the repo using search."""
+def fetch_file_content(token: str | None, owner: str, repo: str, path: str) -> str | None:
+    """Fetch a single file's content from the GitHub API."""
+    data = api_get(f"/repos/{owner}/{repo}/contents/{path}", token)
+    if "content" not in data:
+        return None
+    try:
+        return base64.b64decode(data["content"]).decode("utf-8", errors="replace")
+    except Exception:
+        return None
+
+
+def find_dockerfiles(token: str | None, owner: str, repo: str) -> list[dict]:
+    """Find all Dockerfiles in the repo and return their paths + content."""
     data = api_get("/search/code", token, {
         "q": f"filename:Dockerfile repo:{owner}/{repo}",
-        "per_page": 1,
+        "per_page": 20,
     })
-    return data.get("total_count", 0)
+    time.sleep(0.5)
+
+    dockerfiles = []
+    for item in data.get("items", []):
+        path = item.get("path", "")
+        # Skip test/example/ci Dockerfiles
+        lower_path = path.lower()
+        if any(skip in lower_path for skip in [
+            "test/", "tests/", "example/", "examples/", ".ci/",
+            "ci/", "hack/", "scripts/", "deploy/", ".devcontainer",
+        ]):
+            continue
+
+        content = fetch_file_content(token, owner, repo, path)
+        time.sleep(0.3)
+        if content:
+            dockerfiles.append({"path": path, "content": content})
+
+    return dockerfiles
+
+
+# ── Monorepo / build-tool detection ────────────────────────────────────────
+
+MONOREPO_MARKERS = [
+    "nx.json",           # Nx
+    "turbo.json",        # Turborepo
+    "lerna.json",        # Lerna
+    "pnpm-workspace.yaml",  # pnpm workspaces
+    "BUILD",             # Bazel
+    "WORKSPACE",         # Bazel
+    "pants.toml",        # Pants
+]
+
+
+def check_monorepo_markers(token: str | None, owner: str, repo: str) -> list[str]:
+    """Check if the repo root has monorepo build-tool config files."""
+    data = api_get(f"/repos/{owner}/{repo}/contents", token)
+    if not isinstance(data, list):
+        return []
+    root_files = {item["name"] for item in data if item.get("type") == "file"}
+    found = [m for m in MONOREPO_MARKERS if m in root_files]
+    return found
+
+
+# ── Dockerfile quality analysis ────────────────────────────────────────────
+
+# Directories that are typically build artifacts (not in git)
+BUILD_ARTIFACT_DIRS = {"dist", "build", "out", "target", ".next", "output", "artifacts"}
+
+
+def analyze_dockerfile(content: str, path: str) -> dict:
+    """Analyze a Dockerfile for self-containment and buildability.
+
+    Returns a dict with:
+      - score: 0-100 quality score
+      - flags: list of green/yellow/red flag strings
+      - is_self_contained: bool
+      - has_multi_stage: bool
+      - base_images: list of FROM images
+      - expose_ports: list of exposed ports
+    """
+    lines = content.splitlines()
+    flags = []
+    score = 50  # start neutral
+
+    # ── Parse FROM lines ───────────────────────────────────────
+    from_lines = [l for l in lines if re.match(r'^\s*FROM\s', l, re.IGNORECASE)]
+    base_images = []
+    has_multi_stage = len(from_lines) > 1
+    has_builder_stage = False
+
+    for fl in from_lines:
+        # Extract image name (skip --platform flags)
+        parts = fl.split()
+        img = None
+        for p in parts[1:]:
+            if p.startswith("--"):
+                continue
+            if p.upper() == "AS":
+                break
+            img = p
+            break
+        if img and not img.startswith("$"):
+            base_images.append(img)
+        # Check for AS builder pattern
+        if " AS " in fl.upper() or " as " in fl:
+            has_builder_stage = True
+
+    if has_multi_stage:
+        flags.append("🟢 multi-stage build (self-contained)")
+        score += 15
+    if has_builder_stage:
+        score += 5
+
+    # ── Check for COPY from build-artifact directories ─────────
+    copy_lines = [l for l in lines
+                  if re.match(r'^\s*COPY\s', l, re.IGNORECASE)
+                  and not re.match(r'^\s*COPY\s+--from=', l, re.IGNORECASE)]
+
+    copies_artifacts = False
+    for cl in copy_lines:
+        parts = cl.split()
+        for src in parts[1:-1]:  # skip COPY and the dest (last arg)
+            src_dir = src.strip("./").split("/")[0]
+            if src_dir in BUILD_ARTIFACT_DIRS:
+                # In multi-stage, COPY --from=builder dist/ is fine,
+                # but plain COPY dist/ means it expects pre-built artifacts
+                copies_artifacts = True
+                flags.append(f"🔴 COPY from '{src_dir}/' — likely requires pre-build step")
+                score -= 30
+
+    # ── Check for COPY --from= (multi-stage is fine) ───────────
+    copy_from_lines = [l for l in lines
+                       if re.match(r'^\s*COPY\s+--from=', l, re.IGNORECASE)]
+    if copy_from_lines and not copies_artifacts:
+        flags.append("🟢 uses COPY --from= (proper multi-stage)")
+        score += 5
+
+    # ── Check for package manager install ──────────────────────
+    run_lines = [l for l in lines if re.match(r'^\s*RUN\s', l, re.IGNORECASE)]
+    run_text = " ".join(run_lines).lower()
+
+    has_install = any(pm in run_text for pm in [
+        "npm install", "npm ci", "yarn install", "pnpm install",
+        "pip install", "poetry install", "go build", "go mod",
+        "cargo build", "mvn ", "gradle", "dotnet restore",
+        "bundle install", "composer install", "mix deps.get",
+    ])
+    if has_install:
+        flags.append("🟢 has dependency install step")
+        score += 10
+
+    # ── Check for EXPOSE ───────────────────────────────────────
+    expose_ports = []
+    for l in lines:
+        if re.match(r'^\s*EXPOSE\s', l, re.IGNORECASE):
+            for token in l.split()[1:]:
+                m = re.match(r'(\d+)', token)
+                if m:
+                    expose_ports.append(m.group(1))
+    if expose_ports:
+        flags.append(f"🟢 EXPOSE {', '.join(expose_ports)}")
+        score += 5
+
+    # ── Check for CMD/ENTRYPOINT ───────────────────────────────
+    has_cmd = any(re.match(r'^\s*(CMD|ENTRYPOINT)\s', l, re.IGNORECASE) for l in lines)
+    if has_cmd:
+        score += 5
+    else:
+        flags.append("🟡 no CMD/ENTRYPOINT")
+        score -= 5
+
+    # ── Check for known Kaniko issues (fixable, not blocking) ──
+    if "poetry install" in run_text and "--no-root" not in run_text:
+        flags.append("🟡 poetry install without --no-root (fixable via patch)")
+
+    if any(f"${{{v}}}" in content or f"${v}" in content
+           for v in ["TARGETARCH", "BUILDPLATFORM", "TARGETPLATFORM"]):
+        flags.append("🟡 BuildKit platform ARGs (fixable via patch)")
+
+    if "go build" in run_text and "-buildvcs=false" not in run_text:
+        flags.append("🟡 go build without -buildvcs=false (fixable via patch)")
+
+    if any(npm in run_text for npm in ["npm install", "npm ci", "npm run"]):
+        if "npm_config_cache" not in content:
+            flags.append("🟡 npm without cache redirect (fixable via patch)")
+
+    # ── Private/unusual base images ────────────────────────────
+    for img in base_images:
+        # Standard public registries
+        if any(img.startswith(r) for r in [
+            "node:", "python:", "golang:", "ruby:", "php:", "rust:",
+            "openjdk:", "amazoncorretto:", "eclipse-temurin:", "maven:",
+            "gradle:", "mcr.microsoft.com/", "docker.io/", "nginx:",
+            "alpine:", "ubuntu:", "debian:", "centos:", "fedora:",
+            "elixir:", "composer:", "dotnet/", "scratch",
+        ]):
+            continue
+        # Docker Hub official images (no slash = official)
+        if "/" not in img:
+            continue
+        # ghcr.io / quay.io are public
+        if img.startswith("ghcr.io/") or img.startswith("quay.io/"):
+            continue
+        flags.append(f"🟡 non-standard base image: {img}")
+        score -= 5
+
+    is_self_contained = not copies_artifacts and (has_install or has_multi_stage)
+
+    return {
+        "score": max(0, min(100, score)),
+        "flags": flags,
+        "is_self_contained": is_self_contained,
+        "has_multi_stage": has_multi_stage,
+        "base_images": base_images,
+        "expose_ports": expose_ports,
+    }
+
+
+def parse_compose_services(content: str) -> list[dict]:
+    """Lightweight docker-compose parser — extract services with build directives."""
+    services = []
+    # Very simple: find service blocks with build:
+    # We don't pull in pyyaml to keep this dependency-free
+    in_services = False
+    current_service = None
+    indent_level = 0
+
+    for line in content.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#") or not stripped:
+            continue
+
+        # Detect services: block
+        if re.match(r'^services:\s*$', stripped):
+            in_services = True
+            continue
+
+        if not in_services:
+            continue
+
+        # Top-level key under services (2-space indent typically)
+        # Detect by: starts with non-space content at service-level indent
+        leading = len(line) - len(line.lstrip())
+
+        if leading <= 0 and stripped and not stripped.startswith("-"):
+            # Left-aligned = new top-level block, end of services
+            in_services = False
+            continue
+
+        if leading == 2 and stripped.endswith(":") and not stripped.startswith("-"):
+            svc_name = stripped.rstrip(":").strip()
+            current_service = {"name": svc_name, "has_build": False,
+                               "build_context": "", "dockerfile": "",
+                               "depends_on": [], "ports": []}
+            services.append(current_service)
+            indent_level = 2
+            continue
+
+        if current_service and leading > indent_level:
+            if "build:" in stripped:
+                current_service["has_build"] = True
+            if stripped.startswith("context:"):
+                current_service["build_context"] = stripped.split(":", 1)[1].strip().strip('"').strip("'")
+            if stripped.startswith("dockerfile:"):
+                current_service["dockerfile"] = stripped.split(":", 1)[1].strip().strip('"').strip("'")
+
+    return [s for s in services if s["has_build"]]
 
 
 def check_repo_quality(repo: dict) -> dict | None:
@@ -202,20 +465,128 @@ def check_repo_quality(repo: dict) -> dict | None:
     }
 
 
+def deep_validate(token: str | None, candidate: dict) -> dict:
+    """Deep-validate a candidate repo. Returns the candidate dict enriched
+    with Dockerfile analysis, compose parsing, and a buildability score."""
+    owner, repo = candidate["full_name"].split("/", 1)
+
+    # ── Check for monorepo markers ─────────────────────────────
+    mono_markers = check_monorepo_markers(token, owner, repo)
+    time.sleep(0.3)
+    if mono_markers:
+        candidate["monorepo_markers"] = mono_markers
+        candidate["score"] = 0
+        candidate["verdict"] = f"skip:monorepo ({', '.join(mono_markers)})"
+        candidate["flags"] = [f"🔴 monorepo tooling: {', '.join(mono_markers)}"]
+        return candidate
+
+    # ── Fetch and parse docker-compose ─────────────────────────
+    compose = check_repo_has_compose_with_build(token, owner, repo)
+    time.sleep(0.3)
+    candidate["has_compose_build"] = compose is not None
+
+    compose_services = []
+    if compose:
+        compose_services = parse_compose_services(compose["content"])
+        candidate["compose_services"] = len(compose_services)
+
+    # ── Find and analyze Dockerfiles ───────────────────────────
+    dockerfiles = find_dockerfiles(token, owner, repo)
+    candidate["dockerfile_count"] = len(dockerfiles)
+
+    if not dockerfiles and not compose:
+        candidate["score"] = 0
+        candidate["verdict"] = "skip:no-dockerfiles"
+        candidate["flags"] = ["🔴 no Dockerfiles found"]
+        return candidate
+
+    # Analyze each Dockerfile
+    analyses = []
+    all_flags = []
+    for df in dockerfiles:
+        analysis = analyze_dockerfile(df["content"], df["path"])
+        analysis["path"] = df["path"]
+        analyses.append(analysis)
+        for flag in analysis["flags"]:
+            all_flags.append(f"  {df['path']}: {flag}")
+
+    candidate["dockerfiles_analyzed"] = len(analyses)
+    candidate["flags"] = all_flags
+
+    # ── Compute overall score ──────────────────────────────────
+    if not analyses:
+        candidate["score"] = 20 if compose else 0
+        candidate["verdict"] = "skip:no-analyzable-dockerfiles"
+        return candidate
+
+    # Score = average of Dockerfile scores, bonus for compose
+    avg_score = sum(a["score"] for a in analyses) / len(analyses)
+    if compose:
+        avg_score += 10  # bonus for having compose
+    if len(analyses) >= 2:
+        avg_score += 5   # bonus for multi-service
+
+    # Penalty if ANY Dockerfile is not self-contained
+    non_self_contained = [a for a in analyses if not a["is_self_contained"]]
+    if non_self_contained:
+        avg_score -= 15 * len(non_self_contained)
+
+    candidate["score"] = max(0, min(100, int(avg_score)))
+
+    # Collect expose ports across all Dockerfiles
+    all_ports = []
+    for a in analyses:
+        all_ports.extend(a.get("expose_ports", []))
+    candidate["expose_ports"] = all_ports
+
+    # ── Verdict ────────────────────────────────────────────────
+    if candidate["score"] >= 60:
+        candidate["verdict"] = "recommended"
+    elif candidate["score"] >= 40:
+        candidate["verdict"] = "maybe"
+    else:
+        candidate["verdict"] = "skip:low-score"
+
+    # Check for fixable-only issues (yellow flags but no red)
+    has_red = any("🔴" in f for f in all_flags)
+    has_yellow = any("🟡" in f for f in all_flags)
+    if has_yellow and not has_red:
+        candidate["actionable"] = True
+    else:
+        candidate["actionable"] = False
+
+    return candidate
+
+
 def main():
     parser = argparse.ArgumentParser(description="Find repos for kindling fuzz testing")
     parser.add_argument("--token", default=os.environ.get("GITHUB_TOKEN", ""),
                         help="GitHub API token (or set GITHUB_TOKEN env var)")
     parser.add_argument("--out", default="/Users/jeffvincent/dev/kindling/test/fuzz/repos-candidates.txt",
                         help="Output file path")
-    parser.add_argument("--limit", type=int, default=100,
-                        help="Max repos to output")
+    parser.add_argument("--limit", type=int, default=30,
+                        help="Max repos to deeply validate")
     args = parser.parse_args()
 
     token = args.token or None
     if not token:
         print("⚠️  No GitHub token — rate limited to 10 search requests/min", file=sys.stderr)
         print("   Set GITHUB_TOKEN or pass --token for 30/min", file=sys.stderr)
+
+    # ── Load existing repos to skip ────────────────────────────
+    existing = set()
+    for list_file in ["repos.txt", "repos-e2e.txt"]:
+        list_path = os.path.join(os.path.dirname(__file__), list_file)
+        if os.path.exists(list_path):
+            with open(list_path) as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#"):
+                        # Normalize: strip trailing comments
+                        url = line.split("#")[0].strip().split()[0]
+                        existing.add(url)
+    if existing:
+        print(f"📋 Skipping {len(existing)} repos already in lists", file=sys.stderr)
 
     seen = set()
     candidates = []
@@ -231,7 +602,7 @@ def main():
                 break
             for repo in repos:
                 info = check_repo_quality(repo)
-                if info and info["full_name"] not in seen:
+                if info and info["full_name"] not in seen and info["url"] not in existing:
                     seen.add(info["full_name"])
                     info["source"] = f"microservices-{lang}"
                     candidates.append(info)
@@ -250,7 +621,7 @@ def main():
         if repos:
             for repo in repos:
                 info = check_repo_quality(repo)
-                if info and info["full_name"] not in seen:
+                if info and info["full_name"] not in seen and info["url"] not in existing:
                     seen.add(info["full_name"])
                     info["source"] = f"docker-{lang}"
                     candidates.append(info)
@@ -269,7 +640,7 @@ def main():
         if repos:
             for repo in repos:
                 info = check_repo_quality(repo)
-                if info and info["full_name"] not in seen:
+                if info and info["full_name"] not in seen and info["url"] not in existing:
                     seen.add(info["full_name"])
                     info["source"] = f"compose-{lang}"
                     candidates.append(info)
@@ -279,86 +650,105 @@ def main():
 
     print(f"\n📊 Total unique candidates: {len(candidates)}", file=sys.stderr)
 
-    # ── Validate: check each candidate for docker-compose with build ───────
-    # Cap validation to avoid hanging on huge candidate lists
-    max_to_check = min(len(candidates), args.limit * 3)  # check 3x limit, then stop
-    print(f"\n🔬 Validating up to {max_to_check} candidates (checking for docker-compose + Dockerfiles)...",
+    # ── Sort candidates by stars (more stars = more likely maintained) ──────
+    candidates.sort(key=lambda x: x.get("stars", 0), reverse=True)
+
+    # ── Deep validation: read Dockerfiles, check self-containment ──────────
+    to_check = min(len(candidates), args.limit)
+    print(f"\n🔬 Deep-validating top {to_check} candidates "
+          f"(reading Dockerfiles, checking compose, scanning for monorepo markers)...",
           file=sys.stderr)
 
     validated = []
-    for i, c in enumerate(candidates[:max_to_check]):
-        if len(validated) >= args.limit:
-            print(f"\n  🎯 Reached target of {args.limit} validated repos, stopping early.",
-                  file=sys.stderr)
-            break
+    for i, c in enumerate(candidates[:to_check]):
+        print(f"\n  [{i+1}/{to_check}] {c['full_name']} (⭐{c['stars']})...",
+              file=sys.stderr, flush=True)
 
-        owner, repo = c["full_name"].split("/", 1)
-        print(f"  [{i+1}/{max_to_check}] Checking {c['full_name']}...",
-              file=sys.stderr, end="", flush=True)
+        c = deep_validate(token, c)
 
-        # Check for docker-compose with build directives
-        has_compose = check_repo_has_compose_with_build(token, owner, repo)
-        time.sleep(0.5)  # rate limit safety
+        verdict_icon = {
+            "recommended": "✅",
+            "maybe": "🟡",
+        }.get(c["verdict"], "⏭️ ")
 
-        # Only count Dockerfiles if compose check failed (save an API call)
-        n_dockerfiles = 0
-        if not has_compose:
-            n_dockerfiles = count_dockerfiles(token, owner, repo)
-            time.sleep(0.5)
+        print(f"    {verdict_icon} score={c['score']} verdict={c['verdict']}",
+              file=sys.stderr, flush=True)
 
-        c["has_compose_build"] = has_compose
-        c["dockerfile_count"] = n_dockerfiles
+        # Print flags
+        for flag in c.get("flags", []):
+            print(f"    {flag}", file=sys.stderr, flush=True)
 
-        # Accept if it has compose with build, or multiple Dockerfiles
-        if has_compose or n_dockerfiles >= 2:
-            validated.append(c)
-            status = "✅"
-        else:
-            status = "⏭️ "
+        validated.append(c)
 
-        print(
-            f" {status} compose_build={has_compose}, dockerfiles={n_dockerfiles}",
-            file=sys.stderr, flush=True
-        )
+    # ── Separate into tiers ────────────────────────────────────
+    recommended = [c for c in validated if c["verdict"] == "recommended"]
+    maybe = [c for c in validated if c["verdict"] == "maybe"]
+    skipped = [c for c in validated if c["verdict"].startswith("skip")]
 
-    print(f"\n✅ Validated: {len(validated)} repos", file=sys.stderr)
+    recommended.sort(key=lambda x: x["score"], reverse=True)
+    maybe.sort(key=lambda x: x["score"], reverse=True)
 
-    # ── Sort: prefer repos with compose+build, then by dockerfile count, then stars ──
-    validated.sort(key=lambda x: (
-        x.get("has_compose_build", False),
-        x.get("dockerfile_count", 0),
-        x.get("stars", 0),
-    ), reverse=True)
+    print(f"\n{'─' * 60}", file=sys.stderr)
+    print(f"📊 Results: {len(recommended)} recommended, "
+          f"{len(maybe)} maybe, {len(skipped)} skipped", file=sys.stderr)
 
-    # ── Write output ───────────────────────────────────────────────────────
+    # ── Write output ───────────────────────────────────────────
     with open(args.out, "w") as f:
         f.write("# ─────────────────────────────────────────────────────────────────\n")
-        f.write("# repos-candidates.txt — Auto-discovered repos for fuzz testing\n")
+        f.write("# repos-candidates.txt — Deeply validated repos for fuzz testing\n")
         f.write(f"# Generated: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-        f.write(f"# Total: {len(validated)} repos\n")
-        f.write("# Criteria: has docker-compose with build OR ≥2 Dockerfiles\n")
-        f.write("# ─────────────────────────────────────────────────────────────────\n\n")
+        f.write(f"# Validated: {len(validated)} repos\n")
+        f.write(f"# Recommended: {len(recommended)}, Maybe: {len(maybe)}, "
+                f"Skipped: {len(skipped)}\n")
+        f.write("# ─────────────────────────────────────────────────────────────────\n")
 
-        current_lang = None
-        for c in validated:
-            lang = c.get("language") or "Unknown"
-            if lang != current_lang:
-                current_lang = lang
-                f.write(f"\n# ── {lang} {'─' * (55 - len(lang))}\n")
+        if recommended:
+            f.write("\n# ═══ RECOMMENDED (score ≥ 60, self-contained Dockerfiles) ═══════\n\n")
+            for c in recommended:
+                compose_tag = " compose+build" if c.get("has_compose_build") else ""
+                df_tag = f" {c.get('dockerfile_count', 0)}df"
+                ports = f" ports:{','.join(c.get('expose_ports', []))}" if c.get("expose_ports") else ""
+                actionable_tag = " [fixable-issues]" if c.get("actionable") else ""
+                f.write(f"# score={c['score']} ⭐{c['stars']} {c.get('language', '?')}"
+                        f"{compose_tag}{df_tag}{ports}{actionable_tag}\n")
+                for flag in c.get("flags", []):
+                    f.write(f"#   {flag}\n")
+                f.write(f"{c['url']}\n\n")
 
-            compose_tag = " [compose+build]" if c.get("has_compose_build") else ""
-            df_tag = f" [{c['dockerfile_count']} Dockerfiles]" if c.get("dockerfile_count", 0) >= 2 else ""
-            f.write(f"{c['url']}  # ⭐{c['stars']}{compose_tag}{df_tag}\n")
+        if maybe:
+            f.write("\n# ═══ MAYBE (score 40-59, might need manual review) ═════════════\n\n")
+            for c in maybe:
+                compose_tag = " compose+build" if c.get("has_compose_build") else ""
+                df_tag = f" {c.get('dockerfile_count', 0)}df"
+                actionable_tag = " [fixable-issues]" if c.get("actionable") else ""
+                f.write(f"# score={c['score']} ⭐{c['stars']} {c.get('language', '?')}"
+                        f"{compose_tag}{df_tag}{actionable_tag}\n")
+                for flag in c.get("flags", []):
+                    f.write(f"#   {flag}\n")
+                f.write(f"{c['url']}\n\n")
+
+        if skipped:
+            f.write("\n# ═══ SKIPPED (not suitable) ═══════════════════════════════════\n\n")
+            for c in skipped:
+                f.write(f"# {c['full_name']}: {c['verdict']}\n")
 
     print(f"\n📝 Written to {args.out}", file=sys.stderr)
 
-    # Also print a summary to stderr
-    print("\n── Top 20 ──", file=sys.stderr)
-    for c in validated[:20]:
-        compose_tag = " [compose+build]" if c.get("has_compose_build") else ""
-        df_tag = f" [{c['dockerfile_count']}df]" if c.get("dockerfile_count", 0) >= 2 else ""
-        print(f"  ⭐{c['stars']:>6}  {c['full_name']:<45} {c.get('language',''):>12}{compose_tag}{df_tag}",
-              file=sys.stderr)
+    # ── Summary to stderr ──────────────────────────────────────
+    if recommended:
+        print("\n── Recommended ──", file=sys.stderr)
+        for c in recommended:
+            ports = f" ports:{','.join(c.get('expose_ports', []))}" if c.get("expose_ports") else ""
+            print(f"  score={c['score']:>3}  ⭐{c['stars']:>6}  "
+                  f"{c['full_name']:<45} {c.get('language',''):>12}{ports}",
+                  file=sys.stderr)
+
+    if maybe:
+        print("\n── Maybe ──", file=sys.stderr)
+        for c in maybe[:10]:
+            print(f"  score={c['score']:>3}  ⭐{c['stars']:>6}  "
+                  f"{c['full_name']:<45} {c.get('language',''):>12}",
+                  file=sys.stderr)
 
 
 if __name__ == "__main__":
