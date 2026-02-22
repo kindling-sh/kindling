@@ -239,11 +239,12 @@ Builds a container image via the Kaniko sidecar. Replaces ~15 lines of signal-fi
 > **⚠️ Dockerfile required:** `kindling-build` runs the Dockerfile found in the build context directory as-is using Kaniko. It does **not** generate or modify Dockerfiles. Each service must have a working Dockerfile that builds successfully on its own (e.g. `docker build .`) — if it doesn't build locally, it won't build in kindling.
 
 ```yaml
-- uses: jeff-vincent/kindling/.github/actions/kindling-build@main
+- uses: kindling-sh/kindling/.github/actions/kindling-build@main
   with:
     name: my-app                              # unique build name
     context: ${{ github.workspace }}           # build context path
     image: "registry:5000/my-app:${{ env.TAG }}"  # destination image
+    dockerfile: "Dockerfile"                   # optional: Dockerfile path relative to context
     exclude: "./tests"                         # optional tar --exclude
     timeout: "300"                             # optional build timeout (seconds)
 ```
@@ -253,7 +254,7 @@ Builds a container image via the Kaniko sidecar. Replaces ~15 lines of signal-fi
 Generates and applies a `DevStagingEnvironment` CR. Replaces ~30 lines of YAML-generation + sidecar scripting with declarative inputs.
 
 ```yaml
-- uses: jeff-vincent/kindling/.github/actions/kindling-deploy@main
+- uses: kindling-sh/kindling/.github/actions/kindling-deploy@main
   with:
     name: "${{ github.actor }}-my-app"
     image: "registry:5000/my-app:${{ env.TAG }}"
@@ -294,21 +295,21 @@ Generates and applies a `DevStagingEnvironment` CR. Replaces ~30 lines of YAML-g
 
 ### Pre-built binaries (recommended)
 
-Download the latest release for your platform from [GitHub Releases](https://github.com/jeff-vincent/kindling/releases):
+Download the latest release for your platform from [GitHub Releases](https://github.com/kindling-sh/kindling/releases):
 
 ```bash
 # macOS (Apple Silicon)
-curl -Lo kindling.tar.gz https://github.com/jeff-vincent/kindling/releases/latest/download/kindling_$(curl -s https://api.github.com/repos/jeff-vincent/kindling/releases/latest | grep tag_name | cut -d '"' -f4 | sed 's/^v//')_darwin_arm64.tar.gz
+curl -Lo kindling.tar.gz https://github.com/kindling-sh/kindling/releases/latest/download/kindling_$(curl -s https://api.github.com/repos/kindling-sh/kindling/releases/latest | grep tag_name | cut -d '"' -f4 | sed 's/^v//')_darwin_arm64.tar.gz
 tar xzf kindling.tar.gz
 sudo mv kindling /usr/local/bin/
 
 # macOS (Intel)
-curl -Lo kindling.tar.gz https://github.com/jeff-vincent/kindling/releases/latest/download/kindling_$(curl -s https://api.github.com/repos/jeff-vincent/kindling/releases/latest | grep tag_name | cut -d '"' -f4 | sed 's/^v//')_darwin_amd64.tar.gz
+curl -Lo kindling.tar.gz https://github.com/kindling-sh/kindling/releases/latest/download/kindling_$(curl -s https://api.github.com/repos/kindling-sh/kindling/releases/latest | grep tag_name | cut -d '"' -f4 | sed 's/^v//')_darwin_amd64.tar.gz
 tar xzf kindling.tar.gz
 sudo mv kindling /usr/local/bin/
 
 # Linux (amd64)
-curl -Lo kindling.tar.gz https://github.com/jeff-vincent/kindling/releases/latest/download/kindling_$(curl -s https://api.github.com/repos/jeff-vincent/kindling/releases/latest | grep tag_name | cut -d '"' -f4 | sed 's/^v//')_linux_amd64.tar.gz
+curl -Lo kindling.tar.gz https://github.com/kindling-sh/kindling/releases/latest/download/kindling_$(curl -s https://api.github.com/repos/kindling-sh/kindling/releases/latest | grep tag_name | cut -d '"' -f4 | sed 's/^v//')_linux_amd64.tar.gz
 tar xzf kindling.tar.gz
 sudo mv kindling /usr/local/bin/
 ```
@@ -329,7 +330,7 @@ kindling version
 Requires Go 1.25+:
 
 ```bash
-git clone https://github.com/jeff-vincent/kindling.git
+git clone https://github.com/kindling-sh/kindling.git
 cd kindling
 make cli
 sudo mv bin/kindling /usr/local/bin/
@@ -414,6 +415,7 @@ kindling destroy
 | `kindling init --image <img>` | Use a specific Kind node image (e.g. `kindest/node:v1.29.0`) |
 | `kindling runners` | Create GitHub PAT secret + runner pool CR |
 | `kindling generate -k <key> -r <path>` | AI-generate a dev-deploy.yml workflow for any repo |
+| `kindling generate --model o3` | Use OpenAI's o3 reasoning model for higher accuracy |
 | `kindling generate --ingress-all` | Wire every service with an ingress route (not just frontends) |
 | `kindling generate --no-helm` | Skip Helm/Kustomize rendering, use raw source inference |
 | `kindling secrets set <name> <value>` | Store an external credential as a K8s Secret |
@@ -552,6 +554,29 @@ env:
 ## Smart Generate Features
 
 `kindling generate` goes beyond basic Dockerfile detection:
+
+### docker-compose.yml as source of truth
+
+When a `docker-compose.yml` or `docker-compose.yaml` is found, kindling uses it as the authoritative source for:
+- **Build contexts** — `context` and `dockerfile` paths are mapped directly to `kindling-build` inputs
+- **Dependencies** — `depends_on` entries are mapped to kindling dependency types (postgres, redis, rabbitmq, etc.)
+- **Environment variables** — `environment` sections for ALL services (not just the primary one) are analyzed for env var name mappings
+
+### .env template file scanning
+
+Kindling scans `.env.sample`, `.env.example`, `.env.development`, and `.env.template` files for required configuration variables. This helps the AI distinguish between external credentials (wired via `secretKeyRef`), auto-injected dependency URLs, and app-level config that needs sensible defaults.
+
+### Reasoning model support
+
+For complex multi-service projects, `kindling generate` supports OpenAI reasoning models (`o3`, `o3-mini`) which use extended thinking for higher accuracy. These models use the `developer` role (instead of `system`) and `max_completion_tokens` (instead of `max_tokens`), with a 5-minute timeout.
+
+```bash
+# Use o3 for maximum accuracy on complex projects
+kindling generate -k sk-... -r . --model o3
+
+# Use o3-mini for faster, cheaper reasoning
+kindling generate -k sk-... -r . --model o3-mini
+```
 
 ### Helm & Kustomize awareness
 
@@ -769,9 +794,10 @@ kind delete cluster --name dev
 - [x] Auto-provisioned RBAC per runner pool
 - [x] In-cluster container registry
 - [x] CLI tool — `kindling init/runners/generate/deploy/status/logs/destroy`
-- [x] AI-powered workflow generation — `kindling generate` (OpenAI + Anthropic, 9 languages)
+- [x] AI-powered workflow generation — `kindling generate` (OpenAI + Anthropic, 9 languages, reasoning model support)
 - [x] Kaniko layer caching — `registry:5000/cache` for fast rebuilds
-- [x] Reusable GitHub Actions — `kindling-build` + `kindling-deploy`
+- [x] Reusable GitHub Actions — `kindling-build` + `kindling-deploy` (with custom Dockerfile path support)
+- [x] docker-compose.yml analysis — uses docker-compose as source of truth for build contexts, dependencies, and env vars
 - [x] Helm & Kustomize awareness — auto-renders charts/overlays, passes manifests to AI for context
 - [x] Smart ingress heuristics — frontends, SSR frameworks, and API gateways auto-detected
 - [x] `--ingress-all` flag — wire every service with an ingress route

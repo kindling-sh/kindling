@@ -69,14 +69,14 @@ steps:
     run: rm -f /builds/*
 
   - name: Build image
-    uses: jeff-vincent/kindling/.github/actions/kindling-build@main
+    uses: kindling-sh/kindling/.github/actions/kindling-build@main
     with:
       name: sample-app
       context: ${{ github.workspace }}
       image: "registry:5000/sample-app:${{ env.TAG }}"
 
   - name: Deploy
-    uses: jeff-vincent/kindling/.github/actions/kindling-deploy@main
+    uses: kindling-sh/kindling/.github/actions/kindling-deploy@main
     with:
       name: "${{ github.actor }}-sample-app"
       image: "registry:5000/sample-app:${{ env.TAG }}"

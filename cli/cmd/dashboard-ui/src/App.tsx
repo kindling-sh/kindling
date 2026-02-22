@@ -461,15 +461,24 @@ function AppSidebar({ activePage, setActivePage }: { activePage: Page; setActive
             <a href={tunnelStatus.url} target="_blank" rel="noopener" className="tunnel-widget-url">
               {tunnelStatus.url.replace('https://', '')}
             </a>
-            <button
-              className="tunnel-copy-btn"
-              onClick={() => {
-                navigator.clipboard.writeText(tunnelStatus.url!);
-                toast('URL copied', 'success');
-              }}
-            >
-              Copy URL
-            </button>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <button
+                className="tunnel-copy-btn"
+                onClick={() => {
+                  navigator.clipboard.writeText(tunnelStatus.url!);
+                  toast('URL copied', 'success');
+                }}
+              >
+                Copy URL
+              </button>
+              <button
+                className="tunnel-copy-btn"
+                style={{ background: 'var(--danger)', color: '#fff' }}
+                onClick={() => toggleTunnel()}
+              >
+                Stop
+              </button>
+            </div>
           </div>
         )}
         <span className="version">kindling dashboard v0.1</span>

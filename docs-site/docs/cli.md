@@ -1,3 +1,9 @@
+---
+sidebar_position: 2
+title: CLI Reference
+description: Complete reference for all kindling CLI commands and flags.
+---
+
 # CLI Reference
 
 The `kindling` CLI bootstraps and manages a local Kind cluster running
@@ -52,10 +58,12 @@ default Kind config uses a single control-plane node. For larger workloads, this
 is sufficient since all pods schedule on the same node — adding worker nodes
 doesn't help much in a local dev context and just splits the available memory.
 
-> **Tip:** Kaniko layer caching is enabled (`registry:5000/cache`), so first
-> builds are slow but subsequent rebuilds are fast. Make sure you have enough
-> disk for the cache — heavy stacks (Rust, Java) can use 2–5 GB of cached
-> layers per service.
+:::tip
+Kaniko layer caching is enabled (`registry:5000/cache`), so first
+builds are slow but subsequent rebuilds are fast. Make sure you have enough
+disk for the cache — heavy stacks (Rust, Java) can use 2–5 GB of cached
+layers per service.
+:::
 
 **What it does (in order):**
 1. Preflight checks (kind, kubectl, docker on PATH; also go, make if `--build`)
@@ -253,35 +261,9 @@ kindling status
 - **Registry** — In-cluster registry deployment status
 - **Ingress Controller** — ingress-nginx pod status
 - **Runner Pools** — GithubActionRunnerPool CRs (name, username, repo)
-- **Dev Environments** — DevStagingEnvironment CRs (image, replicas,
-  ready state)
+- **Dev Environments** — DevStagingEnvironment CRs (image, replicas, ready state)
 - **Pods** — All pods in the default namespace with status and age
-- **Unhealthy Pods** — Pods in CrashLoopBackOff, Error, or other non-Running
-  states with their last 10 log lines for quick diagnosis
-
-**Example output:**
-
-```
-▸ Cluster
-  ✅ Kind cluster "dev" exists
-    dev-control-plane   Ready   v1.31.0
-
-▸ Operator
-    ✓  kindling-controller-manager   1   1   2026-02-15T10:00:00Z
-
-▸ Registry
-    registry:5000  1   1
-
-▸ Ingress Controller
-    ingress-nginx-controller-xxxxx   Running   0
-
-▸ GitHub Actions Runner Pools
-    myuser-runner-pool   myuser   myorg/myrepo
-
-▸ Dev Staging Environments
-    NAME         IMAGE                              REPLICAS   AVAILABLE   READY
-    myuser-app   registry:5000/myapp:abc123         1          1           true
-```
+- **Unhealthy Pods** — Pods in CrashLoopBackOff, Error, or other non-Running states with their last 10 log lines for quick diagnosis
 
 ---
 
@@ -334,20 +316,11 @@ kindling secrets <subcommand> [flags]
 | `delete <name>` | Remove from cluster and local backup |
 | `restore` | Re-create all secrets from `.kindling/secrets.yaml` after a cluster rebuild |
 
-**How it works:**
-
-- Each secret is stored as a K8s Secret named `kindling-secret-<lowercase-name>` with the label `app.kubernetes.io/managed-by=kindling`
-- A local backup is maintained at `.kindling/secrets.yaml` (base64-encoded values, auto-gitignored)
-- `kindling secrets restore` reads the backup and re-creates all secrets — run this after `kindling init` to restore credentials from a previous cluster
-
 **Examples:**
 
 ```bash
 # Store a Stripe API key
 kindling secrets set STRIPE_KEY sk_live_abc123
-
-# Store a database connection string
-kindling secrets set DATABASE_URL postgres://user:pass@host/db
 
 # List all managed secrets
 kindling secrets list
@@ -364,28 +337,12 @@ kindling secrets restore
 
 ### `kindling expose`
 
-Create a public HTTPS tunnel to the Kind cluster’s ingress controller
+Create a public HTTPS tunnel to the Kind cluster's ingress controller
 for OAuth/OIDC callbacks.
 
 ```
 kindling expose [flags]
 ```
-
-**What it does:**
-1. Detects an available tunnel provider (cloudflared or ngrok)
-2. Verifies the Kind cluster is running
-3. Starts a tunnel from a public HTTPS URL to `localhost:<port>`
-4. Auto-patches the active ingress with the tunnel hostname
-5. Saves the original ingress host (and TLS config if present) as annotations for later restoration
-6. Saves tunnel state to a ConfigMap (`kindling-tunnel`) in the cluster
-7. Runs in the background — the CLI returns immediately
-
-**TLS handling:** If the ingress has `spec.tls` (e.g. cert-manager), the tunnel
-automatically saves and strips it (cloudflared handles TLS at the edge). On
-`--stop`, the original TLS config is restored.
-
-**Self-healing:** On each start, restores any ingresses left with stale tunnel
-hostnames from a previous tunnel that died without cleanup.
 
 **Supported providers:**
 
@@ -399,9 +356,9 @@ hostnames from a previous tunnel that died without cleanup.
 | Flag | Default | Description |
 |---|---|---|
 | `--provider` | auto-detect | Tunnel provider: `cloudflared` or `ngrok` |
-| `--port` | `80` | Local port to expose (default: ingress controller) |
+| `--port` | `80` | Local port to expose |
 | `--stop` | `false` | Stop a running tunnel and restore original ingress configuration |
-| `--service` | — | Ingress name to route tunnel traffic to (default: first ingress found) |
+| `--service` | — | Ingress name to route tunnel traffic to |
 
 **Examples:**
 
@@ -409,17 +366,8 @@ hostnames from a previous tunnel that died without cleanup.
 # Auto-detect provider, expose port 80
 kindling expose
 
-# Use cloudflared explicitly
-kindling expose --provider cloudflared
-
-# Route tunnel to a specific ingress
-kindling expose --service ui-ingress
-
 # Stop the tunnel and restore ingresses
 kindling expose --stop
-
-# Expose a different port
-kindling expose --port 443
 ```
 
 ---
@@ -439,12 +387,6 @@ kindling env <subcommand> <deployment> [args]
 | `set <deployment> KEY=VALUE [...]` | Set one or more environment variables |
 | `list <deployment>` | List all environment variables on a deployment |
 | `unset <deployment> KEY [...]` | Remove one or more environment variables |
-
-**How it works:**
-
-- Uses `kubectl set env` under the hood
-- Triggers a rolling restart automatically so new values take effect immediately
-- No need to rebuild or push — changes are live in seconds
 
 **Examples:**
 
@@ -472,20 +414,6 @@ Remove the runner pool so you can point it at a new repo.
 kindling reset [flags]
 ```
 
-**What it does:**
-1. Deletes all `GithubActionRunnerPool` CRs in the cluster
-2. Deletes the `github-runner-token` Secret
-3. Leaves the cluster, operator, and DevStagingEnvironments intact
-
-Use this when you want to switch to a different GitHub repository without
-tearing down the entire cluster.
-
-**Flags:**
-
-| Flag | Short | Default | Description |
-|---|---|---|---|
-| `--force` | `-y` | `false` | Skip confirmation prompt |
-
 **Examples:**
 
 ```bash
@@ -509,18 +437,6 @@ Delete the Kind cluster and all resources.
 kindling destroy [flags]
 ```
 
-**What it does:**
-1. Stops any running tunnel (restores ingresses)
-2. Checks cluster exists
-3. Prompts for confirmation (type cluster name)
-4. `kind delete cluster --name <cluster>`
-
-**Flags:**
-
-| Flag | Short | Default | Description |
-|---|---|---|---|
-| `--force` | `-y` | `false` | Skip confirmation prompt |
-
 **Examples:**
 
 ```bash
@@ -529,9 +445,6 @@ kindling destroy
 
 # Skip confirmation
 kindling destroy -y
-
-# Destroy a named cluster
-kindling destroy -c staging -y
 ```
 
 ---
@@ -542,18 +455,6 @@ Print the CLI version.
 
 ```
 kindling version
-```
-
-**Output:**
-
-```
-kindling dev (darwin/arm64)
-```
-
-The version string is set at build time via `-ldflags`:
-
-```bash
-go build -ldflags "-X github.com/jeffvincent/kindling/cli/cmd.Version=v1.0.0" -o bin/kindling ./cli/
 ```
 
 ---
@@ -575,7 +476,6 @@ kindling generate -k sk-... -r /path/to/myapp
 
 # 5. Set any external credentials that were detected
 kindling secrets set STRIPE_KEY sk_live_...
-kindling secrets set OPENAI_API_KEY sk-...
 
 # 6. If OAuth is needed, start a tunnel
 kindling expose
@@ -583,7 +483,7 @@ kindling expose
 # 7. Push code → CI builds + deploys automatically
 git push origin main
 
-# 8. Check status (includes crash diagnostics for unhealthy pods)
+# 8. Check status
 kindling status
 
 # 9. Set env vars on a running deployment without redeploying
@@ -599,9 +499,6 @@ kindling expose --stop
 kindling reset
 kindling runners -u alice -r acme/other-app -t ghp_xxxxx
 
-# 13. Manual deploy (without CI)
-kindling deploy -f dev-environment.yaml
-
-# 14. Tear down when done
+# 13. Tear down when done
 kindling destroy -y
 ```

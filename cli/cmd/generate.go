@@ -27,7 +27,8 @@ Supports OpenAI-compatible and Anthropic APIs.
 
 Examples:
   kindling generate --api-key sk-... --repo-path /path/to/my-app
-  kindling generate -k sk-... -r . --provider openai --model gpt-4o
+  kindling generate -k sk-... -r . --provider openai --model o3
+  kindling generate -k sk-... -r . --model gpt-4o
   kindling generate -k sk-ant-... -r . --provider anthropic
   kindling generate -k sk-... -r . --dry-run`,
 	RunE: runGenerate,
@@ -47,7 +48,7 @@ func init() {
 	generateCmd.Flags().StringVarP(&genAPIKey, "api-key", "k", "", "GenAI API key (required)")
 	generateCmd.Flags().StringVarP(&genRepoPath, "repo-path", "r", ".", "Path to the local repository to analyze")
 	generateCmd.Flags().StringVar(&genProvider, "provider", "openai", "AI provider: openai or anthropic")
-	generateCmd.Flags().StringVar(&genModel, "model", "", "Model name (default: gpt-4o for openai, claude-sonnet-4-20250514 for anthropic)")
+	generateCmd.Flags().StringVar(&genModel, "model", "", "Model name (default: o3 for openai, claude-sonnet-4-20250514 for anthropic)")
 	generateCmd.Flags().StringVarP(&genOutput, "output", "o", "", "Output path (default: <repo-path>/.github/workflows/dev-deploy.yml)")
 	generateCmd.Flags().StringVarP(&genBranch, "branch", "b", "", "Branch to trigger on (default: auto-detect from git, fallback to 'main')")
 	generateCmd.Flags().BoolVar(&genDryRun, "dry-run", false, "Print the generated workflow to stdout instead of writing a file")
@@ -70,7 +71,7 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 		case "anthropic":
 			genModel = "claude-sonnet-4-20250514"
 		default:
-			genModel = "gpt-4o"
+			genModel = "o3"
 		}
 	}
 
@@ -707,6 +708,13 @@ The ONLY env vars that belong in the "env" input are:
      discover what env var names the app actually uses for each dependency connection.
      If the app's name differs from the auto-injected name, add the mapping.
 
+  IMPORTANT: If an env var uses $(VARIABLE) expansion referencing an auto-injected
+  URL, the corresponding dependency MUST be declared in that service's dependencies
+  block. The variable will not exist unless the dependency is declared. For example,
+  if a service has env "CELERY_BROKER_URL: $(AMQP_URL)", that service MUST declare
+  "- type: rabbitmq" in its dependencies. This applies to EVERY service that uses
+  the variable, not just one of them.
+
 Build timeout guidance:
 The default kindling-build timeout is 300 seconds (5 minutes). This is sufficient for
 interpreted languages and lightweight compiled languages (Go, TypeScript, Python, Ruby,
@@ -845,22 +853,42 @@ For multi-service repos (multiple Dockerfiles in subdirectories), generate one
 build step per service and one deploy step per service, with inter-service env
 vars wired up (e.g. API_URL pointing to the other service's cluster-internal DNS name).
 
-Docker build context vs Dockerfile path:
-When a docker-compose.yml exists, ALWAYS check it to determine the correct build
-"context" and "dockerfile" for each service. Many repos use a DIFFERENT context
-directory than where the Dockerfile lives. For example:
-  docker-compose.yml:
-    my_job:
-      build:
-        context: ./backend/           # <-- build context is the parent
-        dockerfile: jobs/daily/Dockerfile  # <-- Dockerfile path relative to context
-In this case the kindling-build step MUST use:
-  context: ${{ github.workspace }}/backend
-  dockerfile: jobs/daily/Dockerfile
-NOT context: ${{ github.workspace }}/backend/jobs/daily (which would be wrong
-because the Dockerfile expects files from the parent backend/ directory like
-pyproject.toml, poetry.lock, etc.).
-The kindling-build action supports a "dockerfile" input for this — use it whenever
+CRITICAL — docker-compose.yml is the source of truth for multi-service repos:
+When a docker-compose.yml exists, you MUST use it to determine the following for
+EVERY service (not just the main one):
+
+  a) Build context and Dockerfile path:
+     Check the "build" section for each service. Use "context" as the kindling-build
+     context and "dockerfile" (relative to context) as the dockerfile input.
+     If context is "." (repo root), use ${{ github.workspace }} as context and
+     set the dockerfile input to the path of the Dockerfile relative to the root.
+     Example — docker-compose says:
+       api:
+         build:
+           context: .
+           dockerfile: api/Dockerfile
+     Then kindling-build MUST use:
+       context: ${{ github.workspace }}
+       dockerfile: api/Dockerfile
+     NOT context: ${{ github.workspace }}/api (wrong — Dockerfile COPYs from root).
+
+  b) Dependencies (depends_on):
+     Map each docker-compose depends_on entry to the corresponding kindling
+     dependency type. Apply this to EVERY service, not just the main one.
+     Example — if worker_add depends_on rabbitmq and redis, it needs:
+       dependencies: |
+         - type: rabbitmq
+         - type: redis
+
+  c) Environment variables:
+     Check the "environment" section for EVERY service. If the app uses different
+     env var names than the auto-injected ones (e.g. CELERY_BROKER_URL instead of
+     AMQP_URL), add env var mappings to ALL services that need them, not just one.
+     Example — if docker-compose shows that worker_add, worker_multiply, AND api
+     all use CELERY_BROKER_URL and CELERY_RESULT_BACKEND, then ALL THREE deploy
+     steps need those env var mappings.
+
+The kindling-build action supports a "dockerfile" input — use it whenever
 the Dockerfile is not at the root of the build context:
   - name: Build daily job image
     uses: kindling-sh/kindling/.github/actions/kindling-build@main
@@ -949,6 +977,14 @@ services that handle OAuth callbacks need a publicly accessible URL instead of
 ingress-host of the auth-handling service. If no public URL is specified but OAuth
 patterns are detected, add a YAML comment noting:
   # NOTE: OAuth detected — run 'kindling expose' for a public HTTPS URL
+
+FINAL VALIDATION — before outputting the YAML, verify:
+  1. Every deploy step that uses $(AMQP_URL) in its env MUST have "- type: rabbitmq"
+     in its dependencies. Every step using $(REDIS_URL) MUST have "- type: redis".
+     Every step using $(DATABASE_URL) MUST have "- type: postgres" (or mysql).
+     A $(VAR) reference without the matching dependency will cause a runtime crash.
+  2. Every build step's "context" matches the docker-compose "build.context" for that
+     service. If context is "." or the repo root, use ${{ github.workspace }}.
 
 Return ONLY the raw YAML content of the workflow file. No markdown code fences,
 no explanation text, no commentary. Just the YAML.`

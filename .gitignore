@@ -8,3 +8,13 @@ cover.out
 *.swp
 .kindling/
 test/fuzz/__pycache__/
+
+# Compiled binaries (root)
+manager
+cli/kindling
+
+# Node modules
+node_modules/
+docs-site/node_modules/
+docs-site/build/
+docs-site/.docusaurus/

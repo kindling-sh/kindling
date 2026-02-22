@@ -1,3 +1,9 @@
+---
+sidebar_position: 4
+title: GitHub Actions Reference
+description: Documentation for kindling-build and kindling-deploy reusable composite actions.
+---
+
 # GitHub Actions Reference
 
 kindling ships two **reusable composite actions** that replace 15+ lines
@@ -15,7 +21,9 @@ kindling-sh/kindling/.github/actions/kindling-deploy@main
 
 Build and push a container image via the Kaniko build-agent sidecar.
 
-> **⚠️ Dockerfile required:** This action runs the `Dockerfile` found in the build context directory as-is using Kaniko. It does **not** generate or modify Dockerfiles. Each service must have a working Dockerfile that builds successfully on its own (e.g. `docker build .`). If it doesn't build locally, it won't build in kindling. Kaniko is stricter than local Docker in some cases — for example, `COPY`-ing a file that doesn't exist (like a missing lockfile) will fail immediately rather than being silently skipped.
+:::warning Dockerfile required
+This action runs the `Dockerfile` found in the build context directory as-is using Kaniko. It does **not** generate or modify Dockerfiles. Each service must have a working Dockerfile that builds successfully on its own (e.g. `docker build .`). If it doesn't build locally, it won't build in kindling.
+:::
 
 ### Inputs
 
@@ -61,18 +69,6 @@ Build and push a container image via the Kaniko build-agent sidecar.
     exclude: "./ui ./.git ./node_modules"
 ```
 
-### With custom timeout
-
-```yaml
-- name: Build large image
-  uses: kindling-sh/kindling/.github/actions/kindling-build@main
-  with:
-    name: my-big-app
-    context: ${{ github.workspace }}
-    image: "registry:5000/my-big-app:${{ github.sha }}"
-    timeout: "600"
-```
-
 ### With custom Dockerfile path
 
 When the Dockerfile is not at the context root (common in monorepos or
@@ -114,8 +110,7 @@ Deploy a DevStagingEnvironment CR via the build-agent sidecar.
 
 ### What it does
 
-1. Generates a complete `DevStagingEnvironment` YAML manifest from the
-   inputs
+1. Generates a complete `DevStagingEnvironment` YAML manifest from the inputs
 2. Writes it to `/builds/<name>-dse.yaml`
 3. Touches `/builds/<name>-dse.apply` to trigger sidecar `kubectl apply`
 4. Waits for the sidecar to confirm the apply succeeded
@@ -165,37 +160,6 @@ Deploy a DevStagingEnvironment CR via the build-agent sidecar.
         value: "http://${{ github.actor }}-my-api:8080"
       - name: NODE_ENV
         value: "development"
-```
-
-### With all options
-
-```yaml
-- name: Deploy full-featured service
-  uses: kindling-sh/kindling/.github/actions/kindling-deploy@main
-  with:
-    name: "${{ github.actor }}-platform"
-    image: "registry:5000/platform:${{ github.sha }}"
-    port: "8080"
-    replicas: "2"
-    service-type: "ClusterIP"
-    health-check-path: "/healthz"
-    ingress-host: "${{ github.actor }}-platform.localhost"
-    ingress-class: "nginx"
-    labels: |
-      app.kubernetes.io/part-of: my-platform
-      tier: backend
-    env: |
-      - name: LOG_LEVEL
-        value: "debug"
-    dependencies: |
-      - type: postgres
-        version: "16"
-      - type: redis
-      - type: elasticsearch
-      - type: kafka
-      - type: vault
-    wait: "true"
-    wait-timeout: "300s"
 ```
 
 ---
@@ -265,44 +229,6 @@ jobs:
 
 ---
 
-## Generated YAML
-
-The `kindling-deploy` action generates a `DevStagingEnvironment` CR
-like this:
-
-```yaml
-apiVersion: apps.example.com/v1alpha1
-kind: DevStagingEnvironment
-metadata:
-  name: alice-my-api
-  labels:
-    app.kubernetes.io/name: alice-my-api
-    app.kubernetes.io/managed-by: kindling
-spec:
-  deployment:
-    image: registry:5000/my-api:abc123
-    replicas: 1
-    port: 8080
-    healthCheck:
-      path: /healthz
-  service:
-    port: 8080
-    type: ClusterIP
-  ingress:
-    enabled: true
-    host: alice-my-api.localhost
-    ingressClassName: nginx
-  dependencies:
-    - type: postgres
-      version: "16"
-    - type: redis
-```
-
-The YAML is written to `/builds/<name>-dse.yaml`, applied via the
-sidecar, then the action optionally waits for the Deployment rollout.
-
----
-
 ## Troubleshooting
 
 ### Build times out
@@ -314,15 +240,9 @@ with:
   timeout: "600"  # 10 minutes
 ```
 
-Check the build log:
-
-```bash
-cat /builds/<name>.log
-```
-
 ### Deploy apply fails
 
-The action prints the generated YAML. Check the output for:
+Check the output for:
 - Invalid YAML indentation
 - Missing required fields
 - Image not found in registry

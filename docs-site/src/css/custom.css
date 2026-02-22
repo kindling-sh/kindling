@@ -1,0 +1,125 @@
+/* kindling — custom theme */
+
+:root {
+  --ifm-color-primary: #ff6b35;
+  --ifm-color-primary-dark: #e85a24;
+  --ifm-color-primary-darker: #d9501a;
+  --ifm-color-primary-darkest: #b34215;
+  --ifm-color-primary-light: #ff8352;
+  --ifm-color-primary-lighter: #ff9466;
+  --ifm-color-primary-lightest: #ffb08a;
+
+  --ifm-heading-font-weight: 700;
+  --ifm-font-weight-bold: 600;
+  --ifm-code-font-size: 0.88rem;
+}
+
+[data-theme="dark"] {
+  --ifm-background-color: #0f0f1a;
+  --ifm-background-surface-color: #141422;
+  --ifm-color-primary: #ff8c42;
+  --ifm-color-primary-dark: #ff7828;
+  --ifm-color-primary-darker: #ff6b18;
+  --ifm-color-primary-darkest: #e85500;
+  --ifm-color-primary-light: #ffa060;
+  --ifm-color-primary-lighter: #ffab74;
+  --ifm-color-primary-lightest: #ffc49e;
+  --ifm-navbar-background-color: #0f0f1a;
+  --ifm-footer-background-color: #0a0a14;
+  --ifm-code-background: rgba(255, 107, 53, 0.08);
+  --ifm-toc-border-color: rgba(255, 255, 255, 0.06);
+  --ifm-hr-border-color: rgba(255, 255, 255, 0.08);
+  --docusaurus-highlighted-code-line-bg: rgba(255, 107, 53, 0.12);
+}
+
+[data-theme="dark"] .navbar {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+[data-theme="dark"] .navbar__title {
+  background: linear-gradient(135deg, #ff6b35, #ffad60);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  font-weight: 700;
+}
+
+[data-theme="dark"] .footer {
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+[data-theme="dark"] .footer__title {
+  color: #e0d8f0;
+}
+
+[data-theme="dark"] .footer__link-item {
+  color: #8a8298;
+}
+
+[data-theme="dark"] .footer__link-item:hover {
+  color: #ff8c42;
+}
+
+/* Sidebar */
+[data-theme="dark"] .menu__link {
+  color: #a09ab0;
+}
+
+[data-theme="dark"] .menu__link:hover {
+  color: #ff8c42;
+  background: rgba(255, 107, 53, 0.06);
+}
+
+[data-theme="dark"] .menu__link--active {
+  color: #ff8c42;
+  border-left-color: #ff6b35;
+}
+
+/* Code blocks */
+[data-theme="dark"] .prism-code {
+  background: #12121e !important;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+/* Admonitions */
+[data-theme="dark"] .admonition {
+  border-left-width: 3px;
+}
+
+/* Table of contents */
+[data-theme="dark"] .table-of-contents__link--active {
+  color: #ff8c42;
+}
+
+/* Pagination */
+[data-theme="dark"] .pagination-nav__link {
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+[data-theme="dark"] .pagination-nav__link:hover {
+  border-color: rgba(255, 107, 53, 0.3);
+}
+
+/* Scrollbar */
+[data-theme="dark"] ::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+[data-theme="dark"] ::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+[data-theme="dark"] ::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 3px;
+}
+
+[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 107, 53, 0.3);
+}
+
+/* Global nav brand */
+.navbar__logo img {
+  height: 28px;
+}

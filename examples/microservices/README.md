@@ -134,7 +134,7 @@ steps:
   - uses: actions/checkout@v4
 
   - name: Build orders
-    uses: jeff-vincent/kindling/.github/actions/kindling-build@main
+    uses: kindling-sh/kindling/.github/actions/kindling-build@main
     with:
       name: ms-orders
       context: "${{ github.workspace }}/orders"
@@ -143,7 +143,7 @@ steps:
   # ... inventory, gateway, ui ...
 
   - name: Deploy orders
-    uses: jeff-vincent/kindling/.github/actions/kindling-deploy@main
+    uses: kindling-sh/kindling/.github/actions/kindling-deploy@main
     with:
       name: "${{ github.actor }}-orders"
       image: "registry:5000/ms-orders:${{ env.TAG }}"

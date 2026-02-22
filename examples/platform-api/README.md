@@ -96,7 +96,7 @@ steps:
 
   # Build both images
   - name: Build API
-    uses: jeff-vincent/kindling/.github/actions/kindling-build@main
+    uses: kindling-sh/kindling/.github/actions/kindling-build@main
     with:
       name: platform-api
       context: ${{ github.workspace }}
@@ -104,7 +104,7 @@ steps:
       exclude: "./ui"
 
   - name: Build UI
-    uses: jeff-vincent/kindling/.github/actions/kindling-build@main
+    uses: kindling-sh/kindling/.github/actions/kindling-build@main
     with:
       name: platform-api-ui
       context: "${{ github.workspace }}/ui"
@@ -112,7 +112,7 @@ steps:
 
   # Deploy with 5 dependencies — the operator handles all of them
   - name: Deploy API
-    uses: jeff-vincent/kindling/.github/actions/kindling-deploy@main
+    uses: kindling-sh/kindling/.github/actions/kindling-deploy@main
     with:
       name: "${{ github.actor }}-platform-api"
       image: "registry:5000/platform-api:${{ env.TAG }}"
@@ -127,7 +127,7 @@ steps:
         - type: vault
 
   - name: Deploy UI
-    uses: jeff-vincent/kindling/.github/actions/kindling-deploy@main
+    uses: kindling-sh/kindling/.github/actions/kindling-deploy@main
     with:
       name: "${{ github.actor }}-platform-api-ui"
       image: "registry:5000/platform-api-ui:${{ env.TAG }}"

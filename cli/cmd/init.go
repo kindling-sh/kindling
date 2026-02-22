@@ -13,15 +13,14 @@ var initCmd = &cobra.Command{
 	Use:   "init",
 	Short: "Bootstrap a Kind cluster with the kindling operator",
 	Long: `Creates a Kind cluster, installs the in-cluster image registry and
-ingress-nginx controller, builds the kindling operator image, and deploys
-it into the cluster.
+ingress-nginx controller, pulls the pre-built kindling operator image from
+GHCR (or builds it from source with --build), and deploys it into the cluster.
 
-This is the equivalent of running:
-  kind create cluster --name dev --config kind-config.yaml
-  ./setup-ingress.sh
-  make docker-build IMG=controller:latest
-  kind load docker-image controller:latest --name dev
-  make install deploy IMG=controller:latest
+By default the operator image is pulled from:
+  ghcr.io/kindling-sh/kindling-operator:latest
+
+Use --build to build from source instead (requires Go and Make).
+Use --operator-image to specify a different pre-built image.
 
 Optional flags are passed through to "kind create cluster":
   --image        Node image to use (e.g. kindest/node:v1.29.0)
@@ -31,6 +30,9 @@ Optional flags are passed through to "kind create cluster":
 	RunE: runInit,
 }
 
+// DefaultOperatorImage is the pre-built operator image published to GHCR.
+const DefaultOperatorImage = "ghcr.io/kindling-sh/kindling-operator:latest"
+
 var (
 	skipCluster    bool
 	kindNodeImage  string
@@ -38,6 +40,8 @@ var (
 	kindWait       string
 	kindRetain     bool
 	initExpose     bool
+	buildOperator  bool
+	operatorImage  string
 )
 
 func init() {
@@ -47,6 +51,8 @@ func init() {
 	initCmd.Flags().StringVar(&kindWait, "wait", "", "Wait for control plane to be ready (e.g. 60s, 5m)")
 	initCmd.Flags().BoolVar(&kindRetain, "retain", false, "Retain cluster nodes for debugging on creation failure")
 	initCmd.Flags().BoolVar(&initExpose, "expose", false, "Start a public HTTPS tunnel after bootstrap (runs kindling expose)")
+	initCmd.Flags().BoolVar(&buildOperator, "build", false, "Build the operator image from source instead of pulling the pre-built image")
+	initCmd.Flags().StringVar(&operatorImage, "operator-image", DefaultOperatorImage, "Operator image to pull (ignored when --build is set)")
 	rootCmd.AddCommand(initCmd)
 }
 
@@ -59,8 +65,13 @@ func runInit(cmd *cobra.Command, args []string) error {
 	// ── Preflight checks ────────────────────────────────────────
 	header("Preflight checks")
 
+	requiredTools := []string{"kind", "kubectl", "docker"}
+	if buildOperator {
+		requiredTools = append(requiredTools, "go", "make")
+	}
+
 	missing := []string{}
-	for _, tool := range []string{"kind", "kubectl", "docker"} {
+	for _, tool := range requiredTools {
 		if commandExists(tool) {
 			step("✓", fmt.Sprintf("%s found", tool))
 		} else {
@@ -132,18 +143,43 @@ func runInit(cmd *cobra.Command, args []string) error {
 	}
 	success("Ingress and registry ready")
 
-	// ── Build the operator image ────────────────────────────────
-	header("Building kindling operator image")
+	// ── Get the operator image ───────────────────────────────────
+	imgTag := "controller:latest"
 
-	step("🏗️ ", "docker build -t controller:latest")
-	if err := runDir(dir, "docker", "build", "-t", "controller:latest", "."); err != nil {
-		return fmt.Errorf("operator image build failed: %w", err)
+	if buildOperator {
+		// Build from source — requires Go, Make, and the project checkout
+		header("Building kindling operator image from source")
+
+		for _, tool := range []string{"go", "make"} {
+			if !commandExists(tool) {
+				return fmt.Errorf("%s is required for --build but was not found on PATH", tool)
+			}
+		}
+
+		step("🏗️ ", "docker build -t controller:latest .")
+		if err := runDir(dir, "docker", "build", "-t", "controller:latest", "."); err != nil {
+			return fmt.Errorf("operator image build failed: %w", err)
+		}
+		success("Operator image built")
+	} else {
+		// Pull the pre-built image from GHCR
+		header("Pulling kindling operator image")
+
+		step("⬇️ ", fmt.Sprintf("docker pull %s", operatorImage))
+		if err := run("docker", "pull", operatorImage); err != nil {
+			return fmt.Errorf("failed to pull operator image %s: %w\n\nTo build from source instead, run: kindling init --build", operatorImage, err)
+		}
+
+		// Tag as controller:latest so kustomize config works as-is
+		if err := run("docker", "tag", operatorImage, imgTag); err != nil {
+			return fmt.Errorf("failed to tag operator image: %w", err)
+		}
+		success(fmt.Sprintf("Operator image ready (%s)", operatorImage))
 	}
-	success("Operator image built")
 
 	// ── Load image into Kind ────────────────────────────────────
 	step("📦", "Loading image into Kind cluster")
-	if err := run("kind", "load", "docker-image", "controller:latest", "--name", clusterName); err != nil {
+	if err := run("kind", "load", "docker-image", imgTag, "--name", clusterName); err != nil {
 		return fmt.Errorf("failed to load image into Kind: %w", err)
 	}
 	success("Image loaded")

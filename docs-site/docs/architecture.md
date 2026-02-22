@@ -1,3 +1,9 @@
+---
+sidebar_position: 3
+title: Architecture
+description: Internal architecture of kindling — components, data flow, and system design.
+---
+
 # Architecture
 
 This document describes the internal architecture of kindling — a
@@ -70,8 +76,7 @@ flowchart TB
 ### 1. Kind cluster
 
 A local Kubernetes cluster created by [Kind](https://kind.sigs.k8s.io).
-The cluster configuration ([kind-config.yaml](../kind-config.yaml))
-includes:
+The cluster configuration includes:
 
 - **Single control-plane node** with the `ingress-ready` label
 - **Port mappings** for HTTP (80) and HTTPS (443) on the host
@@ -122,12 +127,9 @@ The two containers share an `emptyDir` volume mounted at `/builds/`.
 
 The build-agent sidecar watches for signal files in `/builds/`.
 
-> **⚠️ Dockerfile requirement:** Kaniko executes the Dockerfile from the
-> build context exactly as-is. It does not generate or modify
-> Dockerfiles. Each service must ship a Dockerfile that builds
-> successfully on its own (`docker build .`). Kaniko is stricter than
-> local Docker — for example, `COPY`-ing a file that doesn't exist
-> (like a missing lockfile) will fail the build immediately.
+:::warning Dockerfile requirement
+Kaniko executes the Dockerfile from the build context exactly as-is. It does not generate or modify Dockerfiles. Each service must ship a Dockerfile that builds successfully on its own (`docker build .`). Kaniko is stricter than local Docker — for example, `COPY`-ing a file that doesn't exist (like a missing lockfile) will fail the build immediately.
+:::
 
 ```
 Signal file protocol:
@@ -186,13 +188,7 @@ any `imagePullPolicy` hacks.
 ### 6. Ingress-nginx controller
 
 Provides HTTP routing from `*.localhost` hostnames to in-cluster
-Services. Installed by `setup-ingress.sh` with:
-
-```bash
-kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/kind/deploy.yaml
-```
-
-The Kind config maps host ports 80/443 → the ingress controller pod.
+Services. The Kind config maps host ports 80/443 → the ingress controller pod.
 
 ---
 
@@ -266,7 +262,7 @@ block. Some dependencies inject additional env vars:
 | InfluxDB | `INFLUXDB_ORG`, `INFLUXDB_BUCKET` |
 | Jaeger | `OTEL_EXPORTER_OTLP_ENDPOINT` |
 
-See [dependencies.md](dependencies.md) for the full reference.
+See [Dependency Reference](dependencies.md) for the full reference.
 
 ---
 
@@ -282,53 +278,40 @@ Repo scan → docker-compose analysis → Helm/Kustomize render → .env templat
 ### Stage 1: Repo scan
 Walks the directory tree collecting Dockerfiles, dependency manifests
 (go.mod, package.json, requirements.txt, etc.), docker-compose.yml, and
-source file entry points. Prioritizes files by relevance (main.go,
-app.py, index.ts, etc.).
+source file entry points.
 
 ### Stage 2: docker-compose analysis
 If `docker-compose.yml` or `docker-compose.yaml` is found, it becomes the
-authoritative source for build contexts (`context` + `dockerfile` paths),
-inter-service dependencies (`depends_on`), and environment variable
-mappings. This is critical for multi-service projects where services may
-use different env var names than the operator's auto-injected defaults
-(e.g. `CELERY_BROKER_URL` instead of `AMQP_URL`).
+authoritative source for build contexts, inter-service dependencies, and
+environment variable mappings.
 
 ### Stage 3: Helm & Kustomize rendering
 If `Chart.yaml` or `kustomization.yaml` is found, runs `helm template`
-or `kustomize build` to produce rendered manifests. These are passed to
-the AI as authoritative context for ports, env vars, and service names.
-Gracefully falls back if the tools aren't installed.
+or `kustomize build` to produce rendered manifests.
 
 ### Stage 4: .env template file scanning
 Scans `.env.sample`, `.env.example`, `.env.development`, and
-`.env.template` files for required configuration variables. This helps
-the AI distinguish between external credentials, auto-injected dependency
-URLs, and app-level config.
+`.env.template` files for required configuration variables.
 
 ### Stage 5: External credential detection
 Scans all collected content for env var patterns matching external
-credentials (`*_API_KEY`, `*_SECRET`, `*_TOKEN`, `*_DSN`, etc.). Also
-checks `.env` files. Detected credentials are included in the AI prompt
-so the generated workflow wires them as `secretKeyRef`.
+credentials (`*_API_KEY`, `*_SECRET`, `*_TOKEN`, `*_DSN`, etc.).
 
 ### Stage 6: OAuth / OIDC detection
 Scans for 40+ patterns indicating OAuth usage (Auth0, Okta, Firebase
 Auth, NextAuth, Passport.js, OIDC discovery endpoints, redirect URIs,
-callback routes). If detected, the CLI suggests `kindling expose` and
-the AI adds tunnel-related comments to the workflow.
+callback routes).
 
 ### Stage 7: Prompt assembly
 Builds a system prompt with kindling conventions and a user prompt
 containing all collected context. The system prompt covers 9 languages,
 15 dependency types, build timeout guidance, Dockerfile pitfalls, and
-a dev staging environment philosophy (auto-injected dependency URLs,
-random hex for app secrets, no hardcoded credentials).
+a dev staging environment philosophy.
 
 ### Stage 8: AI call & output
 Calls OpenAI or Anthropic, cleans the response (strips markdown fences),
-and writes the YAML to `.github/workflows/dev-deploy.yml`. For OpenAI
-reasoning models (o3, o3-mini), uses the `developer` role and
-`max_completion_tokens` with a 5-minute timeout.
+and writes the YAML. For OpenAI reasoning models (o3, o3-mini), uses the
+`developer` role and `max_completion_tokens` with a 5-minute timeout.
 
 ---
 
@@ -367,23 +350,18 @@ Supported providers:
 - **cloudflared** — Cloudflare Tunnel quick tunnels (free, no account)
 - **ngrok** — requires free account + auth token
 
-The tunnel URL is saved to `.kindling/tunnel.yaml` and cleaned up on
-Ctrl+C. The `.kindling/` directory is auto-gitignored.
-
 ---
 
 ## Owner references and garbage collection
 
-Every resource the operator creates (Deployments, Services, Secrets,
-Ingresses) has an `OwnerReference` pointing to the parent
-`DevStagingEnvironment` CR. When you delete the CR:
+Every resource the operator creates has an `OwnerReference` pointing to
+the parent `DevStagingEnvironment` CR. When you delete the CR:
 
 ```bash
 kubectl delete devstagingenvironment myapp
 ```
 
 Kubernetes' garbage collector automatically deletes all child resources.
-No manual cleanup needed.
 
 ---
 
@@ -404,11 +382,11 @@ kindling/
 │   │   ├── root.go
 │   │   ├── init.go
 │   │   ├── runners.go
-│   │   ├── generate.go         # AI workflow generation + Helm/Kustomize/credential/OAuth scanning
-│   │   ├── secrets.go          # Secret management (set/list/delete/restore)
-│   │   ├── expose.go           # Public HTTPS tunnel (cloudflared/ngrok)
-│   │   ├── env.go              # Live env var management
-│   │   ├── reset.go            # Reset runner pool without destroying cluster
+│   │   ├── generate.go
+│   │   ├── secrets.go
+│   │   ├── expose.go
+│   │   ├── env.go
+│   │   ├── reset.go
 │   │   ├── deploy.go
 │   │   ├── status.go
 │   │   ├── logs.go
@@ -418,18 +396,10 @@ kindling/
 │   ├── main.go
 │   └── go.mod
 ├── config/                         # Kustomize manifests
-│   ├── crd/
-│   ├── default/
-│   ├── manager/
-│   ├── rbac/
-│   └── samples/
 ├── .github/actions/                # Reusable composite actions
 │   ├── kindling-build/action.yml
 │   └── kindling-deploy/action.yml
 ├── examples/                       # Example apps
-│   ├── sample-app/
-│   ├── microservices/
-│   └── platform-api/
 ├── docs/                           # Documentation
 ├── kind-config.yaml                # Kind cluster config
 ├── setup-ingress.sh                # Ingress + registry installer

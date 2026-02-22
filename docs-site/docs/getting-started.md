@@ -1,3 +1,9 @@
+---
+sidebar_position: 1
+title: Getting Started
+description: Set up kindling from scratch and deploy your first application with auto-provisioned dependencies.
+---
+
 # Getting Started
 
 This guide walks you through setting up kindling from scratch and
@@ -13,10 +19,12 @@ deploying your first application with auto-provisioned dependencies.
 | [Go](https://go.dev/dl/) | 1.20+ | Building the CLI from source |
 | [Make](https://www.gnu.org/software/make/) | Any | Building the CLI from source |
 
-> **Note:** Go and Make are only required if you build the CLI from source
-> (Step 2). If you install the CLI via Homebrew (`brew install kindling-sh/tap/kindling`),
-> you don't need them. The `kindling init` command pulls a pre-built operator
-> image — no local Go compilation required.
+:::note
+Go and Make are only required if you build the CLI from source
+(Step 2). If you install the CLI via Homebrew (`brew install kindling-sh/tap/kindling`),
+you don't need them. The `kindling init` command pulls a pre-built operator
+image — no local Go compilation required.
+:::
 
 Verify everything is installed:
 
@@ -97,8 +105,10 @@ Expected output:
   🎉 kindling is ready!
 ```
 
-> **Tip:** If the pull fails (e.g. air-gapped network), you can build from source:
-> `kindling init --build` (requires Go and Make).
+:::tip
+If the pull fails (e.g. air-gapped network), you can build from source:
+`kindling init --build` (requires Go and Make).
+:::
 
 Verify:
 
@@ -134,7 +144,9 @@ You should also see it listed under your repo's **Settings → Actions → Runne
 
 ## Step 5 — Create your app workflow
 
-> **⚠️ Dockerfile required:** Your app must have a working Dockerfile that builds successfully on its own (e.g. `docker build .`). The `kindling-build` action runs this Dockerfile as-is via Kaniko inside the cluster — it does **not** generate or modify Dockerfiles. If it doesn't build locally, it won't build in kindling.
+:::warning Dockerfile required
+Your app must have a working Dockerfile that builds successfully on its own (e.g. `docker build .`). The `kindling-build` action runs this Dockerfile as-is via Kaniko inside the cluster — it does **not** generate or modify Dockerfiles. If it doesn't build locally, it won't build in kindling.
+:::
 
 ### Option A: AI-generate the workflow (recommended)
 
@@ -251,7 +263,7 @@ kindling expose
 ```
 
 This starts a tunnel (cloudflared or ngrok) and prints the public URL.
-Set it as a secret and configure your OAuth provider’s callback URL.
+Set it as a secret and configure your OAuth provider's callback URL.
 
 ---
 
@@ -368,14 +380,10 @@ kindling destroy -y
 
 ## Next steps
 
-- [Secrets Management](secrets.md) — managing API keys, tokens, and
-  credentials across cluster rebuilds
-- [OAuth & Tunnels](oauth-tunnels.md) — setting up public HTTPS for
-  OAuth callbacks
-- [Dependency Reference](dependencies.md) — all 15 dependency types with
-  code examples
-- [CRD Reference](crd-reference.md) — full spec for DevStagingEnvironment
-  and GithubActionRunnerPool
+- [Secrets Management](secrets.md) — managing API keys, tokens, and credentials across cluster rebuilds
+- [OAuth & Tunnels](oauth-tunnels.md) — setting up public HTTPS for OAuth callbacks
+- [Dependency Reference](dependencies.md) — all 15 dependency types with code examples
+- [CRD Reference](crd-reference.md) — full spec for DevStagingEnvironment and GithubActionRunnerPool
 - [CLI Reference](cli.md) — all commands and flags
 - [GitHub Actions Reference](github-actions.md) — reusable action docs
 - [Architecture](architecture.md) — how it all works under the hood

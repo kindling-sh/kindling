@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/url"
 	"os"
 	"os/exec"
@@ -189,6 +190,17 @@ func runCloudflaredTunnel() error {
 		}
 		pw.Close()
 		return fmt.Errorf("could not detect public URL — try running cloudflared manually")
+	}
+
+	// Wait for DNS to propagate before declaring success.
+	step("🔍", "Waiting for DNS propagation...")
+	if !waitForDNS(publicURL, 30*time.Second) {
+		// DNS didn't propagate — kill the tunnel, it's unusable.
+		if tunnelCmd.Process != nil {
+			_ = syscall.Kill(-tunnelCmd.Process.Pid, syscall.SIGKILL)
+		}
+		pw.Close()
+		return fmt.Errorf("tunnel URL DNS did not propagate — Cloudflare may be rate-limiting. Wait a minute and try again")
 	}
 
 	// Success — save PID so we can stop it later, then let it run.
@@ -394,16 +406,20 @@ func stopTunnel() error {
 
 	step("🛑", fmt.Sprintf("Stopping %s tunnel (pid %d)...", info.Provider, info.PID))
 
-	proc, err := os.FindProcess(info.PID)
-	if err != nil {
-		return fmt.Errorf("could not find process %d: %w", info.PID, err)
-	}
+	// Kill the entire process group so child processes are cleaned up too.
+	// cloudflared may spawn helpers that hold the tunnel connection open.
+	_ = syscall.Kill(-info.PID, syscall.SIGTERM)
 
-	_ = proc.Signal(syscall.SIGTERM)
-	// Give it a moment, then force-kill.
-	time.Sleep(2 * time.Second)
+	// Wait for the process to exit, with a force-kill fallback.
+	for i := 0; i < 10; i++ {
+		time.Sleep(500 * time.Millisecond)
+		if !processAlive(info.PID) {
+			break
+		}
+	}
 	if processAlive(info.PID) {
-		_ = proc.Kill()
+		_ = syscall.Kill(-info.PID, syscall.SIGKILL)
+		time.Sleep(500 * time.Millisecond)
 	}
 
 	cleanupTunnel()
@@ -417,6 +433,26 @@ func cleanupTunnel() {
 	cwd, _ := os.Getwd()
 	_ = os.Remove(filepath.Join(cwd, ".kindling", "tunnel.yaml"))
 	_, _ = runSilent("kubectl", "delete", "configmap", "kindling-tunnel", "--ignore-not-found")
+}
+
+// waitForDNS polls until the tunnel hostname resolves in DNS.
+// Cloudflare quick tunnels need a moment for DNS propagation,
+// especially after a recent stop/start cycle (rate-limiting).
+func waitForDNS(publicURL string, maxWait time.Duration) bool {
+	hostname := publicURL
+	if u, err := url.Parse(publicURL); err == nil && u.Host != "" {
+		hostname = u.Host
+	}
+
+	deadline := time.Now().Add(maxWait)
+	for time.Now().Before(deadline) {
+		addrs, err := net.LookupHost(hostname)
+		if err == nil && len(addrs) > 0 {
+			return true
+		}
+		time.Sleep(2 * time.Second)
+	}
+	return false
 }
 
 // ── Ingress patching ──────────────────────────────────────────

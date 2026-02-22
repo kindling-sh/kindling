@@ -221,9 +221,10 @@ def main():
     candidates = []
 
     # ── Strategy 1: Search for repos with microservices topic per language ──
-    print("\n🔍 Strategy 1: Repos with 'microservices' topic...", file=sys.stderr)
+    print("\n🔍 Strategy 1: Repos with 'microservices' topic...", file=sys.stderr, flush=True)
     for lang in LANGUAGES:
-        print(f"  Searching {lang}...", file=sys.stderr)
+        print(f"  Searching {lang}...", file=sys.stderr, end="", flush=True)
+        lang_count = 0
         for page in range(1, 3):
             repos = search_repos_multi_dockerfile(token, lang, page)
             if not repos:
@@ -234,14 +235,17 @@ def main():
                     seen.add(info["full_name"])
                     info["source"] = f"microservices-{lang}"
                     candidates.append(info)
-            time.sleep(2)  # be nice to the API
+                    lang_count += 1
+            time.sleep(1)
+        print(f" +{lang_count}", file=sys.stderr, flush=True)
 
-    print(f"  Found {len(candidates)} candidates so far", file=sys.stderr)
+    print(f"  📊 {len(candidates)} candidates so far", file=sys.stderr, flush=True)
 
     # ── Strategy 2: Search for repos with docker topic per language ─────────
-    print("\n🔍 Strategy 2: Repos with 'docker' topic...", file=sys.stderr)
+    print("\n🔍 Strategy 2: Repos with 'docker' topic...", file=sys.stderr, flush=True)
     for lang in LANGUAGES[:8]:  # top 8 languages to save API calls
-        print(f"  Searching {lang}...", file=sys.stderr)
+        print(f"  Searching {lang}...", file=sys.stderr, end="", flush=True)
+        lang_count = 0
         repos = search_repos_docker_topic(token, lang, page=1)
         if repos:
             for repo in repos:
@@ -250,14 +254,17 @@ def main():
                     seen.add(info["full_name"])
                     info["source"] = f"docker-{lang}"
                     candidates.append(info)
-        time.sleep(2)
+                    lang_count += 1
+        print(f" +{lang_count}", file=sys.stderr, flush=True)
+        time.sleep(1)
 
-    print(f"  Found {len(candidates)} candidates so far", file=sys.stderr)
+    print(f"  📊 {len(candidates)} candidates so far", file=sys.stderr, flush=True)
 
     # ── Strategy 3: docker-compose + specific language queries ──────────────
-    print("\n🔍 Strategy 3: Repos mentioning docker-compose in README...", file=sys.stderr)
+    print("\n🔍 Strategy 3: Repos mentioning docker-compose in README...", file=sys.stderr, flush=True)
     for lang in LANGUAGES[:8]:
-        print(f"  Searching {lang}...", file=sys.stderr)
+        print(f"  Searching {lang}...", file=sys.stderr, end="", flush=True)
+        lang_count = 0
         repos = search_repos_with_compose_v2(token, lang, page=1)
         if repos:
             for repo in repos:
@@ -266,30 +273,38 @@ def main():
                     seen.add(info["full_name"])
                     info["source"] = f"compose-{lang}"
                     candidates.append(info)
-        time.sleep(2)
+                    lang_count += 1
+        print(f" +{lang_count}", file=sys.stderr, flush=True)
+        time.sleep(1)
 
     print(f"\n📊 Total unique candidates: {len(candidates)}", file=sys.stderr)
 
     # ── Validate: check each candidate for docker-compose with build ───────
-    print("\n🔬 Validating candidates (checking for docker-compose + Dockerfiles)...",
+    # Cap validation to avoid hanging on huge candidate lists
+    max_to_check = min(len(candidates), args.limit * 3)  # check 3x limit, then stop
+    print(f"\n🔬 Validating up to {max_to_check} candidates (checking for docker-compose + Dockerfiles)...",
           file=sys.stderr)
 
     validated = []
-    for i, c in enumerate(candidates):
+    for i, c in enumerate(candidates[:max_to_check]):
         if len(validated) >= args.limit:
+            print(f"\n  🎯 Reached target of {args.limit} validated repos, stopping early.",
+                  file=sys.stderr)
             break
 
         owner, repo = c["full_name"].split("/", 1)
-        sys.stderr.write(f"\r  [{i+1}/{len(candidates)}] Checking {c['full_name']}...")
-        sys.stderr.flush()
+        print(f"  [{i+1}/{max_to_check}] Checking {c['full_name']}...",
+              file=sys.stderr, end="", flush=True)
 
         # Check for docker-compose with build directives
         has_compose = check_repo_has_compose_with_build(token, owner, repo)
-        time.sleep(1)  # rate limit safety
+        time.sleep(0.5)  # rate limit safety
 
-        # Count Dockerfiles
-        n_dockerfiles = count_dockerfiles(token, owner, repo)
-        time.sleep(1)
+        # Only count Dockerfiles if compose check failed (save an API call)
+        n_dockerfiles = 0
+        if not has_compose:
+            n_dockerfiles = count_dockerfiles(token, owner, repo)
+            time.sleep(0.5)
 
         c["has_compose_build"] = has_compose
         c["dockerfile_count"] = n_dockerfiles
@@ -301,10 +316,9 @@ def main():
         else:
             status = "⏭️ "
 
-        sys.stderr.write(
-            f"\r  [{i+1}/{len(candidates)}] {status} {c['full_name']}"
-            f" — compose_build={has_compose}, dockerfiles={n_dockerfiles}"
-            f"                    \n"
+        print(
+            f" {status} compose_build={has_compose}, dockerfiles={n_dockerfiles}",
+            file=sys.stderr, flush=True
         )
 
     print(f"\n✅ Validated: {len(validated)} repos", file=sys.stderr)

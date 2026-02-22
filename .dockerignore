@@ -1,0 +1,48 @@
+# Git
+.git
+.gitignore
+
+# CLI (separate module, not needed for operator build)
+cli/
+bin/
+
+# Documentation
+docs/
+docs-site/
+
+# Examples
+examples/
+
+# Local state
+.kindling/
+
+# CI/CD
+.github/
+
+# Homebrew
+homebrew-tap/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Test artifacts
+test/
+hack/
+
+# Assets
+assets/
+
+# Config files not needed in build
+kind-config.yaml
+setup-ingress.sh
+Makefile
+LICENSE
+README.md
+CONTEXT.md
+TODO.md
+GOVERNANCE.md
+MAINTAINERS.md
+PROJECT

@@ -120,6 +120,7 @@ func runSecretsSet(cmd *cobra.Command, args []string) error {
 	err := run("kubectl", "create", "secret", "generic", k8sName,
 		"-n", secretsNamespace,
 		"--from-literal="+name+"="+value,
+		"--from-literal=value="+value,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create K8s secret: %w", err)

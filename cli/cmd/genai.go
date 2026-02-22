@@ -28,10 +28,11 @@ func callGenAI(provider, apiKey, model, systemPrompt, userPrompt string) (string
 // ────────────────────────────────────────────────────────────────────────────
 
 type openAIRequest struct {
-	Model       string          `json:"model"`
-	Messages    []openAIMessage `json:"messages"`
-	Temperature float64         `json:"temperature"`
-	MaxTokens   int             `json:"max_tokens,omitempty"`
+	Model               string          `json:"model"`
+	Messages            []openAIMessage `json:"messages"`
+	Temperature         *float64        `json:"temperature,omitempty"`
+	MaxTokens           int             `json:"max_tokens,omitempty"`
+	MaxCompletionTokens int             `json:"max_completion_tokens,omitempty"`
 }
 
 type openAIMessage struct {
@@ -50,15 +51,37 @@ type openAIResponse struct {
 	} `json:"error,omitempty"`
 }
 
+// isReasoningModel returns true for OpenAI o-series reasoning models
+// which require different API parameters.
+func isReasoningModel(model string) bool {
+	return strings.HasPrefix(model, "o1") || strings.HasPrefix(model, "o3")
+}
+
 func callOpenAI(apiKey, model, systemPrompt, userPrompt string) (string, error) {
-	reqBody := openAIRequest{
-		Model: model,
-		Messages: []openAIMessage{
-			{Role: "system", Content: systemPrompt},
-			{Role: "user", Content: userPrompt},
-		},
-		Temperature: 0.2,
-		MaxTokens:   8192,
+	var reqBody openAIRequest
+
+	if isReasoningModel(model) {
+		// Reasoning models: use "developer" role, max_completion_tokens,
+		// and no temperature parameter.
+		reqBody = openAIRequest{
+			Model: model,
+			Messages: []openAIMessage{
+				{Role: "developer", Content: systemPrompt},
+				{Role: "user", Content: userPrompt},
+			},
+			MaxCompletionTokens: 32768,
+		}
+	} else {
+		temp := 0.2
+		reqBody = openAIRequest{
+			Model: model,
+			Messages: []openAIMessage{
+				{Role: "system", Content: systemPrompt},
+				{Role: "user", Content: userPrompt},
+			},
+			Temperature: &temp,
+			MaxTokens:   8192,
+		}
 	}
 
 	body, err := json.Marshal(reqBody)
@@ -73,7 +96,12 @@ func callOpenAI(apiKey, model, systemPrompt, userPrompt string) (string, error) 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 
-	client := &http.Client{Timeout: 120 * time.Second}
+	// Reasoning models can take longer to think.
+	timeout := 120 * time.Second
+	if isReasoningModel(model) {
+		timeout = 300 * time.Second
+	}
+	client := &http.Client{Timeout: timeout}
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("API request failed: %w", err)

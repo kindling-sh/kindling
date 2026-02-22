@@ -1,3 +1,9 @@
+---
+sidebar_position: 7
+title: Secrets Management
+description: Managing API keys, tokens, and credentials across cluster rebuilds.
+---
+
 # Secrets Management
 
 `kindling secrets` manages external credentials — API keys, tokens, DSNs,
@@ -115,23 +121,12 @@ When credentials are detected, you'll see:
 The AI wires detected credentials using `secretKeyRef`:
 
 ```yaml
-- name: Deploy
-  uses: kindling-sh/kindling/.github/actions/kindling-deploy@main
-  with:
-    name: "${{ github.actor }}-myapp"
-    image: "${{ env.REGISTRY }}/myapp:${{ env.TAG }}"
-    port: "8080"
-    env: |
-      # Requires: kindling secrets set STRIPE_KEY <value>
-      STRIPE_KEY:
-        secretKeyRef:
-          name: kindling-secret-stripe-key
-          key: value
-      # Requires: kindling secrets set OPENAI_API_KEY <value>
-      OPENAI_API_KEY:
-        secretKeyRef:
-          name: kindling-secret-openai-api-key
-          key: value
+env: |
+  # Requires: kindling secrets set STRIPE_KEY <value>
+  STRIPE_KEY:
+    secretKeyRef:
+      name: kindling-secret-stripe-key
+      key: value
 ```
 
 ---
@@ -160,8 +155,6 @@ Creates or updates a K8s Secret and writes to the local backup.
 ```bash
 kindling secrets set STRIPE_KEY sk_live_abc123
 ```
-
-If the secret already exists, it's replaced (kubectl `--dry-run=client -o yaml | kubectl apply -f -`).
 
 ### `kindling secrets list`
 
@@ -197,15 +190,3 @@ kindling secrets restore
 
 Use this after `kindling destroy` + `kindling init` to restore all
 credentials without re-entering them.
-
----
-
-## Security considerations
-
-- **Values are never printed** — `kindling secrets list` shows names only
-- **Local backup is base64-encoded**, not encrypted — protect the file
-  with OS-level permissions (it's auto-gitignored to prevent commits)
-- **K8s Secrets are base64-encoded** in etcd, which is standard for Kind
-  clusters (not a production deployment target)
-- For production secret management, use a proper secrets manager (Vault,
-  AWS Secrets Manager, etc.) — kindling secrets are for local dev only
