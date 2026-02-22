@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -98,6 +99,24 @@ func runDashboard(cmd *cobra.Command, args []string) error {
 	})
 
 	addr := fmt.Sprintf(":%d", dashboardPort)
+
+	// Kill any stale dashboard process still bound to the port.
+	if pid := findProcessOnPort(dashboardPort); pid > 0 {
+		fmt.Fprintf(os.Stderr, "  ⚠️  Port %d in use by pid %d — stopping stale dashboard...\n", dashboardPort, pid)
+		_ = syscall.Kill(pid, syscall.SIGTERM)
+		// Give it a moment to release the port.
+		for i := 0; i < 10; i++ {
+			time.Sleep(300 * time.Millisecond)
+			if findProcessOnPort(dashboardPort) == 0 {
+				break
+			}
+		}
+		if p := findProcessOnPort(dashboardPort); p > 0 {
+			_ = syscall.Kill(p, syscall.SIGKILL)
+			time.Sleep(300 * time.Millisecond)
+		}
+	}
+
 	server := &http.Server{
 		Addr:         addr,
 		Handler:      mux,
@@ -144,4 +163,20 @@ func jsonError(w http.ResponseWriter, msg string, code int) {
 func kubectlJSON(args ...string) (string, error) {
 	fullArgs := append([]string{"--context", "kind-" + clusterName}, args...)
 	return runCapture("kubectl", fullArgs...)
+}
+
+// findProcessOnPort uses lsof to find the PID listening on a TCP port.
+// Returns 0 if nothing is bound.
+func findProcessOnPort(port int) int {
+	out, err := runCapture("lsof", "-ti", fmt.Sprintf("tcp:%d", port))
+	if err != nil || strings.TrimSpace(out) == "" {
+		return 0
+	}
+	// lsof may return multiple PIDs (one per line) — take the first.
+	line := strings.TrimSpace(strings.Split(out, "\n")[0])
+	pid, err := strconv.Atoi(line)
+	if err != nil {
+		return 0
+	}
+	return pid
 }

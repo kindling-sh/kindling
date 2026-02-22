@@ -430,9 +430,10 @@ func handleExposeAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Poll stderr for the tunnel URL.
+	// Poll stderr for the tunnel URL — cap at 15s so the HTTP response
+	// doesn't time out in the browser.
 	var publicURL string
-	for i := 0; i < 30; i++ {
+	for i := 0; i < 15; i++ {
 		time.Sleep(1 * time.Second)
 		mu.Lock()
 		data := stderrBuf.String()
@@ -461,20 +462,8 @@ func handleExposeAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Wait for DNS to propagate before declaring success.
-	// Cloudflare rate-limits quick tunnel creation; without this check
-	// the URL may not resolve, especially after a stop/start cycle.
-	if !waitForDNS(publicURL, 30*time.Second) {
-		// DNS didn't propagate — kill the tunnel, it's unusable.
-		if tunnelCmd.Process != nil {
-			_ = syscall.Kill(-tunnelCmd.Process.Pid, syscall.SIGKILL)
-		}
-		pw.Close()
-		actionErr(w, "Tunnel started but DNS did not propagate — Cloudflare may be rate-limiting quick tunnels. Wait a minute and try again.", http.StatusServiceUnavailable)
-		return
-	}
-
-	// Use the same persistence as the CLI.
+	// Persist immediately and respond — the frontend polls /api/expose/status
+	// for liveness, so we don't need to block on DNS propagation here.
 	saveTunnelInfo(publicURL, "cloudflared", tunnelCmd.Process.Pid)
 	patchIngressesForTunnel(publicURL)
 
@@ -503,8 +492,9 @@ func handleUnexpose(w http.ResponseWriter, r *http.Request) {
 
 func handleExposeStatus(w http.ResponseWriter, r *http.Request) {
 	type status struct {
-		Running bool   `json:"running"`
-		URL     string `json:"url,omitempty"`
+		Running  bool   `json:"running"`
+		URL      string `json:"url,omitempty"`
+		DNSReady bool   `json:"dns_ready"`
 	}
 
 	info, err := readTunnelInfo()
@@ -520,7 +510,11 @@ func handleExposeStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	jsonResponse(w, status{Running: true, URL: info.URL})
+	// Quick DNS check via public resolver so we don't tell the browser
+	// to visit a URL that will NXDOMAIN (and get cached).
+	dnsOK := checkDNSOnce(info.URL)
+
+	jsonResponse(w, status{Running: true, URL: info.URL, DNSReady: dnsOK})
 }
 
 // ── DELETE /api/cluster ─────────────────────────────────────────

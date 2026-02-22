@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -192,21 +193,19 @@ func runCloudflaredTunnel() error {
 		return fmt.Errorf("could not detect public URL — try running cloudflared manually")
 	}
 
-	// Wait for DNS to propagate before declaring success.
+	// Wait for DNS to propagate. This is best-effort — the tunnel is
+	// already functional; DNS just may not have reached public resolvers yet.
 	step("🔍", "Waiting for DNS propagation...")
-	if !waitForDNS(publicURL, 30*time.Second) {
-		// DNS didn't propagate — kill the tunnel, it's unusable.
-		if tunnelCmd.Process != nil {
-			_ = syscall.Kill(-tunnelCmd.Process.Pid, syscall.SIGKILL)
-		}
-		pw.Close()
-		return fmt.Errorf("tunnel URL DNS did not propagate — Cloudflare may be rate-limiting. Wait a minute and try again")
-	}
+	dnsOK := waitForDNS(publicURL, 30*time.Second)
 
-	// Success — save PID so we can stop it later, then let it run.
+	// Save PID so we can stop it later, then let it run.
 	saveTunnelInfo(publicURL, "cloudflared", tunnelCmd.Process.Pid)
 	patchIngressesForTunnel(publicURL)
 	printTunnelRunning(publicURL, tunnelCmd.Process.Pid)
+
+	if !dnsOK {
+		fmt.Printf("  %s⚠  DNS hasn't propagated yet — the tunnel is running but may take a moment to become reachable.%s\n\n", colorYellow, colorReset)
+	}
 
 	// Release the child — we don't wait on it; it runs in the background.
 	go func() {
@@ -436,23 +435,77 @@ func cleanupTunnel() {
 }
 
 // waitForDNS polls until the tunnel hostname resolves in DNS.
-// Cloudflare quick tunnels need a moment for DNS propagation,
-// especially after a recent stop/start cycle (rate-limiting).
+// Cloudflare quick tunnels need a moment for DNS propagation —
+// the URL appears in cloudflared's output BEFORE the DNS record
+// is created, so we:
+//  1. Wait a few seconds before the first lookup (avoid caching NXDOMAIN)
+//  2. Use a custom resolver (1.1.1.1 / 8.8.8.8) to bypass local negative caching
+//  3. Set a per-lookup timeout so a single slow lookup can't eat the entire budget
 func waitForDNS(publicURL string, maxWait time.Duration) bool {
 	hostname := publicURL
 	if u, err := url.Parse(publicURL); err == nil && u.Host != "" {
 		hostname = u.Host
 	}
 
+	// Give cloudflared time to register the tunnel before we start querying.
+	time.Sleep(3 * time.Second)
+
+	// Use Cloudflare + Google public DNS to avoid local NXDOMAIN caching.
+	resolver := &net.Resolver{
+		PreferGo: true,
+		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+			d := net.Dialer{Timeout: 3 * time.Second}
+			// Alternate between 1.1.1.1 and 8.8.8.8
+			for _, server := range []string{"1.1.1.1:53", "8.8.8.8:53"} {
+				conn, err := d.DialContext(ctx, "udp", server)
+				if err == nil {
+					return conn, nil
+				}
+			}
+			return d.DialContext(ctx, network, address)
+		},
+	}
+
 	deadline := time.Now().Add(maxWait)
 	for time.Now().Before(deadline) {
-		addrs, err := net.LookupHost(hostname)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		addrs, err := resolver.LookupHost(ctx, hostname)
+		cancel()
 		if err == nil && len(addrs) > 0 {
 			return true
 		}
 		time.Sleep(2 * time.Second)
 	}
 	return false
+}
+
+// checkDNSOnce does a single DNS lookup via public resolvers (1.1.1.1 / 8.8.8.8)
+// to see if the tunnel hostname resolves yet. Used by the dashboard status endpoint
+// so we don't send the browser to an NXDOMAIN that gets cached.
+func checkDNSOnce(publicURL string) bool {
+	hostname := publicURL
+	if u, err := url.Parse(publicURL); err == nil && u.Host != "" {
+		hostname = u.Host
+	}
+
+	resolver := &net.Resolver{
+		PreferGo: true,
+		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+			d := net.Dialer{Timeout: 2 * time.Second}
+			for _, server := range []string{"1.1.1.1:53", "8.8.8.8:53"} {
+				conn, err := d.DialContext(ctx, "udp", server)
+				if err == nil {
+					return conn, nil
+				}
+			}
+			return d.DialContext(ctx, network, address)
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	addrs, err := resolver.LookupHost(ctx, hostname)
+	return err == nil && len(addrs) > 0
 }
 
 // ── Ingress patching ──────────────────────────────────────────

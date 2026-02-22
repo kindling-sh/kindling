@@ -289,7 +289,7 @@ function AppSidebar({ activePage, setActivePage }: { activePage: Page; setActive
   const [initResult, setInitResult] = useState<ActionResult | null>(null);
 
   // ── expose / tunnel ───────────────────────────────
-  const [tunnelStatus, setTunnelStatus] = useState<{ running: boolean; url?: string } | null>(null);
+  const [tunnelStatus, setTunnelStatus] = useState<{ running: boolean; url?: string; dns_ready?: boolean } | null>(null);
   useEffect(() => {
     fetchExposeStatus().then(setTunnelStatus).catch(() => {});
     const interval = setInterval(() => {
@@ -453,14 +453,22 @@ function AppSidebar({ activePage, setActivePage }: { activePage: Page; setActive
 
       <div className="sidebar-footer">
         {tunnelStatus?.running && tunnelStatus.url && (
-          <div className="tunnel-widget">
+          <div className="tunnel-widget" style={!tunnelStatus.dns_ready ? { background: 'var(--amber-muted, rgba(255,193,7,0.08))', borderColor: 'color-mix(in srgb, var(--amber, #ffc107) 25%, transparent)' } : undefined}>
             <div className="tunnel-widget-header">
-              <span className="tunnel-pulse" />
-              <span className="tunnel-widget-label">Tunnel Active</span>
+              <span className={tunnelStatus.dns_ready ? 'tunnel-pulse' : 'tunnel-pulse tunnel-pulse-amber'} />
+              <span className="tunnel-widget-label" style={!tunnelStatus.dns_ready ? { color: 'var(--amber, #ffc107)' } : undefined}>
+                {tunnelStatus.dns_ready ? 'Tunnel Active' : 'DNS Propagating…'}
+              </span>
             </div>
-            <a href={tunnelStatus.url} target="_blank" rel="noopener" className="tunnel-widget-url">
-              {tunnelStatus.url.replace('https://', '')}
-            </a>
+            {tunnelStatus.dns_ready ? (
+              <a href={tunnelStatus.url} target="_blank" rel="noopener" className="tunnel-widget-url">
+                {tunnelStatus.url.replace('https://', '')}
+              </a>
+            ) : (
+              <span className="tunnel-widget-url" style={{ opacity: 0.6, cursor: 'default' }}>
+                {tunnelStatus.url.replace('https://', '')}
+              </span>
+            )}
             <div style={{ display: 'flex', gap: 6 }}>
               <button
                 className="tunnel-copy-btn"

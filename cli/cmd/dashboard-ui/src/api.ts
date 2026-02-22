@@ -68,7 +68,7 @@ export async function fetchEnvVars(namespace: string, deployment: string): Promi
   return apiFetch(`/api/env/list/${namespace}/${deployment}`);
 }
 
-export async function fetchExposeStatus(): Promise<{ running: boolean; url?: string }> {
+export async function fetchExposeStatus(): Promise<{ running: boolean; url?: string; dns_ready?: boolean }> {
   return apiFetch('/api/expose/status');
 }
 
