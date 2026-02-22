@@ -131,6 +131,10 @@ jobs:
             "${{ inputs.provider || 'openai' }}" \
             >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Generate action items
+        if: always()
+        run: python3 test/fuzz/summarize.py /tmp/fuzz-results --action-items
+
       - name: Upload results
         if: always()
         uses: actions/upload-artifact@v4
