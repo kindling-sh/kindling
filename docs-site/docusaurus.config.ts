@@ -7,8 +7,8 @@ const config: Config = {
   tagline: "Push code. Your laptop builds it. Your laptop runs it.",
   favicon: "img/favicon.svg",
 
-  url: "https://kindling-sh.github.io",
-  baseUrl: "/kindling/",
+  url: "https://kindling.sh",
+  baseUrl: "/",
 
   organizationName: "kindling-sh",
   projectName: "kindling",
