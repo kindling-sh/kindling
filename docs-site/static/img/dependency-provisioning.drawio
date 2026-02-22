@@ -1,0 +1,95 @@
+<mxfile host="app.diagrams.net" modified="2026-02-21" agent="kindling-docs" version="24.0">
+  <diagram id="dep-flow" name="Dependency Provisioning">
+    <mxGraphModel dx="1100" dy="600" grid="0" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1100" pageHeight="700" math="0" shadow="0" sketch="1">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <!-- DSE CR -->
+        <mxCell id="cr" value="DevStagingEnvironment CR" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#1a1a2e;fontColor=#ff6b35;strokeColor=#ff6b35;fontSize=13;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="60" y="250" width="220" height="50" as="geometry" />
+        </mxCell>
+
+        <!-- CR contents -->
+        <mxCell id="crspec" value="dependencies:&#xa;  - type: postgres&#xa;    version: &quot;16&quot;&#xa;  - type: redis&#xa;  - type: rabbitmq" style="text;html=1;fillColor=#12121e;fontColor=#c8c0d8;fontSize=11;fontFamily=monospace;align=left;verticalAlign=top;spacingLeft=8;spacingTop=4;rounded=1;strokeColor=rgba(255,255,255,0.08);" vertex="1" parent="1">
+          <mxGeometry x="60" y="320" width="220" height="90" as="geometry" />
+        </mxCell>
+
+        <!-- Operator -->
+        <mxCell id="op" value="🎛️ Operator" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#6e40c9;fontColor=#ffffff;strokeColor=#6e40c9;fontSize=13;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="400" y="250" width="140" height="50" as="geometry" />
+        </mxCell>
+
+        <!-- Arrow CR → Operator -->
+        <mxCell id="e1" style="strokeColor=#8a8298;strokeWidth=2;" edge="1" source="cr" target="op" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e1l" value="reconcile" style="edgeLabel;html=1;fontColor=#8a8298;fontSize=10;" vertex="1" connectable="0" parent="e1">
+          <mxGeometry relative="1" as="geometry"><mxPoint as="offset" /></mxGeometry>
+        </mxCell>
+
+        <!-- For each dependency label -->
+        <mxCell id="foreach" value="For each dependency:" style="text;html=1;fontColor=#b0a8c0;fontSize=12;fontStyle=3;" vertex="1" parent="1">
+          <mxGeometry x="620" y="140" width="180" height="30" as="geometry" />
+        </mxCell>
+
+        <!-- 1. Deployment -->
+        <mxCell id="dep" value="📦 Deployment&#xa;(e.g. postgres:16)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#1a1a2e;fontColor=#e0e0e0;strokeColor=#326CE5;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="640" y="180" width="180" height="50" as="geometry" />
+        </mxCell>
+
+        <!-- 2. Service -->
+        <mxCell id="dsvc" value="🔶 ClusterIP Service&#xa;(myapp-postgres:5432)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#1a1a2e;fontColor=#e0e0e0;strokeColor=#f0883e;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="640" y="250" width="180" height="50" as="geometry" />
+        </mxCell>
+
+        <!-- 3. Secret -->
+        <mxCell id="dsec" value="🔐 Secret&#xa;(myapp-postgres-creds)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#1a1a2e;fontColor=#e0e0e0;strokeColor=#6e40c9;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="640" y="320" width="180" height="50" as="geometry" />
+        </mxCell>
+
+        <!-- 4. Env injection -->
+        <mxCell id="envbox" value="💉 Env Injection&#xa;DATABASE_URL=postgres://..." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#1a1a2e;fontColor=#ffad60;strokeColor=#ff6b35;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="640" y="390" width="200" height="50" as="geometry" />
+        </mxCell>
+
+        <!-- App container -->
+        <mxCell id="appbox" value="🔷 App Container&#xa;(reads DATABASE_URL)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#1a1a2e;fontColor=#e0e0e0;strokeColor=#2ea043;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="640" y="470" width="200" height="50" as="geometry" />
+        </mxCell>
+
+        <!-- Arrows from operator -->
+        <mxCell id="e2" style="strokeColor=#6e40c9;strokeWidth=2;" edge="1" source="op" target="dep" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e3" style="strokeColor=#6e40c9;strokeWidth=2;" edge="1" source="op" target="dsvc" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e4" style="strokeColor=#6e40c9;strokeWidth=2;" edge="1" source="op" target="dsec" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e5" style="strokeColor=#ff6b35;strokeWidth=2;dashed=1;" edge="1" source="dsec" target="envbox" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e6" style="strokeColor=#2ea043;strokeWidth=2;dashed=1;" edge="1" source="envbox" target="appbox" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Numbers -->
+        <mxCell id="n1" value="①" style="text;html=1;fontColor=#326CE5;fontSize=16;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="615" y="185" width="25" height="25" as="geometry" />
+        </mxCell>
+        <mxCell id="n2" value="②" style="text;html=1;fontColor=#f0883e;fontSize=16;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="615" y="255" width="25" height="25" as="geometry" />
+        </mxCell>
+        <mxCell id="n3" value="③" style="text;html=1;fontColor=#6e40c9;fontSize=16;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="615" y="325" width="25" height="25" as="geometry" />
+        </mxCell>
+        <mxCell id="n4" value="④" style="text;html=1;fontColor=#ff6b35;fontSize=16;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="615" y="395" width="25" height="25" as="geometry" />
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

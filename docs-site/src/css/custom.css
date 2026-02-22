@@ -29,7 +29,7 @@
   --ifm-code-background: rgba(255, 107, 53, 0.08);
   --ifm-toc-border-color: rgba(255, 255, 255, 0.06);
   --ifm-hr-border-color: rgba(255, 255, 255, 0.08);
-  --docusaurus-highlighted-code-line-bg: rgba(255, 107, 53, 0.12);
+  --docusaurus-highlighted-code-line-bg: rgba(255, 107, 53, 0.06);
 }
 
 [data-theme="dark"] .navbar {

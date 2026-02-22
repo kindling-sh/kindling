@@ -1,7 +1,7 @@
 .hero {
   position: relative;
   overflow: hidden;
-  padding: 6rem 2rem 4rem;
+  padding: 3rem 2rem 4rem;
   background: linear-gradient(
     135deg,
     #0f0f1a 0%,
@@ -9,7 +9,7 @@
     #1f0f20 60%,
     #0f0f1a 100%
   );
-  min-height: 90vh;
+  min-height: 80vh;
   display: flex;
   align-items: center;
 }
@@ -164,18 +164,18 @@
   font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
   font-size: 0.8rem;
   line-height: 1.7;
-  color: #c8c0d8;
+  color: #9a94a8;
   white-space: pre;
   overflow-x: auto;
 }
 
 .termPrompt {
-  color: #ff6b35;
+  color: #cc5528;
   font-weight: 700;
 }
 
 .termDim {
-  color: #6a6280;
+  color: #5a5470;
 }
 
 /* Features */
@@ -414,7 +414,7 @@
 
 @media (max-width: 640px) {
   .hero {
-    padding: 3rem 1rem 2rem;
+    padding: 2rem 1rem 2rem;
     min-height: auto;
   }
 

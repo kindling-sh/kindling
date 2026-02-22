@@ -4,8 +4,8 @@ const sidebars: SidebarsConfig = {
   docsSidebar: [
     {
       type: "doc",
-      id: "getting-started",
-      label: "Getting Started",
+      id: "quickstart",
+      label: "Quickstart",
     },
     {
       type: "doc",
@@ -13,34 +13,27 @@ const sidebars: SidebarsConfig = {
       label: "CLI Reference",
     },
     {
-      type: "doc",
-      id: "architecture",
-      label: "Architecture",
+      type: "category",
+      label: "Guides",
+      collapsed: false,
+      items: [
+        "guides/manual-deploy",
+        "guides/manual-workflow",
+        "guides/docker-resources",
+      ],
     },
     {
-      type: "doc",
-      id: "github-actions",
-      label: "GitHub Actions",
-    },
-    {
-      type: "doc",
-      id: "dependencies",
-      label: "Dependencies",
-    },
-    {
-      type: "doc",
-      id: "crd-reference",
-      label: "CRD Reference",
-    },
-    {
-      type: "doc",
-      id: "secrets",
-      label: "Secrets Management",
-    },
-    {
-      type: "doc",
-      id: "oauth-tunnels",
-      label: "OAuth & Tunnels",
+      type: "category",
+      label: "Reference",
+      collapsed: false,
+      items: [
+        "architecture",
+        "github-actions",
+        "dependencies",
+        "crd-reference",
+        "secrets",
+        "oauth-tunnels",
+      ],
     },
   ],
 };

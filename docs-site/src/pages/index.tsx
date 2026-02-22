@@ -24,7 +24,7 @@ function HeroSection() {
           <div className={styles.heroButtons}>
             <Link
               className={clsx("button button--lg", styles.heroPrimary)}
-              to="/docs/getting-started"
+              to="/docs/quickstart"
             >
               Get Started →
             </Link>
@@ -283,7 +283,7 @@ curl http://<user>-<app>.localhost`}
             <div style={{ marginTop: "2rem" }}>
               <Link
                 className={clsx("button button--lg", styles.heroPrimary)}
-                to="/docs/getting-started"
+                to="/docs/quickstart"
               >
                 Read the full guide →
               </Link>

@@ -1,0 +1,153 @@
+<mxfile host="app.diagrams.net" modified="2026-02-21" agent="kindling-docs" version="24.0">
+  <diagram id="arch-overview" name="Architecture Overview">
+    <mxGraphModel dx="1422" dy="762" grid="0" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1400" pageHeight="900" math="0" shadow="0" sketch="1">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <!-- Developer -->
+        <mxCell id="dev" value="👩‍💻 Developer" style="shape=ellipse;whiteSpace=wrap;html=1;fillColor=#6e40c9;fontColor=#ffffff;strokeColor=#6e40c9;fontSize=14;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="40" y="350" width="120" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- GitHub -->
+        <mxCell id="gh" value="🐙 GitHub" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#333333;fontColor=#ffffff;strokeColor=#ffffff;fontSize=13;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="240" y="100" width="120" height="50" as="geometry" />
+        </mxCell>
+
+        <!-- Laptop container -->
+        <mxCell id="laptop" value="💻 Developer Laptop" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#7a7490;fontSize=14;fontStyle=1;fontColor=#b0a8c0;verticalAlign=top;dashed=1;dashPattern=8 4;" vertex="1" parent="1">
+          <mxGeometry x="220" y="200" width="1100" height="650" as="geometry" />
+        </mxCell>
+
+        <!-- Kind Cluster -->
+        <mxCell id="kind" value="⎈ Kind Cluster (dev)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#326CE5;fontSize=13;fontStyle=1;fontColor=#326CE5;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="250" y="240" width="1040" height="580" as="geometry" />
+        </mxCell>
+
+        <!-- kindling-system namespace -->
+        <mxCell id="ns-system" value="kindling-system" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#6e40c9;fontSize=11;fontColor=#6e40c9;verticalAlign=top;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="280" y="280" width="200" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="operator" value="🎛️ Operator&#xa;controller-manager" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#6e40c9;fontColor=#ffffff;strokeColor=#6e40c9;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="300" y="310" width="160" height="50" as="geometry" />
+        </mxCell>
+
+        <!-- default namespace -->
+        <mxCell id="ns-default" value="default namespace" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#2ea043;fontSize=11;fontColor=#2ea043;verticalAlign=top;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="520" y="280" width="740" height="360" as="geometry" />
+        </mxCell>
+
+        <!-- Runner Pod -->
+        <mxCell id="runner" value="🏃 Runner Pod" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#2ea043;fontColor=#ffffff;strokeColor=#2ea043;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="550" y="320" width="130" height="45" as="geometry" />
+        </mxCell>
+
+        <!-- Kaniko Sidecar -->
+        <mxCell id="kaniko" value="📦 Kaniko&#xa;build-agent" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#326CE5;fontColor=#ffffff;strokeColor=#326CE5;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="550" y="390" width="130" height="45" as="geometry" />
+        </mxCell>
+
+        <!-- Registry -->
+        <mxCell id="registry" value="🗄️ Registry&#xa;registry:5000" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f0883e;fontColor=#ffffff;strokeColor=#f0883e;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="550" y="460" width="130" height="45" as="geometry" />
+        </mxCell>
+
+        <!-- DSE box -->
+        <mxCell id="dse" value="DevStagingEnvironment" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#ff6b35;fontSize=11;fontColor=#ff6b35;verticalAlign=top;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="750" y="310" width="480" height="310" as="geometry" />
+        </mxCell>
+
+        <!-- App Deployment -->
+        <mxCell id="app" value="🔷 App Deployment" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#1a1a2e;fontColor=#e0e0e0;strokeColor=#326CE5;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="780" y="350" width="150" height="40" as="geometry" />
+        </mxCell>
+
+        <!-- Service -->
+        <mxCell id="svc" value="🔶 Service" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#1a1a2e;fontColor=#e0e0e0;strokeColor=#f0883e;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="780" y="410" width="150" height="40" as="geometry" />
+        </mxCell>
+
+        <!-- Ingress -->
+        <mxCell id="ing" value="🌐 Ingress" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#1a1a2e;fontColor=#e0e0e0;strokeColor=#ff6b35;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="780" y="470" width="150" height="40" as="geometry" />
+        </mxCell>
+
+        <!-- Postgres -->
+        <mxCell id="pg" value="🐘 Postgres" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#1a1a2e;fontColor=#e0e0e0;strokeColor=#326CE5;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1000" y="350" width="120" height="40" as="geometry" />
+        </mxCell>
+
+        <!-- Redis -->
+        <mxCell id="rd" value="⚡ Redis" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#1a1a2e;fontColor=#e0e0e0;strokeColor=#DC382D;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1000" y="410" width="120" height="40" as="geometry" />
+        </mxCell>
+
+        <!-- Env vars -->
+        <mxCell id="envvars" value="DATABASE_URL ↗&#xa;REDIS_URL ↗" style="text;html=1;fillColor=none;fontColor=#ffad60;fontSize=10;fontStyle=2;align=left;" vertex="1" parent="1">
+          <mxGeometry x="1000" y="470" width="140" height="40" as="geometry" />
+        </mxCell>
+
+        <!-- ingress-nginx -->
+        <mxCell id="ingctrl" value="🔶 ingress-nginx" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FF6B35;fontColor=#ffffff;strokeColor=#FF6B35;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="280" y="680" width="160" height="45" as="geometry" />
+        </mxCell>
+
+        <!-- Edges -->
+        <mxCell id="e1" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#8a8298;fontColor=#8a8298;fontSize=10;" edge="1" source="dev" target="gh" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e1l" value="git push" style="edgeLabel;html=1;fontColor=#8a8298;fontSize=10;" vertex="1" connectable="0" parent="e1">
+          <mxGeometry x="-0.2" relative="1" as="geometry"><mxPoint as="offset" /></mxGeometry>
+        </mxCell>
+
+        <mxCell id="e2" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#8a8298;fontColor=#8a8298;fontSize=10;" edge="1" source="gh" target="runner" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e2l" value="dispatch job" style="edgeLabel;html=1;fontColor=#8a8298;fontSize=10;" vertex="1" connectable="0" parent="e2">
+          <mxGeometry relative="1" as="geometry"><mxPoint as="offset" /></mxGeometry>
+        </mxCell>
+
+        <mxCell id="e3" style="strokeColor=#8a8298;" edge="1" source="runner" target="kaniko" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e3l" value="signal files" style="edgeLabel;html=1;fontColor=#8a8298;fontSize=10;" vertex="1" connectable="0" parent="e3">
+          <mxGeometry relative="1" as="geometry"><mxPoint as="offset" /></mxGeometry>
+        </mxCell>
+
+        <mxCell id="e4" style="strokeColor=#8a8298;" edge="1" source="kaniko" target="registry" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e4l" value="push image" style="edgeLabel;html=1;fontColor=#8a8298;fontSize=10;" vertex="1" connectable="0" parent="e4">
+          <mxGeometry relative="1" as="geometry"><mxPoint as="offset" /></mxGeometry>
+        </mxCell>
+
+        <mxCell id="e5" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#6e40c9;" edge="1" source="operator" target="app" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e5l" value="creates" style="edgeLabel;html=1;fontColor=#6e40c9;fontSize=10;" vertex="1" connectable="0" parent="e5">
+          <mxGeometry relative="1" as="geometry"><mxPoint as="offset" /></mxGeometry>
+        </mxCell>
+
+        <mxCell id="e6" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#6e40c9;" edge="1" source="operator" target="pg" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e6l" value="provisions" style="edgeLabel;html=1;fontColor=#6e40c9;fontSize=10;" vertex="1" connectable="0" parent="e6">
+          <mxGeometry relative="1" as="geometry"><mxPoint as="offset" /></mxGeometry>
+        </mxCell>
+
+        <mxCell id="e7" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#ff6b35;" edge="1" source="dev" target="ingctrl" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e7l" value="http://app.localhost" style="edgeLabel;html=1;fontColor=#ff6b35;fontSize=10;" vertex="1" connectable="0" parent="e7">
+          <mxGeometry relative="1" as="geometry"><mxPoint as="offset" /></mxGeometry>
+        </mxCell>
+
+        <mxCell id="e8" style="strokeColor=#ff6b35;" edge="1" source="ingctrl" target="svc" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

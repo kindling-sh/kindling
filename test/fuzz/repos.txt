@@ -1,60 +1,23 @@
 # ─────────────────────────────────────────────────────────────────
-# repos.txt — Curated list of repos for kindling generate fuzz testing
-#
-# Format: <github-url>
-# Lines starting with # are comments. Blank lines are skipped.
+# repos.txt — Curated repos for kindling generate fuzz testing
 #
 # Selection criteria:
-#   - Has a Dockerfile (buildable)
-#   - Mix of single-service and multi-service
-#   - Diverse languages/frameworks
-#   - Varying complexity (simple → production-grade)
+#   - Has Dockerfile(s) + docker-compose.yml with build: directives
+#   - Is a real application, not a framework/library
+#   - Mix of languages, service counts, and complexity
 # ─────────────────────────────────────────────────────────────────
 
-# ── Go ───────────────────────────────────────────────────────────
-https://github.com/gin-gonic/examples
-https://github.com/gofiber/recipes
-https://github.com/gorilla/mux
-https://github.com/labstack/echox
+# Go multi-service: backend, cache, database, server (4 Dockerfiles + compose)
+https://github.com/ebosas/microservices
 
-# ── Python ───────────────────────────────────────────────────────
-https://github.com/tiangolo/full-stack-fastapi-template
-https://github.com/cookiecutter/cookiecutter-django
-https://github.com/saleor/saleor
-https://github.com/paperless-ngx/paperless-ngx
+# Python FastAPI + Postgres (single Dockerfile + compose)
+https://github.com/nsidnev/fastapi-realworld-example-app
 
-# ── Node.js / TypeScript ────────────────────────────────────────
-https://github.com/gothinkster/node-express-realworld-example-app
-https://github.com/hagopj13/node-express-boilerplate
-https://github.com/nestjs/nest
-https://github.com/strapi/strapi
-
-# ── Java / Spring Boot ──────────────────────────────────────────
-https://github.com/spring-petclinic/spring-petclinic-microservices
-https://github.com/spring-projects/spring-petclinic
-https://github.com/eleftherias/spring-security-samples
-
-# ── Ruby / Rails ─────────────────────────────────────────────────
-https://github.com/mastodon/mastodon
-https://github.com/discourse/discourse
-https://github.com/chatwoot/chatwoot
-
-# ── Rust ─────────────────────────────────────────────────────────
-https://github.com/nicholasgasior/gogo
-https://github.com/LemmyNet/lemmy
-
-# ── PHP / Laravel ────────────────────────────────────────────────
-https://github.com/laravel/laravel
-https://github.com/monicahq/monica
-
-# ── Multi-service / Microservices ────────────────────────────────
-https://github.com/GoogleCloudPlatform/microservices-demo
+# Classic multi-service: Python/Node/Redis/Postgres/.NET (compose with build)
 https://github.com/dockersamples/example-voting-app
-https://github.com/microservices-demo/microservices-demo
-https://github.com/openfaas/faas
 
-# ── Misc frameworks ─────────────────────────────────────────────
-https://github.com/hasura/graphql-engine
-https://github.com/directus/directus
-https://github.com/supabase/supabase
-https://github.com/appwrite/appwrite
+# Node.js Express + MongoDB (Dockerfile + compose dev/prod/test)
+https://github.com/hagopj13/node-express-boilerplate
+
+# Go gRPC e-commerce: accounts, products, orders, payments (compose + subdirs)
+https://github.com/rasadov/EcommerceAPI

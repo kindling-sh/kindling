@@ -77,7 +77,7 @@ const config: Config = {
         {
           title: "Documentation",
           items: [
-            { label: "Getting Started", to: "/docs/getting-started" },
+            { label: "Quickstart", to: "/docs/quickstart" },
             { label: "CLI Reference", to: "/docs/cli" },
             { label: "Architecture", to: "/docs/architecture" },
           ],

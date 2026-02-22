@@ -1,0 +1,120 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800" font-family="system-ui, -apple-system, sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 6" refX="10" refY="3" markerWidth="10" markerHeight="6" orient="auto">
+      <path d="M 0 0 L 10 3 L 0 6 z" fill="#8a8298"/>
+    </marker>
+    <marker id="arrow-purple" viewBox="0 0 10 6" refX="10" refY="3" markerWidth="10" markerHeight="6" orient="auto">
+      <path d="M 0 0 L 10 3 L 0 6 z" fill="#6e40c9"/>
+    </marker>
+    <marker id="arrow-orange" viewBox="0 0 10 6" refX="10" refY="3" markerWidth="10" markerHeight="6" orient="auto">
+      <path d="M 0 0 L 10 3 L 0 6 z" fill="#ff6b35"/>
+    </marker>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1200" height="800" fill="#0f0f1a" rx="12"/>
+
+  <!-- Developer -->
+  <ellipse cx="80" cy="400" rx="60" ry="30" fill="#6e40c9" stroke="#6e40c9"/>
+  <text x="80" y="395" text-anchor="middle" fill="white" font-size="20">👩‍💻</text>
+  <text x="80" y="412" text-anchor="middle" fill="white" font-size="11" font-weight="600">Developer</text>
+
+  <!-- GitHub -->
+  <rect x="200" y="50" width="130" height="45" rx="8" fill="#333" stroke="#666"/>
+  <text x="265" y="78" text-anchor="middle" fill="white" font-size="13" font-weight="600">🐙 GitHub</text>
+
+  <!-- Laptop border -->
+  <rect x="180" y="130" width="990" height="640" rx="12" fill="none" stroke="#7a7490" stroke-dasharray="8 4" stroke-width="1.5"/>
+  <text x="200" y="155" fill="#b0a8c0" font-size="13" font-weight="600">💻 Developer Laptop</text>
+
+  <!-- Kind Cluster border -->
+  <rect x="210" y="170" width="930" height="570" rx="10" fill="none" stroke="#326CE5" stroke-width="2"/>
+  <text x="230" y="195" fill="#326CE5" font-size="12" font-weight="600">⎈ Kind Cluster (dev)</text>
+
+  <!-- kindling-system namespace -->
+  <rect x="240" y="210" width="200" height="90" rx="8" fill="none" stroke="#6e40c9" stroke-dasharray="4 3"/>
+  <text x="260" y="230" fill="#6e40c9" font-size="10">kindling-system</text>
+  <rect x="260" y="240" width="160" height="45" rx="6" fill="#6e40c9" stroke="#6e40c9"/>
+  <text x="340" y="260" text-anchor="middle" fill="white" font-size="11" font-weight="600">🎛️ Operator</text>
+  <text x="340" y="275" text-anchor="middle" fill="rgba(255,255,255,0.8)" font-size="9">controller-manager</text>
+
+  <!-- default namespace -->
+  <rect x="470" y="210" width="640" height="350" rx="8" fill="none" stroke="#2ea043" stroke-dasharray="4 3"/>
+  <text x="490" y="230" fill="#2ea043" font-size="10">default namespace</text>
+
+  <!-- Runner -->
+  <rect x="490" y="245" width="140" height="40" rx="6" fill="#2ea043" stroke="#2ea043"/>
+  <text x="560" y="270" text-anchor="middle" fill="white" font-size="11" font-weight="600">🏃 Runner Pod</text>
+
+  <!-- Kaniko -->
+  <rect x="490" y="300" width="140" height="40" rx="6" fill="#326CE5" stroke="#326CE5"/>
+  <text x="560" y="318" text-anchor="middle" fill="white" font-size="11" font-weight="600">📦 Kaniko</text>
+  <text x="560" y="332" text-anchor="middle" fill="rgba(255,255,255,0.8)" font-size="9">build-agent</text>
+
+  <!-- Registry -->
+  <rect x="490" y="355" width="140" height="40" rx="6" fill="#f0883e" stroke="#f0883e"/>
+  <text x="560" y="373" text-anchor="middle" fill="white" font-size="11" font-weight="600">🗄️ Registry</text>
+  <text x="560" y="387" text-anchor="middle" fill="rgba(255,255,255,0.8)" font-size="9">registry:5000</text>
+
+  <!-- DSE box -->
+  <rect x="680" y="240" width="400" height="300" rx="8" fill="none" stroke="#ff6b35" stroke-dasharray="4 3"/>
+  <text x="700" y="260" fill="#ff6b35" font-size="10" font-weight="600">DevStagingEnvironment: myapp</text>
+
+  <!-- App Deployment -->
+  <rect x="710" y="275" width="160" height="38" rx="6" fill="#1a1a2e" stroke="#326CE5"/>
+  <text x="790" y="299" text-anchor="middle" fill="#e0e0e0" font-size="11">🔷 App Deployment</text>
+
+  <!-- Service -->
+  <rect x="710" y="325" width="160" height="38" rx="6" fill="#1a1a2e" stroke="#f0883e"/>
+  <text x="790" y="349" text-anchor="middle" fill="#e0e0e0" font-size="11">🔶 Service</text>
+
+  <!-- Ingress -->
+  <rect x="710" y="375" width="160" height="38" rx="6" fill="#1a1a2e" stroke="#ff6b35"/>
+  <text x="790" y="399" text-anchor="middle" fill="#e0e0e0" font-size="11">🌐 Ingress</text>
+
+  <!-- Postgres -->
+  <rect x="910" y="275" width="140" height="38" rx="6" fill="#1a1a2e" stroke="#326CE5"/>
+  <text x="980" y="299" text-anchor="middle" fill="#e0e0e0" font-size="11">🐘 Postgres</text>
+
+  <!-- Redis -->
+  <rect x="910" y="325" width="140" height="38" rx="6" fill="#1a1a2e" stroke="#DC382D"/>
+  <text x="980" y="349" text-anchor="middle" fill="#e0e0e0" font-size="11">⚡ Redis</text>
+
+  <!-- Env vars injected -->
+  <text x="920" y="395" fill="#ffad60" font-size="10" font-style="italic">DATABASE_URL →</text>
+  <text x="920" y="410" fill="#ffad60" font-size="10" font-style="italic">REDIS_URL →</text>
+
+  <!-- ingress-nginx -->
+  <rect x="240" y="620" width="180" height="45" rx="6" fill="#FF6B35" stroke="#FF6B35"/>
+  <text x="330" y="647" text-anchor="middle" fill="white" font-size="11" font-weight="600">🔶 ingress-nginx</text>
+
+  <!-- Edges -->
+  <!-- Dev → GitHub -->
+  <line x1="130" y1="380" x2="200" y2="85" stroke="#8a8298" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="140" y="240" fill="#8a8298" font-size="10">git push</text>
+
+  <!-- GitHub → Runner -->
+  <line x1="330" y1="95" x2="530" y2="255" stroke="#8a8298" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="400" y="160" fill="#8a8298" font-size="10">dispatch job</text>
+
+  <!-- Runner → Kaniko -->
+  <line x1="560" y1="285" x2="560" y2="300" stroke="#8a8298" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- Kaniko → Registry -->
+  <line x1="560" y1="340" x2="560" y2="355" stroke="#8a8298" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- Operator → App -->
+  <line x1="420" y1="262" x2="710" y2="294" stroke="#6e40c9" stroke-width="1.5" marker-end="url(#arrow-purple)"/>
+  <text x="530" y="265" fill="#6e40c9" font-size="10">creates</text>
+
+  <!-- Operator → Postgres -->
+  <path d="M 420 270 Q 650 200 910 294" fill="none" stroke="#6e40c9" stroke-width="1.5" marker-end="url(#arrow-purple)"/>
+  <text x="660" y="225" fill="#6e40c9" font-size="10">provisions</text>
+
+  <!-- Dev → ingress-nginx -->
+  <line x1="100" y1="430" x2="280" y2="630" stroke="#ff6b35" stroke-width="1.5" marker-end="url(#arrow-orange)"/>
+  <text x="120" y="545" fill="#ff6b35" font-size="10">http://app.localhost</text>
+
+  <!-- ingress → service -->
+  <path d="M 420 640 Q 600 640 740 349" fill="none" stroke="#ff6b35" stroke-width="1.5" marker-end="url(#arrow-orange)"/>
+</svg>
