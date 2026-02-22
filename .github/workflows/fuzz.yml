@@ -1,6 +1,9 @@
 name: Fuzz Test
 
 on:
+  push:
+    branches: [main]
+
   workflow_dispatch:
     inputs:
       mode:
@@ -47,7 +50,11 @@ env:
   FUZZ_MODEL: ${{ inputs.model || '' }}
 
 jobs:
+  # ═══════════════════════════════════════════════════════════════
+  # Static fuzz — runs on workflow_dispatch only
+  # ═══════════════════════════════════════════════════════════════
   fuzz:
+    if: github.event_name == 'workflow_dispatch'
     name: "Fuzz (${{ inputs.mode || 'static' }})"
     runs-on: ubuntu-latest
     timeout-minutes: 120
@@ -147,3 +154,95 @@ jobs:
       - name: Check pass rate
         if: always()
         run: python3 test/fuzz/summarize.py /tmp/fuzz-results --check-rate 80
+
+  # ═══════════════════════════════════════════════════════════════
+  # Full e2e — runs on every push to main
+  #
+  # Generates workflows, builds Docker images, deploys DSEs to a
+  # Kind cluster, and validates networking end-to-end.
+  # Uses repos-e2e.txt: a small set of repos selected for
+  # reliable builds and clean static analysis.
+  # ═══════════════════════════════════════════════════════════════
+  e2e:
+    if: github.event_name == 'push'
+    name: "Fuzz (e2e)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── Install kindling CLI from latest release ─────────────
+      - name: Install kindling CLI
+        run: |
+          set -euo pipefail
+          RELEASE_URL=$(gh api repos/${{ github.repository }}/releases/latest \
+            --jq '.assets[] | select(.name | test("linux.*amd64.*tar.gz$")) | .browser_download_url')
+          echo "📦 Downloading $RELEASE_URL"
+          curl -sL "$RELEASE_URL" | tar xz -C /usr/local/bin kindling
+          kindling version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── Python for analyze.py / fix-dockerfile.py ────────────
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python deps
+        run: pip install pyyaml
+
+      # ── Create Kind cluster ─────────────────────────────────
+      - name: Create Kind cluster
+        run: |
+          [ -f /usr/local/bin/kind ] || {
+            curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64
+            chmod +x ./kind
+            sudo mv ./kind /usr/local/bin/kind
+          }
+          kind create cluster --name fuzz --config kind-config.yaml
+          kubectl cluster-info --context kind-fuzz
+
+      - name: Install kindling operator
+        run: |
+          kindling init --cluster fuzz --skip-registry
+          echo "Waiting for operator..."
+          kubectl wait --for=condition=available deployment/kindling-operator \
+            -n kindling-system --timeout=120s
+          kubectl get pods -n kindling-system
+
+      # ── Run full e2e fuzz tests ──────────────────────────────
+      - name: Run fuzz tests (full e2e)
+        working-directory: test/fuzz
+        run: |
+          export SKIP_E2E=0
+          bash run.sh repos-e2e.txt /tmp/fuzz-results kindling
+        env:
+          FUZZ_PROVIDER: openai
+          FUZZ_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          FUZZ_CLUSTER: fuzz
+
+      # ── Results ──────────────────────────────────────────────
+      - name: Print summary
+        if: always()
+        run: |
+          python3 test/fuzz/summarize.py \
+            /tmp/fuzz-results \
+            full \
+            openai \
+            >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Generate action items
+        if: always()
+        run: python3 test/fuzz/summarize.py /tmp/fuzz-results --action-items
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-e2e-results-${{ github.run_id }}
+          path: /tmp/fuzz-results/
+          retention-days: 30
+
+      - name: Check pass rate
+        if: always()
+        run: python3 test/fuzz/summarize.py /tmp/fuzz-results --check-rate 66

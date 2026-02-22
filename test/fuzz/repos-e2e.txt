@@ -1,0 +1,18 @@
+# ─────────────────────────────────────────────────────────────────
+# repos-e2e.txt — Repos for full e2e fuzz testing (Kind cluster)
+#
+# Selection criteria:
+#   - Passed all static analysis checks with 0 issues
+#   - Simple, well-maintained Dockerfiles likely to build in CI
+#   - Diverse languages (Node, Go, Python)
+#   - Fast generate times
+# ─────────────────────────────────────────────────────────────────
+
+# Node.js Express + MongoDB — simple single-service, fastest generate (10s)
+https://github.com/gothinkster/node-express-realworld-example-app
+
+# Go Gin examples — single-service, simple Dockerfile (13.8s)
+https://github.com/gin-gonic/examples
+
+# Python FastAPI + Postgres — 2 services, well-structured (21.9s)
+https://github.com/tiangolo/full-stack-fastapi-template
