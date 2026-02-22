@@ -1,0 +1,145 @@
+name: Fuzz Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Run mode"
+        type: choice
+        options:
+          - static      # generate + YAML validate + static analysis only
+          - full         # static + Docker build + Kind deploy + e2e
+        default: static
+      provider:
+        description: "LLM provider"
+        type: choice
+        options:
+          - openai
+          - anthropic
+        default: openai
+      model:
+        description: "Model override (leave empty for provider default)"
+        required: false
+        type: string
+      repos:
+        description: "Repo list: 'curated' uses repos.txt, 'discover' runs find-repos.py first"
+        type: choice
+        options:
+          - curated
+          - discover
+        default: curated
+      discover_limit:
+        description: "Max repos when using discover mode"
+        required: false
+        type: number
+        default: 20
+
+  # TODO: Enable scheduled runs once stabilized
+  # schedule:
+  #   - cron: "0 6 * * 1"  # Every Monday at 06:00 UTC
+
+permissions:
+  contents: read
+
+env:
+  FUZZ_PROVIDER: ${{ inputs.provider || 'openai' }}
+  FUZZ_API_KEY: ${{ inputs.provider == 'anthropic' && secrets.ANTHROPIC_API_KEY || secrets.OPENAI_API_KEY }}
+  FUZZ_MODEL: ${{ inputs.model || '' }}
+
+jobs:
+  fuzz:
+    name: "Fuzz (${{ inputs.mode || 'static' }})"
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── Install kindling CLI from latest release ─────────────
+      - name: Install kindling CLI
+        run: |
+          set -euo pipefail
+          RELEASE_URL=$(gh api repos/${{ github.repository }}/releases/latest \
+            --jq '.assets[] | select(.name | test("linux.*amd64.*tar.gz$")) | .browser_download_url')
+          echo "📦 Downloading $RELEASE_URL"
+          curl -sL "$RELEASE_URL" | tar xz -C /usr/local/bin kindling
+          kindling version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── Python for analyze.py / find-repos.py ────────────────
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python deps
+        run: pip install pyyaml
+
+      # ── Discover repos (optional) ───────────────────────────
+      - name: Discover repos
+        if: inputs.repos == 'discover'
+        run: |
+          cd test/fuzz
+          python3 find-repos.py \
+            --token "${{ secrets.GITHUB_TOKEN }}" \
+            --out repos-discovered.txt \
+            --limit ${{ inputs.discover_limit || 20 }}
+          echo "── Discovered repos ──"
+          grep -v '^#' repos-discovered.txt | grep -v '^$' | head -30
+          echo "REPOS_FILE=repos-discovered.txt" >> "$GITHUB_ENV"
+
+      - name: Use curated repos
+        if: inputs.repos != 'discover'
+        run: echo "REPOS_FILE=repos.txt" >> "$GITHUB_ENV"
+
+      # ── Set up Kind cluster (full mode only) ─────────────────
+      - name: Create Kind cluster
+        if: inputs.mode == 'full'
+        run: |
+          [ -f /usr/local/bin/kind ] || {
+            curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64
+            chmod +x ./kind
+            sudo mv ./kind /usr/local/bin/kind
+          }
+          kind create cluster --name fuzz --config kind-config.yaml
+          kubectl cluster-info --context kind-fuzz
+
+      - name: Install kindling operator
+        if: inputs.mode == 'full'
+        run: |
+          kindling init --cluster fuzz --skip-registry
+          echo "Waiting for operator..."
+          kubectl wait --for=condition=available deployment/kindling-operator \
+            -n kindling-system --timeout=120s
+          kubectl get pods -n kindling-system
+
+      # ── Run fuzz tests ───────────────────────────────────────
+      - name: Run fuzz tests
+        working-directory: test/fuzz
+        run: |
+          SKIP_E2E=${{ inputs.mode == 'full' && '0' || '1' }}
+          export SKIP_E2E
+
+          bash run.sh "$REPOS_FILE" /tmp/fuzz-results kindling
+
+      # ── Results ──────────────────────────────────────────────
+      - name: Print summary
+        if: always()
+        run: |
+          python3 test/fuzz/summarize.py \
+            /tmp/fuzz-results \
+            "${{ inputs.mode || 'static' }}" \
+            "${{ inputs.provider || 'openai' }}" \
+            >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-results-${{ github.run_id }}
+          path: /tmp/fuzz-results/
+          retention-days: 30
+
+      # ── Fail the job if generate rate < 80% ──────────────────
+      - name: Check pass rate
+        if: always()
+        run: python3 test/fuzz/summarize.py /tmp/fuzz-results --check-rate 80
