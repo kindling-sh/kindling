@@ -5,9 +5,17 @@
   <img src="https://img.shields.io/badge/License-Apache%202.0-blue" alt="Apache 2.0" />
 </p>
 
-# <img src="assets/logo.svg" width="36" height="36" alt="kindling" style="vertical-align: middle;" /> kindling
+<div align="center">
+
+# <img src="assets/logo.svg" width="42" height="42" alt="kindling" style="vertical-align: middle;" /> kindling
 
 **Push code. Your laptop builds it. Your laptop runs it. Zero cloud CI minutes.**
+
+[![Docs](https://img.shields.io/badge/📖_Documentation-kindling--sh.github.io-FF6B35?style=for-the-badge)](https://kindling-sh.github.io/kindling/)
+[![GitHub Release](https://img.shields.io/github/v/release/kindling-sh/kindling?style=for-the-badge&logo=github&label=Latest)](https://github.com/kindling-sh/kindling/releases/latest)
+[![Install](https://img.shields.io/badge/brew_install-kindling-FBB040?style=for-the-badge&logo=homebrew&logoColor=white)](https://github.com/kindling-sh/homebrew-tap)
+
+</div>
 
 `kindling` is a Kubernetes operator that turns every developer's local [Kind](https://kind.sigs.k8s.io/) cluster into a personal, self-hosted GitHub Actions CI/CD environment. When you push to GitHub, the CI job is routed *back to your own machine*, where it builds the app container and deploys an ephemeral staging environment — all in seconds, all on localhost.
 
