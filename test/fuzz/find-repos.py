@@ -14,6 +14,14 @@ Criteria:
   4. No Nx/Turborepo/Bazel/Lerna monorepo tooling
   5. Dockerfiles don't COPY from build-artifact dirs (dist/, build/, out/, target/)
 
+Output tiers:
+  - RECOMMENDED: score ≥ 60, self-contained, no pipeline gaps
+  - STRETCH: buildable but exercises unimplemented pipeline features
+    (build args, build target, env_file, HEALTHCHECK, RUN --mount, etc.)
+    Each gap lists which file to fix (run.sh, generate.go, analyze.py)
+  - MAYBE: score 40-59, might need manual review
+  - SKIPPED: monorepo, no Dockerfiles, or low score
+
 Usage:
   python3 find-repos.py [--token GITHUB_TOKEN] [--out repos-candidates.txt] [--limit 30]
 
@@ -366,6 +374,76 @@ def analyze_dockerfile(content: str, path: str) -> dict:
         flags.append(f"🟡 non-standard base image: {img}")
         score -= 5
 
+    # ── Detect pipeline edge cases (not yet handled) ──────────
+    #
+    # These are features that will BUILD but expose gaps in
+    # run.sh / analyze.py / generate.go that have clear fix paths.
+    edge_cases = []
+
+    # ARG before first FROM → parameterised base image
+    first_from_idx = next((i for i, l in enumerate(lines)
+                           if re.match(r'^\s*FROM\s', l, re.IGNORECASE)), len(lines))
+    args_before_from = [l for i, l in enumerate(lines)
+                        if i < first_from_idx
+                        and re.match(r'^\s*ARG\s', l, re.IGNORECASE)]
+    if args_before_from:
+        edge_cases.append({
+            "id": "arg-before-from",
+            "desc": "ARG before FROM — parameterised base image",
+            "fix": "run.sh: resolve ARG default or pass --build-arg",
+        })
+
+    # HEALTHCHECK instruction — Kaniko builds it, but pipeline
+    # doesn't map it to a K8s readinessProbe
+    if any(re.match(r'^\s*HEALTHCHECK\s', l, re.IGNORECASE) for l in lines):
+        edge_cases.append({
+            "id": "healthcheck",
+            "desc": "HEALTHCHECK instruction in Dockerfile",
+            "fix": "generate.go: map HEALTHCHECK to K8s readinessProbe",
+        })
+
+    # RUN --mount=type=secret or type=cache (BuildKit-only)
+    mount_lines = [l for l in lines
+                   if re.search(r'--mount=type=(secret|cache|ssh)', l, re.IGNORECASE)]
+    if mount_lines:
+        mount_types = set()
+        for ml in mount_lines:
+            m = re.search(r'--mount=type=(\w+)', ml, re.IGNORECASE)
+            if m:
+                mount_types.add(m.group(1).lower())
+        edge_cases.append({
+            "id": "buildkit-mount",
+            "desc": f"RUN --mount=type={','.join(sorted(mount_types))}",
+            "fix": "run.sh: strip --mount flags for Kaniko or emulate with build args",
+        })
+
+    # ADD with URL (network during build)
+    add_url_lines = [l for l in lines
+                     if re.match(r'^\s*ADD\s', l, re.IGNORECASE)
+                     and re.search(r'https?://', l)]
+    if add_url_lines:
+        edge_cases.append({
+            "id": "add-url",
+            "desc": "ADD from URL — needs network during build",
+            "fix": "run.sh: ensure Kaniko has outbound network access",
+        })
+
+    # COPY --link (BuildKit feature, Kaniko doesn't support it)
+    if any(re.search(r'COPY\s+--link', l, re.IGNORECASE) for l in lines):
+        edge_cases.append({
+            "id": "copy-link",
+            "desc": "COPY --link (BuildKit optimisation)",
+            "fix": "run.sh: strip --link flag via sed before Kaniko build",
+        })
+
+    # COPY --chmod / --chown with numeric IDs (Kaniko handles, but can be slow)
+    if any(re.search(r'COPY\s+--chmod=', l, re.IGNORECASE) for l in lines):
+        edge_cases.append({
+            "id": "copy-chmod",
+            "desc": "COPY --chmod (BuildKit feature)",
+            "fix": "run.sh: strip --chmod flag via sed before Kaniko build",
+        })
+
     is_self_contained = not copies_artifacts and (has_install or has_multi_stage)
 
     return {
@@ -375,6 +453,7 @@ def analyze_dockerfile(content: str, path: str) -> dict:
         "has_multi_stage": has_multi_stage,
         "base_images": base_images,
         "expose_ports": expose_ports,
+        "edge_cases": edge_cases,
     }
 
 
@@ -427,6 +506,86 @@ def parse_compose_services(content: str) -> list[dict]:
                 current_service["dockerfile"] = stripped.split(":", 1)[1].strip().strip('"').strip("'")
 
     return [s for s in services if s["has_build"]]
+
+
+def detect_compose_edge_cases(content: str) -> list[dict]:
+    """Detect compose-level features that the pipeline doesn't handle yet.
+
+    Each edge case is a dict with:
+      - id: short identifier
+      - desc: human-readable description
+      - fix: which file(s) need changes to support it
+    """
+    edge_cases = []
+    lines_lower = content.lower()
+
+    # build.args — run.sh doesn't pass --build-arg to Kaniko
+    if re.search(r'^\s+args:\s*$', content, re.MULTILINE):
+        edge_cases.append({
+            "id": "compose-build-args",
+            "desc": "build.args in compose — not passed to Kaniko",
+            "fix": "run.sh: extract args from compose, pass as --build-arg",
+        })
+
+    # build.target — run.sh doesn't pass --target to Kaniko
+    if re.search(r'^\s+target:\s*\S', content, re.MULTILINE):
+        edge_cases.append({
+            "id": "compose-build-target",
+            "desc": "build.target in compose — not passed to Kaniko",
+            "fix": "run.sh: extract target from compose, pass as --target",
+        })
+
+    # env_file — pipeline doesn't read .env or env_file entries
+    if "env_file:" in lines_lower or "env_file " in lines_lower:
+        edge_cases.append({
+            "id": "compose-env-file",
+            "desc": "env_file in compose — not loaded by pipeline",
+            "fix": "run.sh: parse env_file references, generate K8s ConfigMap",
+        })
+
+    # profiles — modern compose feature, pipeline ignores
+    if "profiles:" in lines_lower:
+        edge_cases.append({
+            "id": "compose-profiles",
+            "desc": "compose profiles — pipeline doesn't select profiles",
+            "fix": "generate.go: detect profiles, include in workflow",
+        })
+
+    # extends — compose service inheritance
+    if re.search(r'^\s+extends:\s*$', content, re.MULTILINE):
+        edge_cases.append({
+            "id": "compose-extends",
+            "desc": "compose extends — service inheritance not resolved",
+            "fix": "generate.go: resolve extends before building service list",
+        })
+
+    # healthcheck in compose (not Dockerfile HEALTHCHECK)
+    if re.search(r'^\s+healthcheck:\s*$', content, re.MULTILINE):
+        edge_cases.append({
+            "id": "compose-healthcheck",
+            "desc": "compose healthcheck — not mapped to K8s probes",
+            "fix": "generate.go: map compose healthcheck to readinessProbe",
+        })
+
+    # deploy config (replicas, resources, etc.)
+    if re.search(r'^\s+deploy:\s*$', content, re.MULTILINE):
+        edge_cases.append({
+            "id": "compose-deploy",
+            "desc": "compose deploy config — replicas/resources not mapped",
+            "fix": "generate.go: map deploy.replicas to K8s replicas",
+        })
+
+    # Multiple compose files (override pattern)
+    # Can't detect from content alone, but if the compose references
+    # ${COMPOSE_FILE} or includes:, it's a sign
+    if "include:" in lines_lower or "!include" in lines_lower:
+        edge_cases.append({
+            "id": "compose-include",
+            "desc": "compose include/merge — multi-file not supported",
+            "fix": "generate.go: detect and merge multiple compose files",
+        })
+
+    return edge_cases
 
 
 def check_repo_quality(repo: dict) -> dict | None:
@@ -539,8 +698,39 @@ def deep_validate(token: str | None, candidate: dict) -> dict:
         all_ports.extend(a.get("expose_ports", []))
     candidate["expose_ports"] = all_ports
 
+    # ── Collect edge cases (pipeline gaps) ─────────────────────
+    all_edge_cases = []
+    for a in analyses:
+        all_edge_cases.extend(a.get("edge_cases", []))
+
+    # Compose-level edge cases
+    if compose:
+        compose_edge = detect_compose_edge_cases(compose["content"])
+        all_edge_cases.extend(compose_edge)
+
+    # De-duplicate by id
+    seen_ids = set()
+    unique_edge_cases = []
+    for ec in all_edge_cases:
+        if ec["id"] not in seen_ids:
+            seen_ids.add(ec["id"])
+            unique_edge_cases.append(ec)
+    candidate["edge_cases"] = unique_edge_cases
+
     # ── Verdict ────────────────────────────────────────────────
-    if candidate["score"] >= 60:
+    has_red = any("🔴" in f for f in all_flags)
+    has_yellow = any("🟡" in f for f in all_flags)
+
+    if candidate["score"] >= 60 and not unique_edge_cases:
+        candidate["verdict"] = "recommended"
+    elif candidate["score"] >= 40 and unique_edge_cases and not has_red:
+        # Decent score + exercises unimplemented features = stretch
+        candidate["verdict"] = "stretch"
+    elif candidate["score"] >= 60 and unique_edge_cases:
+        # Good score but has edge cases — still stretch because
+        # the edge cases are the whole point of including it
+        candidate["verdict"] = "stretch"
+    elif candidate["score"] >= 60:
         candidate["verdict"] = "recommended"
     elif candidate["score"] >= 40:
         candidate["verdict"] = "maybe"
@@ -548,8 +738,6 @@ def deep_validate(token: str | None, candidate: dict) -> dict:
         candidate["verdict"] = "skip:low-score"
 
     # Check for fixable-only issues (yellow flags but no red)
-    has_red = any("🔴" in f for f in all_flags)
-    has_yellow = any("🟡" in f for f in all_flags)
     if has_yellow and not has_red:
         candidate["actionable"] = True
     else:
@@ -668,6 +856,7 @@ def main():
 
         verdict_icon = {
             "recommended": "✅",
+            "stretch": "🧪",
             "maybe": "🟡",
         }.get(c["verdict"], "⏭️ ")
 
@@ -678,18 +867,24 @@ def main():
         for flag in c.get("flags", []):
             print(f"    {flag}", file=sys.stderr, flush=True)
 
+        # Print edge cases
+        for ec in c.get("edge_cases", []):
+            print(f"    🧪 {ec['desc']} → {ec['fix']}", file=sys.stderr, flush=True)
+
         validated.append(c)
 
     # ── Separate into tiers ────────────────────────────────────
     recommended = [c for c in validated if c["verdict"] == "recommended"]
+    stretch = [c for c in validated if c["verdict"] == "stretch"]
     maybe = [c for c in validated if c["verdict"] == "maybe"]
     skipped = [c for c in validated if c["verdict"].startswith("skip")]
 
     recommended.sort(key=lambda x: x["score"], reverse=True)
+    stretch.sort(key=lambda x: len(x.get("edge_cases", [])), reverse=True)
     maybe.sort(key=lambda x: x["score"], reverse=True)
 
     print(f"\n{'─' * 60}", file=sys.stderr)
-    print(f"📊 Results: {len(recommended)} recommended, "
+    print(f"📊 Results: {len(recommended)} recommended, {len(stretch)} stretch, "
           f"{len(maybe)} maybe, {len(skipped)} skipped", file=sys.stderr)
 
     # ── Write output ───────────────────────────────────────────
@@ -698,12 +893,12 @@ def main():
         f.write("# repos-candidates.txt — Deeply validated repos for fuzz testing\n")
         f.write(f"# Generated: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
         f.write(f"# Validated: {len(validated)} repos\n")
-        f.write(f"# Recommended: {len(recommended)}, Maybe: {len(maybe)}, "
-                f"Skipped: {len(skipped)}\n")
+        f.write(f"# Recommended: {len(recommended)}, Stretch: {len(stretch)}, "
+                f"Maybe: {len(maybe)}, Skipped: {len(skipped)}\n")
         f.write("# ─────────────────────────────────────────────────────────────────\n")
 
         if recommended:
-            f.write("\n# ═══ RECOMMENDED (score ≥ 60, self-contained Dockerfiles) ═══════\n\n")
+            f.write("\n# ═══ RECOMMENDED (score ≥ 60, self-contained, no pipeline gaps) ═\n\n")
             for c in recommended:
                 compose_tag = " compose+build" if c.get("has_compose_build") else ""
                 df_tag = f" {c.get('dockerfile_count', 0)}df"
@@ -713,6 +908,24 @@ def main():
                         f"{compose_tag}{df_tag}{ports}{actionable_tag}\n")
                 for flag in c.get("flags", []):
                     f.write(f"#   {flag}\n")
+                f.write(f"{c['url']}\n\n")
+
+        if stretch:
+            f.write("\n# ═══ STRETCH (will surface pipeline bugs with clear fix paths) ══\n")
+            f.write("# These repos are buildable but exercise features the pipeline\n")
+            f.write("# doesn't handle yet. Each 🧪 lists the gap and which file to fix.\n\n")
+            for c in stretch:
+                compose_tag = " compose+build" if c.get("has_compose_build") else ""
+                df_tag = f" {c.get('dockerfile_count', 0)}df"
+                ports = f" ports:{','.join(c.get('expose_ports', []))}" if c.get("expose_ports") else ""
+                n_gaps = len(c.get('edge_cases', []))
+                f.write(f"# score={c['score']} ⭐{c['stars']} {c.get('language', '?')}"
+                        f"{compose_tag}{df_tag}{ports} [{n_gaps} pipeline gap(s)]\n")
+                for flag in c.get("flags", []):
+                    f.write(f"#   {flag}\n")
+                for ec in c.get("edge_cases", []):
+                    f.write(f"#   🧪 {ec['desc']}\n")
+                    f.write(f"#     fix → {ec['fix']}\n")
                 f.write(f"{c['url']}\n\n")
 
         if maybe:
@@ -725,6 +938,8 @@ def main():
                         f"{compose_tag}{df_tag}{actionable_tag}\n")
                 for flag in c.get("flags", []):
                     f.write(f"#   {flag}\n")
+                for ec in c.get("edge_cases", []):
+                    f.write(f"#   🧪 {ec['desc']} → {ec['fix']}\n")
                 f.write(f"{c['url']}\n\n")
 
         if skipped:
@@ -741,6 +956,14 @@ def main():
             ports = f" ports:{','.join(c.get('expose_ports', []))}" if c.get("expose_ports") else ""
             print(f"  score={c['score']:>3}  ⭐{c['stars']:>6}  "
                   f"{c['full_name']:<45} {c.get('language',''):>12}{ports}",
+                  file=sys.stderr)
+
+    if stretch:
+        print("\n── Stretch (pipeline bugs to fix) ──", file=sys.stderr)
+        for c in stretch:
+            gaps = ", ".join(ec["id"] for ec in c.get("edge_cases", []))
+            print(f"  score={c['score']:>3}  ⭐{c['stars']:>6}  "
+                  f"{c['full_name']:<45} 🧪 {gaps}",
                   file=sys.stderr)
 
     if maybe:
