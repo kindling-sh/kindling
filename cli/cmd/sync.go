@@ -519,6 +519,35 @@ func matchRuntime(proc string, fields []string) (runtimeProfile, bool) {
 	return runtimeProfile{}, false
 }
 
+// detectLanguageFromSource scans a local source directory for language marker
+// files (go.mod, package.json, Cargo.toml, etc.) and returns the runtimeTable
+// key if found.  Returns "" if no language marker is detected.
+func detectLanguageFromSource(srcDir string) string {
+	markers := []struct {
+		file string
+		lang string
+	}{
+		{"go.mod", "go"},
+		{"Cargo.toml", "cargo"},
+		{"package.json", "node"},
+		{"pom.xml", "java"},
+		{"build.gradle", "java"},
+		{"build.gradle.kts", "kotlin"},
+		{"requirements.txt", "python3"},
+		{"setup.py", "python3"},
+		{"pyproject.toml", "python3"},
+		{"Gemfile", "ruby"},
+		{"mix.exs", "elixir"},
+		{"composer.json", "php"},
+	}
+	for _, m := range markers {
+		if _, err := os.Stat(filepath.Join(srcDir, m.file)); err == nil {
+			return m.lang
+		}
+	}
+	return ""
+}
+
 // resolveProfile returns the runtime profile to use — either from --language
 // flag or auto-detected from the container.
 func resolveProfile(pod, namespace, container, langOverride string) (runtimeProfile, string) {
@@ -830,8 +859,24 @@ func restartViaRebuild(pod, namespace, container, srcDir, dest string, profile r
 		return pod, fmt.Errorf("build output not found at %s — check --build-output", absOutput)
 	}
 
-	// ── Ensure wrapper is applied ──────────────────────────────
-	if !isAlreadyPatched(pod, namespace) {
+	// ── Handle distroless / scratch images ─────────────────────
+	// These containers have no shell or tar, so kubectl cp and the
+	// wrapper script won't work.  We inject a busybox init container
+	// that copies sh/tar/etc into a shared volume, and apply the
+	// wrapper at the same time (single rollout) using /debug-tools/sh.
+	if !isAlreadyPatched(pod, namespace) && isDistroless(pod, namespace, container) {
+		step("🐛", "Distroless image detected — injecting debug tools + wrapper")
+		origCmd := readContainerCommand(deployment, pod, namespace, container)
+		if origCmd == "" {
+			return pod, fmt.Errorf("cannot determine container command for deployment/%s", deployment)
+		}
+		newPod, err := patchDistrolessWithWrapper(deployment, namespace, container, origCmd)
+		if err != nil {
+			return pod, fmt.Errorf("failed to patch distroless deployment: %w", err)
+		}
+		pod = newPod
+	} else if !isAlreadyPatched(pod, namespace) {
+		// Normal container — just apply the wrapper
 		newPod, err := patchDeploymentWrapper(deployment, pod, namespace, container)
 		if err != nil {
 			return pod, err
@@ -896,6 +941,81 @@ func restartViaRebuild(pod, namespace, container, srcDir, dest string, profile r
 	return pod, nil
 }
 
+// isDistroless returns true if the container appears to be a distroless or
+// scratch image (no shell available).
+func isDistroless(pod, namespace, container string) bool {
+	args := []string{"exec", pod, "-n", namespace, "--context", "kind-" + clusterName}
+	if container != "" {
+		args = append(args, "-c", container)
+	}
+	args = append(args, "--", "sh", "-c", "echo ok")
+	out, err := runCapture("kubectl", args...)
+	if err != nil || strings.TrimSpace(out) != "ok" {
+		return true // no shell → distroless/scratch
+	}
+	return false
+}
+
+// patchDistrolessWithWrapper injects busybox debug tools AND the restart
+// wrapper into a distroless deployment in a single patch (single rollout).
+// The wrapper uses /debug-tools/sh (absolute path) since distroless images
+// don't have sh in their default PATH.
+func patchDistrolessWithWrapper(deployment, namespace, container, origCmd string) (string, error) {
+	cName := containerNameForDeployment(deployment, namespace, container)
+
+	step("📝", fmt.Sprintf("Original command: %s", origCmd))
+
+	wrapperScript := fmt.Sprintf(
+		`touch /tmp/.kindling-sync-wrapper && echo 1 > /tmp/.kindling-sync-wrapper && while true; do %s & PID=$!; echo $PID > /tmp/.kindling-app-pid; wait $PID; echo "Process exited, restarting..."; sleep 1; done`,
+		origCmd)
+	// Escape double quotes for JSON embedding
+	escapedWrapper := strings.ReplaceAll(wrapperScript, `"`, `\"`)
+
+	step("🔧", "Injecting debug tools + wrapper into distroless container")
+
+	patch := fmt.Sprintf(`{
+  "spec": {
+    "template": {
+      "spec": {
+        "initContainers": [{
+          "name": "kindling-debug-init",
+          "image": "busybox:stable-musl",
+          "command": ["sh", "-c", "for cmd in sh tar cat kill chmod echo touch sleep ls; do cp /bin/busybox /debug-tools/$cmd; done"],
+          "volumeMounts": [{"name": "debug-tools", "mountPath": "/debug-tools"}]
+        }],
+        "containers": [{
+          "name": "%s",
+          "command": ["/debug-tools/sh", "-c", "%s"],
+          "env": [{"name": "PATH", "value": "/debug-tools:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}],
+          "volumeMounts": [{"name": "debug-tools", "mountPath": "/debug-tools"}]
+        }],
+        "volumes": [{"name": "debug-tools", "emptyDir": {}}]
+      }
+    }
+  }
+}`, cName, escapedWrapper)
+
+	if err := run("kubectl", "patch", fmt.Sprintf("deployment/%s", deployment),
+		"-n", namespace, "--context", "kind-"+clusterName,
+		"--type=strategic", "-p", patch); err != nil {
+		return "", fmt.Errorf("failed to patch distroless deployment: %w", err)
+	}
+
+	step("⏳", "Waiting for patched pod to roll out...")
+	_ = run("kubectl", "rollout", "status", fmt.Sprintf("deployment/%s", deployment),
+		"-n", namespace, "--context", "kind-"+clusterName, "--timeout=90s")
+
+	// Brief wait for old pod termination to avoid stale pod lookup
+	time.Sleep(2 * time.Second)
+
+	newPod, err := findPodForDeployment(deployment, namespace)
+	if err != nil {
+		return "", err
+	}
+	step("🎯", fmt.Sprintf("New pod: %s", newPod))
+	return newPod, nil
+}
+
 // ── Local build helpers ────────────────────────────────────────────
 
 // detectNodeArch returns (GOOS, GOARCH) of the Kind cluster's node.
@@ -954,20 +1074,28 @@ func autoLocalBuild(profile runtimeProfile, srcDir string) (string, string) {
 		return "", ""
 
 	case "Java":
+		gradleCmd := "gradle"
+		if _, err := os.Stat(filepath.Join(srcDir, "gradlew")); err == nil {
+			gradleCmd = "./gradlew"
+		}
 		if _, err := os.Stat(filepath.Join(srcDir, "pom.xml")); err == nil {
 			outJar := filepath.Join(srcDir, "target", "app.jar")
 			return "mvn package -DskipTests -q", outJar
 		}
 		if _, err := os.Stat(filepath.Join(srcDir, "build.gradle")); err == nil {
-			outJar := filepath.Join(srcDir, "build", "libs")
-			return "gradle build -x test -q", outJar
+			outDir := filepath.Join(srcDir, "build", "install")
+			return fmt.Sprintf("%s installDist -x test -q", gradleCmd), outDir
 		}
 		return "", ""
 
 	case "Kotlin":
+		gradleCmd := "gradle"
+		if _, err := os.Stat(filepath.Join(srcDir, "gradlew")); err == nil {
+			gradleCmd = "./gradlew"
+		}
 		if _, err := os.Stat(filepath.Join(srcDir, "build.gradle.kts")); err == nil {
-			outJar := filepath.Join(srcDir, "build", "libs")
-			return "gradle build -x test -q", outJar
+			outDir := filepath.Join(srcDir, "build", "install")
+			return fmt.Sprintf("%s installDist -x test -q", gradleCmd), outDir
 		}
 		return "", ""
 
@@ -1023,6 +1151,19 @@ func goarchToDotnet(goarch string) string {
 // strategy.  Returns the (possibly new) pod name.
 func syncAndRestart(pod, namespace, container, srcDir, dest string, excludes []string) (string, error) {
 	profile, cmdline := resolveProfile(pod, namespace, container, syncLanguage)
+
+	// If runtime detection returned "unknown" and we have a source directory,
+	// fall back to scanning local source files for language markers.
+	// This is critical for distroless/scratch containers where /proc/1/cmdline
+	// returns an opaque binary name like "/src/server".
+	if strings.HasPrefix(profile.Name, "unknown") && srcDir != "" {
+		if detected := detectLanguageFromSource(srcDir); detected != "" {
+			if p, ok := runtimeTable[detected]; ok {
+				step("🔍", fmt.Sprintf("Auto-detected language from source: %s%s%s", colorCyan, p.Name, colorReset))
+				profile = p
+			}
+		}
+	}
 
 	// Print detected runtime info
 	modeLabel := ""
@@ -1122,7 +1263,40 @@ func readContainerCommand(deployment, pod, namespace, container string) string {
 	cmdline, _ := runCapture("kubectl", "exec", pod, "-n", namespace,
 		"--context", "kind-"+clusterName, "--",
 		"cat", "/proc/1/cmdline")
-	return strings.TrimSpace(strings.ReplaceAll(cmdline, "\x00", " "))
+	if trimmed := strings.TrimSpace(strings.ReplaceAll(cmdline, "\x00", " ")); trimmed != "" {
+		return trimmed
+	}
+
+	// Fall back: read entrypoint from image via crictl on the Kind node
+	// (needed for distroless / scratch images where exec is not possible)
+	cName := container
+	if cName == "" {
+		cName = containerNameForDeployment(deployment, namespace, "")
+	}
+	cID, _ := runCapture("docker", "exec", clusterName+"-control-plane",
+		"crictl", "ps", "--name", cName, "-q")
+	cID = strings.TrimSpace(cID)
+	if cID != "" {
+		// crictl inspect outputs JSON; extract args (entrypoint) via grep
+		inspectOut, _ := runCapture("docker", "exec", clusterName+"-control-plane",
+			"crictl", "inspect", cID)
+		// Parse the "args" field from the process info — it's the first "args" in the JSON
+		for _, line := range strings.Split(inspectOut, "\n") {
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(trimmed, `"args"`) {
+				// next lines have the actual args array; let's use a simpler approach
+				break
+			}
+		}
+		// Use crictl inspect with jsonpath-like grep for the entrypoint
+		argsOut, _ := runCapture("docker", "exec", clusterName+"-control-plane",
+			"sh", "-c", fmt.Sprintf(`crictl inspect %s | grep -A1 '"args"' | tail -1 | tr -d ' "[],'`, cID))
+		if ep := strings.TrimSpace(argsOut); ep != "" {
+			return ep
+		}
+	}
+
+	return ""
 }
 
 // extractInnerBinaryFromWrapper pulls the actual app command name out of the
