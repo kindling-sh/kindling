@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -193,6 +194,7 @@ type repoContext struct {
 	externalSecrets   []string // detected external credential env var names
 	needsPublicExpose bool     // true if OAuth/OIDC patterns detected
 	oauthHints        []string // descriptions of detected OAuth indicators
+	hostArch          string   // host CPU architecture (arm64, amd64)
 }
 
 // Directories to skip during scanning.
@@ -383,6 +385,7 @@ func scanRepo(repoPath string) (*repoContext, error) {
 		dockerfiles:    make(map[string]string),
 		depFiles:       make(map[string]string),
 		sourceSnippets: make(map[string]string),
+		hostArch:       runtime.GOARCH, // detect host CPU arch for Kaniko patches
 	}
 
 	var treeLines []string
@@ -684,6 +687,19 @@ references across ALL common languages:
 - docker-compose.yml service names (postgres, redis, mysql, mongo, rabbitmq, etc.)
 - Environment variable references in code (DATABASE_URL, REDIS_URL, MONGO_URL, etc.)
 
+CRITICAL — Cloud-managed database SDKs do NOT map to local dependencies:
+Libraries for cloud-managed databases (e.g. Google AlloyDB, Cloud SQL, AWS RDS,
+DynamoDB, Azure Cosmos DB) connect to REMOTE cloud services, not local containers.
+Do NOT add a "postgres", "mysql", "mongodb", or similar local dependency just because
+you see a cloud-database SDK in the dependency file. Only add a local dependency when
+the service genuinely connects to a local database instance (e.g. via DATABASE_URL,
+localhost, or docker-compose-style service names).
+Examples of SDKs that should NOT trigger local dependencies:
+  - google-cloud-alloydb, cloud-sql-python-connector → NOT local postgres
+  - boto3.dynamodb, @aws-sdk/client-dynamodb → NOT local mongodb
+  - @azure/cosmos → NOT local mongodb
+  - langchain-postgres + alloydb → NOT local postgres (uses AlloyDB connector)
+
 CRITICAL — Dependency connection URLs are auto-injected:
 When you declare a dependency in the "dependencies" input, the kindling operator
 AUTOMATICALLY injects the corresponding connection URL environment variable into the
@@ -770,9 +786,11 @@ When you detect a Dockerfile that uses BuildKit platform ARGs, you MUST generate
 The patch step should:
   1. Remove "--platform=${BUILDPLATFORM}" from any FROM line
   2. Remove the ARG TARGETPLATFORM, ARG TARGETARCH, ARG BUILDPLATFORM, ARG TARGETOS declarations
-  3. Replace any usage of $TARGETARCH or ${TARGETARCH} with the concrete architecture (amd64)
-  4. Replace any usage of $TARGETPLATFORM or ${TARGETPLATFORM} with linux/amd64
-  5. Replace any usage of $BUILDPLATFORM or ${BUILDPLATFORM} with linux/amd64
+  3. Replace any usage of $TARGETARCH or ${TARGETARCH} with the concrete architecture: HOSTARCH
+  4. Replace any usage of $TARGETPLATFORM or ${TARGETPLATFORM} with linux/HOSTARCH
+  5. Replace any usage of $BUILDPLATFORM or ${BUILDPLATFORM} with linux/HOSTARCH
+  6. Replace any usage of $TARGETOS or ${TARGETOS} with linux
+All 6 replacement steps are REQUIRED. Do NOT omit step 6 ($TARGETOS → linux).
 
 Example patch step for a .NET worker with BuildKit ARGs:
   - name: Patch worker Dockerfile for Kaniko
@@ -787,10 +805,10 @@ Example patch step for a .NET worker with BuildKit ARGs:
       sed -i '/^ARG BUILDPLATFORM$/d' Dockerfile
       sed -i '/^ARG TARGETOS$/d' Dockerfile
       sed -i '/^ARG TARGETVARIANT$/d' Dockerfile
-      # Replace architecture variables with concrete amd64 values
-      sed -i 's/\$TARGETARCH/amd64/g; s/\${TARGETARCH}/amd64/g' Dockerfile
-      sed -i 's/\$TARGETPLATFORM/linux\/amd64/g; s/\${TARGETPLATFORM}/linux\/amd64/g' Dockerfile
-      sed -i 's/\$BUILDPLATFORM/linux\/amd64/g; s/\${BUILDPLATFORM}/linux\/amd64/g' Dockerfile
+      # Replace architecture variables with concrete HOSTARCH values
+      sed -i 's/\$TARGETARCH/HOSTARCH/g; s/\${TARGETARCH}/HOSTARCH/g' Dockerfile
+      sed -i 's/\$TARGETPLATFORM/linux\/HOSTARCH/g; s/\${TARGETPLATFORM}/linux\/HOSTARCH/g' Dockerfile
+      sed -i 's/\$BUILDPLATFORM/linux\/HOSTARCH/g; s/\${BUILDPLATFORM}/linux\/HOSTARCH/g' Dockerfile
       sed -i 's/\$TARGETOS/linux/g; s/\${TARGETOS}/linux/g' Dockerfile
 
 Additional Kaniko compatibility issues that require Dockerfile patching:
@@ -877,6 +895,27 @@ be aware that build failures are often caused by these issues.
 For multi-service repos (multiple Dockerfiles in subdirectories), generate one
 build step per service and one deploy step per service, with inter-service env
 vars wired up (e.g. API_URL pointing to the other service's cluster-internal DNS name).
+
+CRITICAL — Inter-service environment variables:
+When a service calls other services via gRPC or HTTP, it reads their addresses from
+environment variables (e.g. os.Getenv("PRODUCT_CATALOG_SERVICE_ADDR") in Go,
+os.environ.get("PRODUCT_CATALOG_SERVICE_ADDR") in Python, process.env.X in Node).
+You MUST examine the source code snippets provided for EVERY service and find ALL
+env var references that look like service address variables (ending in _ADDR, _HOST,
+_URL, _SERVICE_ADDR, _ENDPOINT, etc.). For each such variable, add an env entry
+in that service's deploy step mapping it to the target service's cluster-internal
+DNS name and port. The DNS name pattern is:
+  ${{ github.actor }}-<service-name>:<port>
+Example — if checkoutservice reads PRODUCT_CATALOG_SERVICE_ADDR, CART_SERVICE_ADDR,
+SHIPPING_SERVICE_ADDR from env, you must include:
+  env: |
+    - name: PRODUCT_CATALOG_SERVICE_ADDR
+      value: "${{ github.actor }}-productcatalogservice:3550"
+    - name: CART_SERVICE_ADDR
+      value: "${{ github.actor }}-cartservice:7070"
+    - name: SHIPPING_SERVICE_ADDR
+      value: "${{ github.actor }}-shippingservice:50051"
+Do NOT skip inter-service env vars — without them, services cannot find each other.
 
 CRITICAL — docker-compose.yml is the source of truth for multi-service repos:
 When a docker-compose.yml exists, you MUST use it to determine the following for
@@ -1014,11 +1053,15 @@ FINAL VALIDATION — before outputting the YAML, verify:
 Return ONLY the raw YAML content of the workflow file. No markdown code fences,
 no explanation text, no commentary. Just the YAML.`
 
+	// Replace architecture placeholder with actual host architecture
+	system = strings.ReplaceAll(system, "HOSTARCH", ctx.hostArch)
+
 	// ── Build user prompt ───────────────────────────────────────
 	var b strings.Builder
 
 	b.WriteString(fmt.Sprintf("Generate a kindling dev-deploy.yml GitHub Actions workflow for this repository named %q.\n\n", ctx.name))
 	b.WriteString(fmt.Sprintf("Default branch: %s (use this in the 'on: push: branches:' trigger)\n\n", ctx.branch))
+	b.WriteString(fmt.Sprintf("Target architecture: %s (use this in all Kaniko Dockerfile patches)\n\n", ctx.hostArch))
 
 	// Directory tree
 	b.WriteString("## Repository structure\n```\n")

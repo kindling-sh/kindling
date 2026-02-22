@@ -497,8 +497,9 @@ spec:
                         type: integer
                       path:
                         default: /healthz
-                        description: Path is the HTTP path for the health check endpoint
-                          (e.g. "/healthz").
+                        description: |-
+                          Path is the HTTP path for the health check endpoint (e.g. "/healthz").
+                          Only used when Type is "http".
                         type: string
                       periodSeconds:
                         default: 10
@@ -510,6 +511,17 @@ spec:
                           container port.
                         format: int32
                         type: integer
+                      type:
+                        default: http
+                        description: |-
+                          Type is the probe type: "http" (default), "grpc", or "none".
+                          When "grpc", the probe uses the gRPC health checking protocol.
+                          When "none", no probes are attached (useful for services that don't expose health endpoints).
+                        enum:
+                        - http
+                        - grpc
+                        - none
+                        type: string
                     type: object
                   image:
                     description: Image is the container image to run (e.g. "nginx:1.25").
