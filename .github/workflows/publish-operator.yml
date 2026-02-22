@@ -1,18 +1,14 @@
 name: Publish Operator Image
 
+# Manual-only workflow for ad-hoc / testing builds.
+# Production releases are handled by release.yml (triggered on v* tags).
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'api/**'
-      - 'internal/**'
-      - 'cmd/**'
-      - 'go.mod'
-      - 'go.sum'
-      - 'Dockerfile'
-  release:
-    types: [published]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Image tag (default: edge)'
+        required: false
+        default: edge
 
 env:
   REGISTRY: ghcr.io
@@ -47,10 +43,8 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ inputs.tag }}
             type=sha,prefix=
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
 
       - name: Build and push
         uses: docker/build-push-action@v5

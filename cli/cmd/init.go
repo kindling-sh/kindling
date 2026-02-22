@@ -31,7 +31,9 @@ Optional flags are passed through to "kind create cluster":
 }
 
 // DefaultOperatorImage is the pre-built operator image published to GHCR.
-const DefaultOperatorImage = "ghcr.io/kindling-sh/kindling-operator:latest"
+// At release time this is overridden via ldflags to pin the semver tag,
+// e.g. ghcr.io/kindling-sh/kindling-operator:0.5.0
+var DefaultOperatorImage = "ghcr.io/kindling-sh/kindling-operator:latest"
 
 var (
 	skipCluster    bool

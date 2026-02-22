@@ -11,6 +11,7 @@ builds:
     ldflags:
       - -s -w
       - -X github.com/jeffvincent/kindling/cli/cmd.Version={{ .Version }}
+      - -X github.com/jeffvincent/kindling/cli/cmd.DefaultOperatorImage=ghcr.io/kindling-sh/kindling-operator:{{ .Version }}
     env:
       - CGO_ENABLED=0
     goos:
