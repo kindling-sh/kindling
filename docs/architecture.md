@@ -19,7 +19,7 @@ flowchart TB
                 operator["🎛️ Operator\n(controller-manager)"]
             end
 
-            subgraph default["default namespace"]
+            subgraph ns_default["default namespace"]
                 runner["🏃 Runner Pod"]
                 kaniko["📦 Kaniko Sidecar\n(build-agent)"]
                 registry["🗄️ Registry\n(registry:5000)"]
@@ -50,17 +50,23 @@ flowchart TB
     dev -- "http://myapp.localhost" --> ingress_ctrl
     ingress_ctrl --> svc
 
+    style laptop fill:#1a1a2e,stroke:#FF6B35,color:#e0e0e0,stroke-width:2px
     style kind fill:#0f3460,stroke:#326CE5,color:#e0e0e0,stroke-width:2px
-    style system fill:#1a1a2e,stroke:#6e40c9,color:#e0e0e0
-    style default fill:#1a1a2e,stroke:#2ea043,color:#e0e0e0
-    style env1 fill:#112240,stroke:#f0883e,color:#e0e0e0
+    style system fill:#112240,stroke:#6e40c9,color:#e0e0e0
+    style ns_default fill:#112240,stroke:#2ea043,color:#e0e0e0
+    style env1 fill:#0a1628,stroke:#F7931E,color:#e0e0e0
     style operator fill:#6e40c9,stroke:#6e40c9,color:#fff
     style runner fill:#2ea043,stroke:#2ea043,color:#fff
     style kaniko fill:#326CE5,stroke:#326CE5,color:#fff
-    style registry fill:#f0883e,stroke:#f0883e,color:#fff
+    style registry fill:#F7931E,stroke:#F7931E,color:#fff
     style ingress_ctrl fill:#FF6B35,stroke:#FF6B35,color:#fff
     style dev fill:#6e40c9,stroke:#6e40c9,color:#fff
-    style gh fill:#333,stroke:#fff,color:#fff
+    style gh fill:#24292f,stroke:#e0e0e0,color:#fff
+    style app fill:#326CE5,stroke:#326CE5,color:#fff
+    style svc fill:#F7931E,stroke:#F7931E,color:#fff
+    style ing fill:#FF6B35,stroke:#FF6B35,color:#fff
+    style pg fill:#336791,stroke:#336791,color:#fff
+    style rd fill:#DC382D,stroke:#DC382D,color:#fff
 ```
 
 ---
@@ -199,14 +205,15 @@ The Kind config maps host ports 80/443 → the ingress controller pod.
 ## Data flow: git push → running app
 
 ```mermaid
+%%{init: {'theme': 'dark', 'themeVariables': {'actorBkg': '#FF6B35', 'actorTextColor': '#fff', 'actorBorder': '#FF6B35', 'signalColor': '#e0e0e0', 'noteBkgColor': '#112240', 'noteTextColor': '#e0e0e0'}}}%%
 sequenceDiagram
-    participant Dev as Developer
-    participant GH as GitHub
-    participant Runner as Runner Pod
-    participant Kaniko as Kaniko Sidecar
-    participant Registry as registry:5000
-    participant Operator as Operator
-    participant K8s as Kubernetes
+    participant Dev as 👩‍💻 Developer
+    participant GH as 🐙 GitHub
+    participant Runner as 🏃 Runner Pod
+    participant Kaniko as 📦 Kaniko Sidecar
+    participant Registry as 🗄️ registry:5000
+    participant Operator as 🔥 Operator
+    participant K8s as ⎈ Kubernetes
 
     Dev->>GH: git push
     GH->>Runner: Dispatch workflow job

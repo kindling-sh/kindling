@@ -1,0 +1,316 @@
+# ─────────────────────────────────────────────────────────────────
+# repos-candidates.txt — Deeply validated repos for fuzz testing
+# Generated: 2026-02-22 00:01:41
+# Validated: 40 repos
+# Recommended: 5, Stretch: 14, Maybe: 2, Skipped: 19
+# ─────────────────────────────────────────────────────────────────
+
+# ═══ RECOMMENDED (score ≥ 60, self-contained, no pipeline gaps) ═
+
+# score=100 ⭐74441 TypeScript 9df ports:8080,8080,8080,8080,8080,8080,8080,80,8080 [fixable-issues]
+#     docker/Dockerfile.unified: 🟢 multi-stage build (self-contained)
+#     docker/Dockerfile.unified: 🟢 uses COPY --from= (proper multi-stage)
+#     docker/Dockerfile.unified: 🟢 has dependency install step
+#     docker/Dockerfile.unified: 🟢 EXPOSE 8080
+#     docker/Dockerfile.unified: 🟡 npm without cache redirect (fixable via patch)
+#     docker/backend/Dockerfile: 🟢 multi-stage build (self-contained)
+#     docker/backend/Dockerfile: 🟢 uses COPY --from= (proper multi-stage)
+#     docker/backend/Dockerfile: 🟢 has dependency install step
+#     docker/backend/Dockerfile: 🟢 EXPOSE 8080
+#     docker/backend/Dockerfile.fat: 🟢 multi-stage build (self-contained)
+#     docker/backend/Dockerfile.fat: 🟢 uses COPY --from= (proper multi-stage)
+#     docker/backend/Dockerfile.fat: 🟢 has dependency install step
+#     docker/backend/Dockerfile.fat: 🟢 EXPOSE 8080
+#     docker/backend/Dockerfile.ultra-lite: 🟢 multi-stage build (self-contained)
+#     docker/backend/Dockerfile.ultra-lite: 🟢 uses COPY --from= (proper multi-stage)
+#     docker/backend/Dockerfile.ultra-lite: 🟢 has dependency install step
+#     docker/backend/Dockerfile.ultra-lite: 🟢 EXPOSE 8080
+#     docker/embedded/Dockerfile.ultra-lite: 🟢 multi-stage build (self-contained)
+#     docker/embedded/Dockerfile.ultra-lite: 🟢 uses COPY --from= (proper multi-stage)
+#     docker/embedded/Dockerfile.ultra-lite: 🟢 has dependency install step
+#     docker/embedded/Dockerfile.ultra-lite: 🟢 EXPOSE 8080
+#     docker/embedded/Dockerfile: 🟢 multi-stage build (self-contained)
+#     docker/embedded/Dockerfile: 🟢 uses COPY --from= (proper multi-stage)
+#     docker/embedded/Dockerfile: 🟢 has dependency install step
+#     docker/embedded/Dockerfile: 🟢 EXPOSE 8080
+#     docker/embedded/Dockerfile.fat: 🟢 multi-stage build (self-contained)
+#     docker/embedded/Dockerfile.fat: 🟢 uses COPY --from= (proper multi-stage)
+#     docker/embedded/Dockerfile.fat: 🟢 has dependency install step
+#     docker/embedded/Dockerfile.fat: 🟢 EXPOSE 8080
+#     docker/frontend/Dockerfile: 🟢 multi-stage build (self-contained)
+#     docker/frontend/Dockerfile: 🟢 uses COPY --from= (proper multi-stage)
+#     docker/frontend/Dockerfile: 🟢 has dependency install step
+#     docker/frontend/Dockerfile: 🟢 EXPOSE 80
+#     docker/frontend/Dockerfile: 🟡 npm without cache redirect (fixable via patch)
+#     docker/Dockerfile.unified-lite: 🟢 multi-stage build (self-contained)
+#     docker/Dockerfile.unified-lite: 🟢 uses COPY --from= (proper multi-stage)
+#     docker/Dockerfile.unified-lite: 🟢 has dependency install step
+#     docker/Dockerfile.unified-lite: 🟢 EXPOSE 8080
+#     docker/Dockerfile.unified-lite: 🟡 npm without cache redirect (fixable via patch)
+https://github.com/Stirling-Tools/Stirling-PDF
+
+# score=72 ⭐46821 Python 2df ports:3333 [fixable-issues]
+#     docker/Dockerfile: 🟢 has dependency install step
+#     docker/Dockerfile: 🟡 BuildKit platform ARGs (fixable via patch)
+#     docker/Dockerfile.mcp: 🟢 has dependency install step
+#     docker/Dockerfile.mcp: 🟢 EXPOSE 3333
+https://github.com/sansan0/TrendRadar
+
+# score=68 ⭐129976 TypeScript 3df ports:3000,5001 [fixable-issues]
+#     web/Dockerfile: 🟢 multi-stage build (self-contained)
+#     web/Dockerfile: 🟢 uses COPY --from= (proper multi-stage)
+#     web/Dockerfile: 🟢 has dependency install step
+#     web/Dockerfile: 🟢 EXPOSE 3000
+#     web/Dockerfile: 🟡 npm without cache redirect (fixable via patch)
+#     docker/couchbase-server/Dockerfile: 🟡 no CMD/ENTRYPOINT
+#     docker/couchbase-server/Dockerfile: 🟡 non-standard base image: couchbase/server:latest
+#     api/Dockerfile: 🟢 multi-stage build (self-contained)
+#     api/Dockerfile: 🟢 uses COPY --from= (proper multi-stage)
+#     api/Dockerfile: 🟢 has dependency install step
+#     api/Dockerfile: 🟢 EXPOSE 5001
+https://github.com/langgenius/dify
+
+# score=65 ⭐70115 Python 1df
+#     Dockerfile: 🟢 has dependency install step
+https://github.com/binary-husky/gpt_academic
+
+# score=60 ⭐64352 Python 1df [fixable-issues]
+#     Dockerfile: 🟢 has dependency install step
+#     Dockerfile: 🟡 npm without cache redirect (fixable via patch)
+#     Dockerfile: 🟡 non-standard base image: nikolaik/python-nodejs:python3.9-nodejs20-slim
+https://github.com/FoundationAgents/MetaGPT
+
+
+# ═══ STRETCH (will surface pipeline bugs with clear fix paths) ══
+# These repos are buildable but exercise features the pipeline
+# doesn't handle yet. Each 🧪 lists the gap and which file to fix.
+
+# score=75 ⭐49679 Ruby compose+build 2df ports:3000,4000 [4 pipeline gap(s)]
+#     Dockerfile: 🟢 multi-stage build (self-contained)
+#     Dockerfile: 🟢 uses COPY --from= (proper multi-stage)
+#     Dockerfile: 🟢 EXPOSE 3000
+#     Dockerfile: 🟡 BuildKit platform ARGs (fixable via patch)
+#     streaming/Dockerfile: 🟢 EXPOSE 4000
+#     streaming/Dockerfile: 🟡 BuildKit platform ARGs (fixable via patch)
+#   🧪 ARG before FROM — parameterised base image
+#     fix → run.sh: resolve ARG default or pass --build-arg
+#   🧪 RUN --mount=type=cache
+#     fix → run.sh: strip --mount flags for Kaniko or emulate with build args
+#   🧪 env_file in compose — not loaded by pipeline
+#     fix → run.sh: parse env_file references, generate K8s ConfigMap
+#   🧪 compose healthcheck — not mapped to K8s probes
+#     fix → generate.go: map compose healthcheck to readinessProbe
+https://github.com/mastodon/mastodon
+
+# score=95 ⭐181927 Python 4df ports:8000,3000 [2 pipeline gap(s)]
+#     classic/forge/Dockerfile: 🟢 multi-stage build (self-contained)
+#     classic/forge/Dockerfile: 🟢 has dependency install step
+#     classic/forge/Dockerfile: 🟢 EXPOSE 8000
+#     classic/forge/Dockerfile: 🟡 poetry install without --no-root (fixable via patch)
+#     classic/Dockerfile.autogpt: 🟢 multi-stage build (self-contained)
+#     classic/Dockerfile.autogpt: 🟢 has dependency install step
+#     autogpt_platform/backend/Dockerfile: 🟢 multi-stage build (self-contained)
+#     autogpt_platform/backend/Dockerfile: 🟢 uses COPY --from= (proper multi-stage)
+#     autogpt_platform/backend/Dockerfile: 🟢 has dependency install step
+#     autogpt_platform/frontend/Dockerfile: 🟢 multi-stage build (self-contained)
+#     autogpt_platform/frontend/Dockerfile: 🟢 uses COPY --from= (proper multi-stage)
+#     autogpt_platform/frontend/Dockerfile: 🟢 has dependency install step
+#     autogpt_platform/frontend/Dockerfile: 🟢 EXPOSE 3000
+#     autogpt_platform/frontend/Dockerfile: 🟡 npm without cache redirect (fixable via patch)
+#   🧪 ARG before FROM — parameterised base image
+#     fix → run.sh: resolve ARG default or pass --build-arg
+#   🧪 RUN --mount=type=cache
+#     fix → run.sh: strip --mount flags for Kaniko or emulate with build args
+https://github.com/Significant-Gravitas/AutoGPT
+
+# score=100 ⭐124554 Python compose+build 1df ports:8080 [2 pipeline gap(s)]
+#     Dockerfile: 🟢 multi-stage build (self-contained)
+#     Dockerfile: 🟢 has dependency install step
+#     Dockerfile: 🟢 EXPOSE 8080
+#     Dockerfile: 🟡 BuildKit platform ARGs (fixable via patch)
+#     Dockerfile: 🟡 npm without cache redirect (fixable via patch)
+#   🧪 ARG before FROM — parameterised base image
+#     fix → run.sh: resolve ARG default or pass --build-arg
+#   🧪 HEALTHCHECK instruction in Dockerfile
+#     fix → generate.go: map HEALTHCHECK to K8s readinessProbe
+https://github.com/open-webui/open-webui
+
+# score=90 ⭐64425 Python 2df ports:4566,4510,5678,4566,5678 [2 pipeline gap(s)]
+#     Dockerfile: 🟢 multi-stage build (self-contained)
+#     Dockerfile: 🟢 uses COPY --from= (proper multi-stage)
+#     Dockerfile: 🟢 EXPOSE 4566, 4510, 5678
+#     Dockerfile.s3: 🟢 multi-stage build (self-contained)
+#     Dockerfile.s3: 🟢 uses COPY --from= (proper multi-stage)
+#     Dockerfile.s3: 🟢 EXPOSE 4566, 5678
+#   🧪 HEALTHCHECK instruction in Dockerfile
+#     fix → generate.go: map HEALTHCHECK to K8s readinessProbe
+#   🧪 RUN --mount=type=cache
+#     fix → run.sh: strip --mount flags for Kaniko or emulate with build args
+https://github.com/localstack/localstack
+
+# score=100 ⭐54904 TypeScript compose+build 1df ports:80,80 [2 pipeline gap(s)]
+#     Dockerfile: 🟢 multi-stage build (self-contained)
+#     Dockerfile: 🟢 uses COPY --from= (proper multi-stage)
+#     Dockerfile: 🟢 has dependency install step
+#     Dockerfile: 🟢 EXPOSE 80, 80
+#     Dockerfile: 🟡 non-standard base image: appwrite/base:0.10.6
+#   🧪 build.args in compose — not passed to Kaniko
+#     fix → run.sh: extract args from compose, pass as --build-arg
+#   🧪 build.target in compose — not passed to Kaniko
+#     fix → run.sh: extract target from compose, pass as --target
+https://github.com/appwrite/appwrite
+
+# score=90 ⭐49806 Go compose+build 1df [2 pipeline gap(s)]
+#     Dockerfile: 🟢 multi-stage build (self-contained)
+#     Dockerfile: 🟢 uses COPY --from= (proper multi-stage)
+#   🧪 ARG before FROM — parameterised base image
+#     fix → run.sh: resolve ARG default or pass --build-arg
+#   🧪 build.args in compose — not passed to Kaniko
+#     fix → run.sh: extract args from compose, pass as --build-arg
+https://github.com/jesseduffield/lazydocker
+
+# score=90 ⭐79110 TypeScript 7df [1 pipeline gap(s)]
+#     src/git/Dockerfile: 🟢 multi-stage build (self-contained)
+#     src/git/Dockerfile: 🟢 uses COPY --from= (proper multi-stage)
+#     src/memory/Dockerfile: 🟢 multi-stage build (self-contained)
+#     src/memory/Dockerfile: 🟢 uses COPY --from= (proper multi-stage)
+#     src/memory/Dockerfile: 🟢 has dependency install step
+#     src/memory/Dockerfile: 🟡 npm without cache redirect (fixable via patch)
+#     src/filesystem/Dockerfile: 🟢 multi-stage build (self-contained)
+#     src/filesystem/Dockerfile: 🟢 uses COPY --from= (proper multi-stage)
+#     src/filesystem/Dockerfile: 🟢 has dependency install step
+#     src/filesystem/Dockerfile: 🟡 npm without cache redirect (fixable via patch)
+#     src/sequentialthinking/Dockerfile: 🟢 multi-stage build (self-contained)
+#     src/sequentialthinking/Dockerfile: 🟢 uses COPY --from= (proper multi-stage)
+#     src/sequentialthinking/Dockerfile: 🟢 has dependency install step
+#     src/sequentialthinking/Dockerfile: 🟡 npm without cache redirect (fixable via patch)
+#     src/time/Dockerfile: 🟢 multi-stage build (self-contained)
+#     src/time/Dockerfile: 🟢 uses COPY --from= (proper multi-stage)
+#     src/fetch/Dockerfile: 🟢 multi-stage build (self-contained)
+#     src/fetch/Dockerfile: 🟢 uses COPY --from= (proper multi-stage)
+#     src/everything/Dockerfile: 🟢 multi-stage build (self-contained)
+#     src/everything/Dockerfile: 🟢 uses COPY --from= (proper multi-stage)
+#     src/everything/Dockerfile: 🟢 has dependency install step
+#     src/everything/Dockerfile: 🟡 npm without cache redirect (fixable via patch)
+#   🧪 RUN --mount=type=cache
+#     fix → run.sh: strip --mount flags for Kaniko or emulate with build args
+https://github.com/modelcontextprotocol/servers
+
+# score=77 ⭐71708 TypeScript compose+build 2df ports:5173 [1 pipeline gap(s)]
+#     backend/Dockerfile: 🟢 has dependency install step
+#     backend/Dockerfile: 🟡 no CMD/ENTRYPOINT
+#     backend/Dockerfile: 🟡 poetry install without --no-root (fixable via patch)
+#     frontend/Dockerfile: 🟢 has dependency install step
+#     frontend/Dockerfile: 🟢 EXPOSE 5173
+#   🧪 env_file in compose — not loaded by pipeline
+#     fix → run.sh: parse env_file references, generate K8s ConfigMap
+https://github.com/abi/screenshot-to-code
+
+# score=98 ⭐68735 Go compose+build 3df [1 pipeline gap(s)]
+#     geth/Dockerfile: 🟢 multi-stage build (self-contained)
+#     geth/Dockerfile: 🟢 uses COPY --from= (proper multi-stage)
+#     reth/Dockerfile: 🟢 multi-stage build (self-contained)
+#     reth/Dockerfile: 🟢 uses COPY --from= (proper multi-stage)
+#     reth/Dockerfile: 🟢 has dependency install step
+#     reth/Dockerfile: 🟡 go build without -buildvcs=false (fixable via patch)
+#     nethermind/Dockerfile: 🟢 multi-stage build (self-contained)
+#     nethermind/Dockerfile: 🟢 uses COPY --from= (proper multi-stage)
+#     nethermind/Dockerfile: 🟡 BuildKit platform ARGs (fixable via patch)
+#   🧪 env_file in compose — not loaded by pipeline
+#     fix → run.sh: parse env_file references, generate K8s ConfigMap
+https://github.com/base/node
+
+# score=67 ⭐68050 Python compose+build 4df [1 pipeline gap(s)]
+#     enterprise/Dockerfile: 🟢 has dependency install step
+#     openhands/runtime/utils/runtime_templates/Dockerfile.j2: 🟡 no CMD/ENTRYPOINT
+#     containers/app/Dockerfile: 🟢 multi-stage build (self-contained)
+#     containers/app/Dockerfile: 🟢 has dependency install step
+#     containers/app/Dockerfile: 🟡 npm without cache redirect (fixable via patch)
+#     containers/dev/Dockerfile: 🟢 multi-stage build (self-contained)
+#   🧪 ARG before FROM — parameterised base image
+#     fix → run.sh: resolve ARG default or pass --build-arg
+https://github.com/OpenHands/OpenHands
+
+# score=67 ⭐55306 Rust 7df ports:80,80,80,80 [1 pipeline gap(s)]
+#     Dockerfile: 🟢 multi-stage build (self-contained)
+#     Dockerfile: 🟢 uses COPY --from= (proper multi-stage)
+#     Dockerfile: 🟢 EXPOSE 80
+#     Dockerfile: 🟡 BuildKit platform ARGs (fixable via patch)
+#     docker/Dockerfile.alpine: 🟢 multi-stage build (self-contained)
+#     docker/Dockerfile.alpine: 🟢 uses COPY --from= (proper multi-stage)
+#     docker/Dockerfile.alpine: 🟢 EXPOSE 80
+#     docker/Dockerfile.alpine: 🟡 BuildKit platform ARGs (fixable via patch)
+#     playwright/compose/warden/Dockerfile: 🟢 multi-stage build (self-contained)
+#     playwright/compose/warden/Dockerfile: 🟢 uses COPY --from= (proper multi-stage)
+#     docker/Dockerfile.debian: 🟢 multi-stage build (self-contained)
+#     docker/Dockerfile.debian: 🟢 uses COPY --from= (proper multi-stage)
+#     docker/Dockerfile.debian: 🟢 EXPOSE 80
+#     docker/Dockerfile.debian: 🟡 BuildKit platform ARGs (fixable via patch)
+#     docker/Dockerfile.j2: 🟢 multi-stage build (self-contained)
+#     docker/Dockerfile.j2: 🟢 uses COPY --from= (proper multi-stage)
+#     docker/Dockerfile.j2: 🟢 EXPOSE 80
+#     docker/Dockerfile.j2: 🟡 BuildKit platform ARGs (fixable via patch)
+#     playwright/compose/playwright/Dockerfile: 🟢 has dependency install step
+#     playwright/compose/playwright/Dockerfile: 🟡 npm without cache redirect (fixable via patch)
+#   🧪 HEALTHCHECK instruction in Dockerfile
+#     fix → generate.go: map HEALTHCHECK to K8s readinessProbe
+https://github.com/dani-garcia/vaultwarden
+
+# score=40 ⭐55163 Python 1df ports:9871,9872,9873,9874,9880 [1 pipeline gap(s)]
+#     Dockerfile: 🟢 EXPOSE 9871, 9872, 9873, 9874, 9880
+#     Dockerfile: 🟡 BuildKit platform ARGs (fixable via patch)
+#     Dockerfile: 🟡 non-standard base image: xxxxrt666/torch-base:cu${CUDA_VERSION}-${TORCH_BASE}
+#   🧪 ARG before FROM — parameterised base image
+#     fix → run.sh: resolve ARG default or pass --build-arg
+https://github.com/RVC-Boss/GPT-SoVITS
+
+# score=40 ⭐51625 Go 1df ports:2379,2380 [1 pipeline gap(s)]
+#     Dockerfile: 🟢 EXPOSE 2379, 2380
+#     Dockerfile: 🟡 non-standard base image: gcr.io/distroless/static-debian12@sha256:20bc6c0bc4d625a22a8fde3e55f6515709b32055ef8fb9cfbddaa06d1760f838
+#   🧪 ARG before FROM — parameterised base image
+#     fix → run.sh: resolve ARG default or pass --build-arg
+https://github.com/etcd-io/etcd
+
+# score=75 ⭐51518 Rust 1df [1 pipeline gap(s)]
+#     Dockerfile: 🟢 multi-stage build (self-contained)
+#     Dockerfile: 🟢 uses COPY --from= (proper multi-stage)
+#     Dockerfile: 🟡 BuildKit platform ARGs (fixable via patch)
+#     Dockerfile: 🟡 non-standard base image: tonistiigi/xx
+#   🧪 RUN --mount=type=cache
+#     fix → run.sh: strip --mount flags for Kaniko or emulate with build args
+https://github.com/typst/typst
+
+
+# ═══ MAYBE (score 40-59, might need manual review) ═════════════
+
+# score=45 ⭐82935 Java 1df
+#     document/sh/Dockerfile: 🟢 EXPOSE 8080
+https://github.com/macrozheng/mall
+
+# score=40 ⭐55035 Python 1df [fixable-issues]
+#     Dockerfile: 🟢 EXPOSE 1
+#     Dockerfile: 🟡 non-standard base image: kalilinux/kali-rolling:latest
+https://github.com/Z4nzu/hackingtool
+
+
+# ═══ SKIPPED (not suitable) ═══════════════════════════════════
+
+# avelino/awesome-go: skip:no-dockerfiles
+# louislam/uptime-kuma: skip:low-score
+# bregman-arie/devops-exercises: skip:no-dockerfiles
+# nestjs/nest: skip:monorepo (lerna.json)
+# infiniflow/ragflow: skip:low-score
+# josephmisiti/awesome-machine-learning: skip:no-dockerfiles
+# hiyouga/LlamaFactory: skip:low-score
+# usememos/memos: skip:no-dockerfiles
+# ageitgey/face_recognition: skip:low-score
+# rust-unofficial/awesome-rust: skip:no-dockerfiles
+# coollabsio/coolify: skip:low-score
+# charlax/professional-programming: skip:no-dockerfiles
+# FlowiseAI/Flowise: skip:monorepo (turbo.json, pnpm-workspace.yaml)
+# affaan-m/everything-claude-code: skip:no-dockerfiles
+# oobabooga/text-generation-webui: skip:low-score
+# OpenCut-app/OpenCut: skip:monorepo (turbo.json)
+# LeCoupa/awesome-cheatsheets: skip:no-dockerfiles
+# jeecgboot/JeecgBoot: skip:low-score
+# AykutSarac/jsoncrack.com: skip:monorepo (turbo.json, pnpm-workspace.yaml)

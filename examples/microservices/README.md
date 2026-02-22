@@ -44,11 +44,11 @@ flowchart LR
     user -- "http://<user>-ui.localhost" --> ingress
 
     style cluster fill:#0f3460,stroke:#326CE5,color:#e0e0e0,stroke-width:2px
-    style orders-stack fill:#1a1a2e,stroke:#f0883e,color:#e0e0e0
-    style inventory-stack fill:#1a1a2e,stroke:#2ea043,color:#e0e0e0
+    style orders-stack fill:#112240,stroke:#F7931E,color:#e0e0e0
+    style inventory-stack fill:#112240,stroke:#2ea043,color:#e0e0e0
     style ingress fill:#FF6B35,stroke:#FF6B35,color:#fff
     style gw fill:#326CE5,stroke:#326CE5,color:#fff
-    style orders fill:#f0883e,stroke:#f0883e,color:#fff
+    style orders fill:#F7931E,stroke:#F7931E,color:#fff
     style inv fill:#2ea043,stroke:#2ea043,color:#fff
     style pg fill:#336791,stroke:#336791,color:#fff
     style rd fill:#DC382D,stroke:#DC382D,color:#fff

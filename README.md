@@ -39,16 +39,16 @@ flowchart TB
     gh("🐙 GitHub.com\nActions")
 
     dev -- "git push" --> gh
-    gh -- "runs-on: [self-hosted, ‹username›]" --> runner
+    gh -- "runs-on: self-hosted" --> runner
 
     subgraph machine["🖥️  Developer's Machine"]
         subgraph kind["☸  Kind Cluster"]
             controller("🔥 kindling\ncontroller")
             runner("🏃 Runner Pod\n<i>runner + build-agent sidecar</i>")
             registry("📦 registry:5000\n<i>in-cluster</i>")
-            staging("📦 DevStagingEnv\n<i>Deployment + Service + Ingress</i>")
+            staging("⎈ DevStagingEnv\n<i>Deployment + Service + Ingress</i>")
 
-            runner -- "Kaniko builds\n→ registry:5000" --> registry
+            runner -- "Kaniko build" --> registry
             registry -- "image pull" --> staging
             controller -- "creates &\nreconciles" --> staging
             runner -- "applies CR" --> controller
@@ -57,14 +57,14 @@ flowchart TB
 
     staging -. "localhost:80\n(via Ingress)" .-> dev
 
-    style machine fill:#1a1a2e,stroke:#16213e,color:#e0e0e0
+    style machine fill:#1a1a2e,stroke:#FF6B35,color:#e0e0e0,stroke-width:2px
     style kind fill:#0f3460,stroke:#326CE5,color:#e0e0e0,stroke-width:2px
     style controller fill:#FF6B35,stroke:#FF6B35,color:#fff
     style runner fill:#2ea043,stroke:#2ea043,color:#fff
-    style registry fill:#0db7ed,stroke:#0db7ed,color:#fff
+    style registry fill:#F7931E,stroke:#F7931E,color:#fff
     style staging fill:#326CE5,stroke:#326CE5,color:#fff
     style dev fill:#6e40c9,stroke:#6e40c9,color:#fff
-    style gh fill:#24292f,stroke:#24292f,color:#fff
+    style gh fill:#24292f,stroke:#e0e0e0,color:#fff
 ```
 
 ---
@@ -652,9 +652,9 @@ flowchart LR
         runner("🏃 Runner Pod\n<i>runner + build-agent</i>")
         kaniko["🔨 Kaniko Pod\n<i>(one-shot)</i>"]
         registry[("📦 registry:5000")]
-        cr("📋 DevStagingEnvironment CR")
+        cr("� DevStagingEnvironment CR")
         operator("🔥 kindling\noperator")
-        resources("📦 App + Deps\n📡 Service\n🌐 Ingress")
+        resources("⎈ App + Deps\n📡 Service\n🌐 Ingress")
 
         runner -- "sidecar pipes\ntarball" --> kaniko
         kaniko -- "pushes image" --> registry
@@ -668,11 +668,11 @@ flowchart LR
 
     style cluster fill:#0f3460,stroke:#326CE5,color:#e0e0e0,stroke-width:2px
     style push fill:#6e40c9,stroke:#6e40c9,color:#fff
-    style gh fill:#24292f,stroke:#24292f,color:#fff
+    style gh fill:#24292f,stroke:#e0e0e0,color:#fff
     style runner fill:#2ea043,stroke:#2ea043,color:#fff
-    style kaniko fill:#f0883e,stroke:#f0883e,color:#fff
-    style registry fill:#0db7ed,stroke:#0db7ed,color:#fff
-    style cr fill:#f0883e,stroke:#f0883e,color:#fff
+    style kaniko fill:#F7931E,stroke:#F7931E,color:#fff
+    style registry fill:#F7931E,stroke:#F7931E,color:#fff
+    style cr fill:#FFD23F,stroke:#FFD23F,color:#000
     style operator fill:#FF6B35,stroke:#FF6B35,color:#fff
     style resources fill:#326CE5,stroke:#326CE5,color:#fff
     style user fill:#6e40c9,stroke:#6e40c9,color:#fff
@@ -680,16 +680,16 @@ flowchart LR
 
 ```mermaid
 flowchart TB
-    subgraph workflow["GitHub Actions Workflow"]
+    subgraph workflow["🟢 GitHub Actions Workflow"]
         direction TB
         checkout["actions/checkout@v4"]
         clean["Clean /builds directory"]
-        build["kindling-build\n<i>tar → sidecar → Kaniko → registry:5000</i>"]
-        deploy["kindling-deploy\n<i>generate DSE YAML → sidecar → kubectl apply</i>"]
+        build["🔨 kindling-build\n<i>tar + sidecar + Kaniko + registry:5000</i>"]
+        deploy["🚀 kindling-deploy\n<i>generate DSE YAML + sidecar + kubectl apply</i>"]
         checkout --> clean --> build --> deploy
     end
 
-    subgraph sidecar["Build-Agent Sidecar"]
+    subgraph sidecar["🟠 Build-Agent Sidecar"]
         direction TB
         watch["Watch /builds for signals"]
         kaniko["Launch Kaniko pod"]
@@ -698,7 +698,7 @@ flowchart TB
         watch --> apply
     end
 
-    subgraph operator["kindling Operator"]
+    subgraph operator["🔥 kindling Operator"]
         direction TB
         reconcile["Reconcile DSE CR"]
         app_dep["Create App Deployment"]
@@ -709,9 +709,20 @@ flowchart TB
 
     workflow --> sidecar --> operator
 
-    style workflow fill:#2ea043,stroke:#2ea043,color:#fff
-    style sidecar fill:#f0883e,stroke:#f0883e,color:#fff
-    style operator fill:#FF6B35,stroke:#FF6B35,color:#fff
+    style workflow fill:#112240,stroke:#2ea043,color:#e0e0e0,stroke-width:2px
+    style sidecar fill:#112240,stroke:#F7931E,color:#e0e0e0,stroke-width:2px
+    style operator fill:#112240,stroke:#FF6B35,color:#e0e0e0,stroke-width:2px
+    style checkout fill:#2ea043,stroke:#2ea043,color:#fff
+    style clean fill:#2ea043,stroke:#2ea043,color:#fff
+    style build fill:#2ea043,stroke:#2ea043,color:#fff
+    style deploy fill:#2ea043,stroke:#2ea043,color:#fff
+    style watch fill:#F7931E,stroke:#F7931E,color:#fff
+    style kaniko fill:#F7931E,stroke:#F7931E,color:#fff
+    style apply fill:#F7931E,stroke:#F7931E,color:#fff
+    style reconcile fill:#FF6B35,stroke:#FF6B35,color:#fff
+    style app_dep fill:#FF6B35,stroke:#FF6B35,color:#fff
+    style deps fill:#FF6B35,stroke:#FF6B35,color:#fff
+    style svc fill:#FF6B35,stroke:#FF6B35,color:#fff
 ```
 
 1. **Developer bootstraps** — `kindling init` creates a Kind cluster, deploys the operator, registry, and ingress-nginx.
