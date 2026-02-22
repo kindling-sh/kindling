@@ -216,21 +216,39 @@ for b in d.get('builds', []):
 
   local all_builds_ok=true
   while IFS= read -r build_line; do
-    local build_name build_ctx img_tag
+    local build_name build_ctx build_df img_tag
     build_name=$(echo "$build_line" | python3 -c "import sys,json; print(json.load(sys.stdin)['name'])" 2>/dev/null)
     build_ctx=$(echo "$build_line" | python3 -c "import sys,json; print(json.load(sys.stdin)['context'])" 2>/dev/null)
+    build_df=$(echo "$build_line" | python3 -c "import sys,json; print(json.load(sys.stdin).get('dockerfile',''))" 2>/dev/null)
     img_tag="${repo_name}-${build_name}:test"
 
     local build_dir="$clone_dir/$build_ctx"
-    local dockerfile="$build_dir/Dockerfile"
+    local dockerfile=""
 
-    if [ ! -f "$dockerfile" ]; then
-      # Try lowercase
-      dockerfile="$build_dir/dockerfile"
+    # Resolve Dockerfile path: prefer explicit 'dockerfile' field, then default
+    if [ -n "$build_df" ]; then
+      # dockerfile field is relative to context
+      if [ -f "$build_dir/$build_df" ]; then
+        dockerfile="$build_dir/$build_df"
+      elif [ -f "$clone_dir/$build_df" ]; then
+        # Also try relative to clone root
+        dockerfile="$clone_dir/$build_df"
+      fi
     fi
-    if [ ! -f "$dockerfile" ]; then
-      emit "$repo_url" "docker_build" "skip" "${build_name}: no Dockerfile at ${build_ctx}" "0"
-      log "SKIP" "build ${build_name} — no Dockerfile at ${build_ctx}"
+
+    if [ -z "$dockerfile" ]; then
+      # Fall back to Dockerfile at context root
+      if [ -f "$build_dir/Dockerfile" ]; then
+        dockerfile="$build_dir/Dockerfile"
+      elif [ -f "$build_dir/dockerfile" ]; then
+        dockerfile="$build_dir/dockerfile"
+      fi
+    fi
+
+    if [ -z "$dockerfile" ]; then
+      local df_desc="${build_df:-${build_ctx}/Dockerfile}"
+      emit "$repo_url" "docker_build" "skip" "${build_name}: no Dockerfile at ${df_desc}" "0"
+      log "SKIP" "build ${build_name} — no Dockerfile at ${df_desc}"
       all_builds_ok=false
       continue
     fi

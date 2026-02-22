@@ -591,6 +591,21 @@ You generate dev-deploy.yml workflow files that use two reusable composite actio
    in kindling either. The "context" input must point to the directory containing
    the service's Dockerfile.
 
+CRITICAL — Dockerfile existence and self-containment:
+  a) Do NOT generate a kindling-build step for a service unless you can see a real
+     Dockerfile for it in the repository structure. If a subdirectory has source code
+     but no Dockerfile, skip it — do not assume one will appear at build time.
+  b) The Dockerfile must be SELF-CONTAINED: it must build successfully from a fresh
+     git clone with just "docker build". If the Dockerfile COPYs from directories
+     that are build artifacts (e.g. dist/, build/, out/, target/), check whether the
+     repo uses a build orchestrator like Nx, Turborepo, Bazel, or Lerna that requires
+     a pre-build step (e.g. "npx nx docker-build"). If so, the Dockerfile is NOT
+     self-contained — skip that service and add a YAML comment explaining why:
+       # SKIPPED: <service> requires 'npx nx docker-build' pre-step (not self-contained)
+  c) Multi-stage Dockerfiles that run the build INSIDE the Dockerfile (e.g.
+     FROM node:20 AS builder / RUN npm run build / FROM node:20-slim / COPY --from=builder)
+     ARE self-contained and should be included.
+
 2. kindling-deploy — deploys a DevStagingEnvironment CR via sidecar
    Uses: kindling-sh/kindling/.github/actions/kindling-deploy@main
    Inputs: name (required), image (required), port (required),

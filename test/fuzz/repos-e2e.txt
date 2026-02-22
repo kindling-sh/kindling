@@ -2,17 +2,18 @@
 # repos-e2e.txt — Repos for full e2e fuzz testing (Kind cluster)
 #
 # Selection criteria:
-#   - Passed all static analysis checks with 0 issues
-#   - Simple, well-maintained Dockerfiles likely to build in CI
-#   - Diverse languages (Node, Go, Python)
-#   - Fast generate times
+#   - Self-contained Dockerfiles (build from fresh clone, no pre-steps)
+#   - Simple, well-maintained repos with real backing dependencies
+#   - Diverse languages (Python, Node, Go/.NET)
+#   - Each Dockerfile in the repo root or a service subdirectory
 # ─────────────────────────────────────────────────────────────────
 
-# Node.js Express + MongoDB — simple single-service, fastest generate (10s)
-https://github.com/gothinkster/node-express-realworld-example-app
+# Docker's official multi-service example — vote (Python), result (Node), worker (.NET)
+# 3 services, each with its own Dockerfile, uses redis + postgres
+https://github.com/dockersamples/example-voting-app
 
-# Go Gin examples — single-service, simple Dockerfile (13.8s)
-https://github.com/gin-gonic/examples
+# Node.js Express + MongoDB — single-service, root Dockerfile, docker-compose
+https://github.com/hagopj13/node-express-boilerplate
 
-# Python FastAPI + Postgres — 2 services, well-structured (21.9s)
-https://github.com/tiangolo/full-stack-fastapi-template
+# Python Flask + SQLite/Postgres — single-service, root Dockerfile
+https://github.com/miguelgrinberg/microblog

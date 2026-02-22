@@ -100,18 +100,45 @@ def extract_builds(data: dict) -> list[dict]:
                 "context": w.get("context", "").replace(
                     "${{ github.workspace }}/", ""
                 ).replace("${{ github.workspace }}", "."),
+                "dockerfile": w.get("dockerfile", ""),
                 "image": w.get("image", ""),
             })
     return builds
 
 
-def get_dockerfile_expose(clone_dir: str, context: str) -> list[str]:
+def resolve_dockerfile(clone_dir: str, context: str, dockerfile: str) -> Path | None:
+    """Resolve the Dockerfile path for a build step.
+
+    If the build step specifies a 'dockerfile' field (e.g. "backend/Dockerfile"),
+    resolve it relative to the context directory. Otherwise fall back to
+    <context>/Dockerfile.
+    """
+    base = Path(clone_dir) / context
+    if dockerfile:
+        # dockerfile field is relative to context
+        candidate = base / dockerfile
+        if candidate.exists():
+            return candidate
+        # Also try relative to clone_dir (some workflows use repo-relative paths)
+        candidate = Path(clone_dir) / dockerfile
+        if candidate.exists():
+            return candidate
+        return None
+    # Default: look for Dockerfile at context root
+    candidate = base / "Dockerfile"
+    if candidate.exists():
+        return candidate
+    candidate = base / "dockerfile"
+    if candidate.exists():
+        return candidate
+    return None
+
+
+def get_dockerfile_expose(clone_dir: str, context: str,
+                          dockerfile_field: str = "") -> list[str]:
     """Read EXPOSE directives from a Dockerfile."""
-    dockerfile = Path(clone_dir) / context / "Dockerfile"
-    if not dockerfile.exists():
-        # Try lowercase
-        dockerfile = Path(clone_dir) / context / "dockerfile"
-    if not dockerfile.exists():
+    dockerfile = resolve_dockerfile(clone_dir, context, dockerfile_field)
+    if dockerfile is None:
         return []
     ports = []
     try:
@@ -203,7 +230,14 @@ def validate_networking(services: list[dict], builds: list[dict],
 
         # ── Check Dockerfile EXPOSE matches declared port ──────────
         if svc.get("context") and svc.get("port"):
-            expose_ports = get_dockerfile_expose(clone_dir, svc["context"])
+            # Find the matching build to get the dockerfile field
+            svc_df = ""
+            for b in builds:
+                if b.get("name") == svc["name"]:
+                    svc_df = b.get("dockerfile", "")
+                    break
+            expose_ports = get_dockerfile_expose(
+                clone_dir, svc["context"], svc_df)
             if expose_ports and svc["port"] not in expose_ports:
                 issues.append({
                     "severity": "warning",
@@ -227,18 +261,19 @@ def validate_networking(services: list[dict], builds: list[dict],
     # ── Check build contexts have Dockerfiles ──────────────────────
     for build in builds:
         ctx = build.get("context", "")
-        if not ctx or ctx == ".":
-            continue
-        dockerfile = Path(clone_dir) / ctx / "Dockerfile"
-        if not dockerfile.exists():
-            dockerfile_lower = Path(clone_dir) / ctx / "dockerfile"
-            if not dockerfile_lower.exists():
-                issues.append({
-                    "severity": "error",
-                    "service": build["name"],
-                    "type": "missing_dockerfile",
-                    "detail": f"No Dockerfile found at {ctx}/Dockerfile",
-                })
+        df_field = build.get("dockerfile", "")
+        resolved = resolve_dockerfile(clone_dir, ctx or ".", df_field)
+        if resolved is None:
+            if df_field:
+                detail = f"No Dockerfile found at {df_field} (context: {ctx or '.'})"
+            else:
+                detail = f"No Dockerfile found at {ctx or '.'}/Dockerfile"
+            issues.append({
+                "severity": "error",
+                "service": build["name"],
+                "type": "missing_dockerfile",
+                "detail": detail,
+            })
 
     return issues
 
