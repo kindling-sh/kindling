@@ -121,6 +121,80 @@ Record a video: `git clone` → working deploy in under 5 minutes. Cut
 short-form clips for Twitter/LinkedIn. Developer tools live or die by
 whether people can *see* them working.
 
+### Blog posts
+
+Each post has a "the hard way → the kindling way" arc or is a hands-on
+tutorial. Publish on the docs site blog, cross-post to Dev.to / Hashnode /
+Medium.
+
+**Getting Started / Onboarding:**
+
+- [ ] "Zero to Staging in 5 Minutes: Your First kindling Environment"
+  — The canonical quickstart walkthrough: `init` → `runners` → `generate` → `git push` → app on localhost.
+- [ ] "Stop Paying for CI You Already Own"
+  — Cloud CI costs, queue times, artifact round-trips. Real billing comparison, then demo the self-hosted runner model.
+- [ ] "I Replaced My docker-compose Dev Stack with a Kubernetes Operator"
+  — Migrate a typical `docker-compose up` workflow to kindling. What you gain (CI integration, dependency auto-provisioning, ingress routing) and what stays the same.
+
+**Language / Framework Tutorials:**
+
+- [ ] "Deploy a FastAPI + Postgres App to Your Laptop with One Git Push"
+  — Python tutorial: `kindling generate` detects `requirements.txt` + compose, auto-provisions Postgres, injects `DATABASE_URL`.
+- [ ] "Next.js + Redis on Localhost Kubernetes — No Cloud Required"
+  — Node tutorial: SSR app with Redis caching. `generate` detects frontend for ingress, wires Redis, handles multi-stage Dockerfile.
+- [ ] "From Rails Monolith to Local Kubernetes in 10 Minutes"
+  — Ruby tutorial: Rails + Postgres + Redis (Sidekiq). Highlight `.env.example` scanning and credential detection.
+- [ ] "Go Microservices the Easy Way: 4 Services, 3 Databases, Zero YAML by Hand"
+  — Use `examples/microservices/`. Show `generate` producing the full workflow for Gateway + Orders + Inventory + UI.
+- [ ] "Deploying a Rust Web Service with HEALTHCHECK and Multi-Stage Builds"
+  — Rust Actix/Axum app. Highlight Kaniko handling multi-stage builds and long compile times with build timeout guidance.
+
+**Feature Deep Dives:**
+
+- [ ] "How kindling generate Actually Works: AI Meets Repo Scanning"
+  — Under-the-hood walkthrough of the 8-stage pipeline: repo scan → compose analysis → Helm render → .env scan → credential detection → OAuth detection → prompt assembly → AI call.
+- [ ] "15 Dependencies, Zero Configuration: Auto-Provisioning from Postgres to Jaeger"
+  — Tour all 15 dependency types. Single DSE YAML provisioning Postgres, Redis, Kafka, Elasticsearch, and Vault with auto-injected connection env vars.
+- [ ] "Managing Secrets in Local Kubernetes Without Losing Your Mind"
+  — Tutorial: `secrets set` → local backup → `destroy` → `init` → `secrets restore`. How `secretKeyRef` wiring works in generated workflows.
+- [ ] "OAuth on Localhost: Testing Auth0 Callbacks Without Deploying to the Cloud"
+  — Tutorial: `kindling expose` with cloudflared, configure Auth0 callback URL, push code, test the full OAuth flow locally. TLS-aware ingress patching.
+- [ ] "The Build-Agent Sidecar: How kindling Builds Containers Without Docker"
+  — Deep dive into the signal-file protocol, Kaniko one-shot pods, and the `/builds/` volume. Why this architecture keeps the runner container stock and unprivileged.
+
+**Real-World Scenarios:**
+
+- [ ] "Testing Stripe Webhooks Locally with kindling expose"
+  — Stripe needs a public URL for webhooks. `kindling secrets set STRIPE_KEY` + `kindling expose` → public tunnel → webhook hits localhost pod.
+- [ ] "Local Staging for a Multi-Service E-Commerce App"
+  — End-to-end: clone a real compose-based app, run `kindling generate`, push, see the full stack on localhost with ingress routing.
+- [ ] "Debugging CI Failures Faster When the Runner Is on Your Desk"
+  — The feedback loop: push → build fails → `kindling logs` → fix → push again. Compare to waiting 8 minutes for a cloud runner re-queue.
+- [ ] "One Cluster, Multiple Repos: Using kindling reset to Switch Projects"
+  — Tutorial: `runners` for repo A → work → `reset` → `runners` for repo B. Cluster stays warm, just the runner re-points.
+- [ ] "Live Environment Variable Updates Without Redeploying"
+  — Tutorial: `kindling env set` / `list` / `unset` to hot-swap config on a running deployment. Feature flag toggling during development.
+
+**Ops / Architecture:**
+
+- [ ] "Why We Chose Kubebuilder: Building a Kubernetes Operator for Dev Environments"
+  — CRD design, reconcile loops, OwnerReferences for garbage collection, spec-hash annotations to avoid unnecessary writes.
+- [ ] "Kaniko Layer Caching on localhost: How kindling Makes Rebuilds Fast"
+  — `registry:5000/cache`, first-build vs rebuild times, tuning Docker Desktop resources for different stack sizes.
+- [ ] "Helm Charts Meet AI: How kindling Renders Your Chart Before Generating a Workflow"
+  — How `kindling generate --model o3` uses `helm template` output as authoritative context for ports and env vars.
+- [ ] "From docker-compose.yml to Kubernetes — What the AI Actually Sees"
+  — How `build.context`, `depends_on`, and `environment` blocks get mapped to `kindling-build` inputs, dependency types, and env var overrides.
+
+**Hot Takes / Opinion:**
+
+- [ ] "Your Laptop Is the Best CI Runner You're Not Using"
+  — Economics and DX of local-first CI. Apple Silicon benchmarks vs cloud runners. When cloud CI still makes sense.
+- [ ] "Stop Writing GitHub Actions YAML by Hand"
+  — 3 real repos, run `kindling generate` on each, compare AI-generated workflow to what a human would write.
+- [ ] "The Case for Ephemeral Staging Environments That Don't Cost Anything"
+  — Compare kindling's local staging to Vercel previews, Railway, Render PR environments. Trade-offs: cost ($0) vs collaboration (single-developer).
+
 ### Community presence
 
 - Answer questions on r/kubernetes, r/devops, r/selfhosted — mention
