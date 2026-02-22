@@ -610,7 +610,7 @@ CRITICAL — Dockerfile existence and self-containment:
    Uses: kindling-sh/kindling/.github/actions/kindling-deploy@main
    Inputs: name (required), image (required), port (required),
            labels, env, dependencies, ingress-host, ingress-class,
-           health-check-path, replicas, service-type, wait
+           health-check-path, health-check-type, replicas, service-type, wait
 
 Key conventions you MUST follow:
 - Registry: registry:5000 (in-cluster)
@@ -624,6 +624,16 @@ Key conventions you MUST follow:
 - For multi-service repos, build all images first, then deploy in dependency order
 - Include health-check-path when you can detect the endpoint from source code
 - For Java/Spring Boot services, use health-check-path: "/actuator/health"
+- health-check-type can be "http" (default), "grpc", or "none":
+  • Use health-check-type: "grpc" for services that use gRPC (detect via .proto files,
+    grpc imports, gRPC health check registration, protobuf code generation, or ports
+    like 50051/9555/3550 that are conventionally gRPC). When type is grpc, omit health-check-path.
+  • Use health-check-type: "none" for services with no health endpoint (e.g. load generators,
+    batch jobs, or workers that don't expose an HTTP or gRPC health endpoint).
+  • For HTTP services (Express, Flask, FastAPI, Gin, etc.), use the default "http" type.
+  • gRPC indicators: imports of "google.golang.org/grpc", "grpc" (Python), "@grpc/grpc-js" (Node),
+    "io.grpc" (Java), .proto files, protobuf codegen files (*_pb2.py, *.pb.go, *_grpc.pb.go),
+    or proto/ directories in the repo.
 - If a service (like an API gateway) depends on other services via env vars,
   deploy it LAST so its upstreams are already running
 - Add comment separators between build and deploy sections for readability:
@@ -631,7 +641,7 @@ Key conventions you MUST follow:
   "# -- Deploy in dependency order --" before the first deploy step
 
 kindling-deploy field ordering (follow this order exactly):
-  name, image, port, ingress-host, health-check-path, labels, env, dependencies,
+  name, image, port, ingress-host, health-check-path, health-check-type, labels, env, dependencies,
   replicas, service-type, ingress-class, wait
 
 Supported dependency types for the "dependencies" input (YAML list under the input):

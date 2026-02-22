@@ -8,10 +8,13 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/fsnotify/fsnotify"
 )
 
 // actionResult is the standard JSON envelope for mutation endpoints.
@@ -768,4 +771,279 @@ func handleApplyYAML(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	actionOK(w, string(out))
+}
+
+// ── Sync state ──────────────────────────────────────────────────
+// Tracks a running file-sync session (one per dashboard instance).
+
+var (
+	activeSyncMu   sync.Mutex
+	activeSyncStop chan struct{} // closed to signal stop
+	activeSyncInfo *syncInfo
+)
+
+type syncInfo struct {
+	Deployment string    `json:"deployment"`
+	Namespace  string    `json:"namespace"`
+	Src        string    `json:"src"`
+	Dest       string    `json:"dest"`
+	Container  string    `json:"container,omitempty"`
+	Restart    bool      `json:"restart"`
+	Pod        string    `json:"pod"`
+	SyncCount  int       `json:"sync_count"`
+	LastSync   time.Time `json:"last_sync,omitempty"`
+	StartedAt  time.Time `json:"started_at"`
+}
+
+// ── POST /api/sync ──────────────────────────────────────────────
+// Starts a file-sync session for a deployment.
+
+func handleSyncAction(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodDelete {
+		handleSyncStop(w, r)
+		return
+	}
+	if !requireMethod(w, r, http.MethodPost) {
+		return
+	}
+
+	var body struct {
+		Deployment string `json:"deployment"`
+		Namespace  string `json:"namespace"`
+		Src        string `json:"src"`
+		Dest       string `json:"dest"`
+		Container  string `json:"container"`
+		Restart    bool   `json:"restart"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		actionErr(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	if body.Deployment == "" {
+		actionErr(w, "deployment is required", http.StatusBadRequest)
+		return
+	}
+	if body.Namespace == "" {
+		body.Namespace = "default"
+	}
+	if body.Src == "" {
+		body.Src = "."
+	}
+	if body.Dest == "" {
+		body.Dest = "/app"
+	}
+
+	srcAbs, err := filepath.Abs(body.Src)
+	if err != nil {
+		actionErr(w, "invalid src path: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if info, err := os.Stat(srcAbs); err != nil || !info.IsDir() {
+		actionErr(w, "src directory does not exist: "+srcAbs, http.StatusBadRequest)
+		return
+	}
+
+	activeSyncMu.Lock()
+	if activeSyncStop != nil {
+		activeSyncMu.Unlock()
+		actionErr(w, "sync already running — stop it first", http.StatusConflict)
+		return
+	}
+
+	// Find the target pod
+	pod, err := findPodForDeployment(body.Deployment, body.Namespace)
+	if err != nil {
+		activeSyncMu.Unlock()
+		actionErr(w, err.Error(), http.StatusUnprocessableEntity)
+		return
+	}
+
+	// Do initial sync
+	if syncErr := syncDir(pod, body.Namespace, srcAbs, body.Dest, body.Container); syncErr != nil {
+		activeSyncMu.Unlock()
+		actionErr(w, "initial sync failed: "+syncErr.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	stopCh := make(chan struct{})
+	activeSyncStop = stopCh
+	activeSyncInfo = &syncInfo{
+		Deployment: body.Deployment,
+		Namespace:  body.Namespace,
+		Src:        srcAbs,
+		Dest:       body.Dest,
+		Container:  body.Container,
+		Restart:    body.Restart,
+		Pod:        pod,
+		StartedAt:  time.Now(),
+	}
+	activeSyncMu.Unlock()
+
+	// Start the watcher in a goroutine
+	go runDashboardSync(body.Deployment, body.Namespace, srcAbs, body.Dest, body.Container, body.Restart, stopCh)
+
+	actionOK(w, fmt.Sprintf("Sync started: %s → %s:%s", srcAbs, pod, body.Dest))
+}
+
+// runDashboardSync is the background goroutine for dashboard-initiated sync.
+func runDashboardSync(deployment, namespace, srcDir, dest, container string, restart bool, stopCh chan struct{}) {
+	excludes := append([]string{}, defaultExcludes...)
+
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		activeSyncMu.Lock()
+		activeSyncStop = nil
+		activeSyncInfo = nil
+		activeSyncMu.Unlock()
+		return
+	}
+	defer func() {
+		watcher.Close()
+		activeSyncMu.Lock()
+		activeSyncStop = nil
+		activeSyncInfo = nil
+		activeSyncMu.Unlock()
+	}()
+
+	if err := addWatchDirRecursive(watcher, srcDir, excludes); err != nil {
+		return
+	}
+
+	var debounceTimer *time.Timer
+	pendingFiles := make(map[string]bool)
+
+	flushSync := func() {
+		if len(pendingFiles) == 0 {
+			return
+		}
+
+		activeSyncMu.Lock()
+		info := activeSyncInfo
+		activeSyncMu.Unlock()
+		if info == nil {
+			return
+		}
+
+		// Re-discover pod
+		pod, err := findPodForDeployment(deployment, namespace)
+		if err != nil {
+			pendingFiles = make(map[string]bool)
+			return
+		}
+
+		fileList := make([]string, 0, len(pendingFiles))
+		for f := range pendingFiles {
+			fileList = append(fileList, f)
+		}
+		pendingFiles = make(map[string]bool)
+
+		var synced int
+		for _, localPath := range fileList {
+			relPath, _ := filepath.Rel(srcDir, localPath)
+			destPath := filepath.Join(dest, relPath)
+			destPath = strings.ReplaceAll(destPath, "\\", "/")
+			if syncFile(pod, namespace, localPath, destPath, container) == nil {
+				synced++
+			}
+		}
+
+		if restart && synced > 0 {
+			_, _ = syncAndRestart(pod, namespace, container, srcDir, dest, nil)
+		}
+
+		activeSyncMu.Lock()
+		if activeSyncInfo != nil {
+			activeSyncInfo.Pod = pod
+			activeSyncInfo.SyncCount += synced
+			activeSyncInfo.LastSync = time.Now()
+		}
+		activeSyncMu.Unlock()
+	}
+
+	for {
+		select {
+		case <-stopCh:
+			if debounceTimer != nil {
+				debounceTimer.Stop()
+			}
+			flushSync()
+			return
+
+		case event, ok := <-watcher.Events:
+			if !ok {
+				return
+			}
+			if !event.Has(fsnotify.Write) && !event.Has(fsnotify.Create) {
+				continue
+			}
+			relPath, _ := filepath.Rel(srcDir, event.Name)
+			if shouldExclude(relPath, excludes) {
+				continue
+			}
+			if info, err := os.Stat(event.Name); err == nil && info.IsDir() {
+				if event.Has(fsnotify.Create) {
+					_ = addWatchDirRecursive(watcher, event.Name, excludes)
+				}
+				continue
+			}
+			pendingFiles[event.Name] = true
+			if debounceTimer != nil {
+				debounceTimer.Stop()
+			}
+			debounceTimer = time.AfterFunc(500*time.Millisecond, flushSync)
+
+		case _, ok := <-watcher.Errors:
+			if !ok {
+				return
+			}
+		}
+	}
+}
+
+// ── DELETE /api/sync ────────────────────────────────────────────
+func handleSyncStop(w http.ResponseWriter, r *http.Request) {
+	activeSyncMu.Lock()
+	defer activeSyncMu.Unlock()
+
+	if activeSyncStop == nil {
+		actionErr(w, "no sync session running", http.StatusNotFound)
+		return
+	}
+	close(activeSyncStop)
+	actionOK(w, "Sync stopped")
+}
+
+// ── GET /api/sync/status ────────────────────────────────────────
+func handleSyncStatus(w http.ResponseWriter, r *http.Request) {
+	activeSyncMu.Lock()
+	defer activeSyncMu.Unlock()
+
+	type status struct {
+		Running    bool      `json:"running"`
+		Deployment string    `json:"deployment,omitempty"`
+		Namespace  string    `json:"namespace,omitempty"`
+		Src        string    `json:"src,omitempty"`
+		Dest       string    `json:"dest,omitempty"`
+		Pod        string    `json:"pod,omitempty"`
+		SyncCount  int       `json:"sync_count"`
+		LastSync   time.Time `json:"last_sync,omitempty"`
+		StartedAt  time.Time `json:"started_at,omitempty"`
+	}
+
+	if activeSyncInfo == nil {
+		jsonResponse(w, status{})
+		return
+	}
+
+	jsonResponse(w, status{
+		Running:    true,
+		Deployment: activeSyncInfo.Deployment,
+		Namespace:  activeSyncInfo.Namespace,
+		Src:        activeSyncInfo.Src,
+		Dest:       activeSyncInfo.Dest,
+		Pod:        activeSyncInfo.Pod,
+		SyncCount:  activeSyncInfo.SyncCount,
+		LastSync:   activeSyncInfo.LastSync,
+		StartedAt:  activeSyncInfo.StartedAt,
+	})
 }

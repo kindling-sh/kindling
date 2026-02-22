@@ -434,6 +434,9 @@ kindling destroy
 | `kindling expose` | Create a public HTTPS tunnel (cloudflared/ngrok) for OAuth callbacks |
 | `kindling expose --stop` | Stop a running tunnel and restore original ingress configuration |
 | `kindling expose --service <name>` | Route tunnel traffic to a specific ingress |
+| `kindling sync -d <deploy> --restart` | Live-sync local files into a running pod with auto-detected hot reload |
+| `kindling sync -d <deploy> --restart --once` | One-shot sync + restart (no file watching) |
+| `kindling sync -d <deploy> --language go` | Sync with explicit language override (cross-compiles locally for compiled langs) |
 | `kindling env set <deploy> K=V ...` | Set environment variables on a running deployment |
 | `kindling env list <deploy>` | List environment variables on a deployment |
 | `kindling env unset <deploy> K ...` | Remove environment variables from a deployment |
@@ -524,6 +527,42 @@ Go API + React dashboard connected to Postgres, Redis, Elasticsearch, Kafka, and
 → [examples/platform-api/](examples/platform-api/) · [README](examples/platform-api/README.md)
 
 All three examples use the **reusable kindling GitHub Actions** (`kindling-build` + `kindling-deploy`) — no raw signal-file scripting required.
+
+---
+
+## Live Sync & Hot Reload
+
+`kindling sync` watches a local directory and live-syncs file changes into a running pod — no image rebuild, no redeploy. The restart strategy is **auto-detected** based on the runtime:
+
+| Strategy | Languages / Runtimes | How it works |
+|---|---|---|
+| **wrapper + kill** | Node.js, Python, Ruby, Perl, Lua, Julia, R, Elixir | Patches the deployment with a restart loop, syncs files, kills the child process |
+| **signal reload** | uvicorn, gunicorn, Puma, Nginx, Apache | Sends SIGHUP/USR2 for zero-downtime reload |
+| **auto-reload** | PHP (mod_php / php-fpm), nodemon | Just syncs files — runtime picks them up automatically |
+| **local build + binary sync** | Go, Rust, Java, Kotlin, C#, C/C++, Zig | Cross-compiles locally for the container's OS/arch, syncs the binary, restarts |
+
+```bash
+# Watch + auto-restart (strategy auto-detected)
+kindling sync -d my-service --restart
+
+# One-shot sync + restart
+kindling sync -d my-service --restart --once
+
+# Go service — auto cross-compiles locally
+kindling sync -d my-gateway --restart --language go
+
+# Custom build command for compiled languages
+kindling sync -d my-gateway --restart \
+  --build-cmd 'CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o ./bin/app .' \
+  --build-output ./bin/app
+
+# Sync a specific source directory into a custom container path
+kindling sync -d my-service --src ./services/orders --dest /opt/app
+```
+
+The runtime detection reads the container's PID 1 command line and matches against 30+ known process signatures. For compiled languages, `kindling sync` auto-detects the container's architecture via `kubectl get nodes` and cross-compiles with the correct `GOOS`/`GOARCH`.
+
+→ [docs/cli.md](docs/cli.md#kindling-sync)
 
 ---
 
@@ -753,8 +792,9 @@ flowchart TB
 ├── cli/                                 # kindling CLI tool (cobra)
 │   ├── main.go                          #   CLI entrypoint
 │   └── cmd/                             #   Commands: init, runners, generate,
-│       ├── init.go                      #     secrets, expose, env, reset, deploy,
-│       ├── generate.go                  #     status, logs, destroy, version
+│       ├── init.go                      #     sync, secrets, expose, env, reset,
+│       ├── generate.go                  #     deploy, status, logs, destroy, version
+│       ├── sync.go                      #     Live sync + hot reload (30+ runtimes)
 │       ├── secrets.go
 │       ├── expose.go
 │       └── ...
@@ -828,6 +868,9 @@ kind delete cluster --name dev
 - [x] `kindling expose` — public HTTPS tunnels (cloudflared/ngrok) for OAuth/OIDC callbacks
 - [x] OAuth/OIDC detection — flags Auth0, Okta, Firebase, NextAuth patterns and suggests `kindling expose`
 - [x] `kindling env` — set/list/unset environment variables on running deployments without redeploying
+- [x] `kindling sync` — live-sync local files into running pods with auto-detected hot reload
+- [x] Language-aware restart strategies — wrapper+kill, signal reload, auto-reload, local build+sync
+- [x] Local cross-compilation for compiled languages — auto-detects container OS/arch
 - [x] `kindling reset` — remove runner pool to re-point at a new repo (keeps cluster intact)
 - [x] TLS-aware ingress patching — saves/strips/restores `spec.tls` when tunnel is active
 - [x] Self-healing orphaned ingresses — auto-restores ingresses left with stale tunnel hostnames

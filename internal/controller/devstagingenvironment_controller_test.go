@@ -261,6 +261,30 @@ var _ = Describe("buildDeployment", func() {
 		Expect(container.ReadinessProbe).NotTo(BeNil())
 		Expect(container.LivenessProbe.HTTPGet.Path).To(Equal("/healthz"))
 	})
+
+	It("sets gRPC health check probes when type is grpc", func() {
+		cr := newTestDSE("test-grpc")
+		cr.Spec.Deployment.HealthCheck = &appsv1alpha1.HealthCheckSpec{
+			Type: "grpc",
+		}
+		deploy := r.buildDeployment(cr)
+		container := deploy.Spec.Template.Spec.Containers[0]
+		Expect(container.LivenessProbe).NotTo(BeNil())
+		Expect(container.ReadinessProbe).NotTo(BeNil())
+		Expect(container.LivenessProbe.GRPC).NotTo(BeNil())
+		Expect(container.LivenessProbe.GRPC.Port).To(Equal(int32(8080)))
+	})
+
+	It("skips health check probes when type is none", func() {
+		cr := newTestDSE("test-none")
+		cr.Spec.Deployment.HealthCheck = &appsv1alpha1.HealthCheckSpec{
+			Type: "none",
+		}
+		deploy := r.buildDeployment(cr)
+		container := deploy.Spec.Template.Spec.Containers[0]
+		Expect(container.LivenessProbe).To(BeNil())
+		Expect(container.ReadinessProbe).To(BeNil())
+	})
 })
 
 var _ = Describe("buildService", func() {

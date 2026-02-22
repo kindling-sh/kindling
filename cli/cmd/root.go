@@ -29,6 +29,7 @@ Common workflow:
   kindling secrets set STRIPE_KEY sk_...  # store an external secret
   kindling deploy -f dev-environment.yaml # spin up a staging environment
   kindling load -s orders --context .     # build, load into Kind, roll out
+  kindling sync -d orders                 # live-sync files into running pod
   kindling push -s orders                 # git push, rebuild orders only
   kindling expose                         # public HTTPS tunnel for OAuth
   kindling status                         # view everything at a glance

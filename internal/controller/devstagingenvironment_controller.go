@@ -222,9 +222,18 @@ func (r *DevStagingEnvironmentReconciler) buildDeployment(cr *appsv1alpha1.DevSt
 
 	// Wire up health checks if specified
 	if spec.HealthCheck != nil {
-		probe := buildHTTPProbe(spec.HealthCheck, spec.Port)
-		container.LivenessProbe = probe.DeepCopy()
-		container.ReadinessProbe = probe.DeepCopy()
+		switch spec.HealthCheck.Type {
+		case "grpc":
+			probe := buildGRPCProbe(spec.HealthCheck, spec.Port)
+			container.LivenessProbe = probe.DeepCopy()
+			container.ReadinessProbe = probe.DeepCopy()
+		case "none":
+			// No probes — intentionally left empty
+		default: // "http" or empty
+			probe := buildHTTPProbe(spec.HealthCheck, spec.Port)
+			container.LivenessProbe = probe.DeepCopy()
+			container.ReadinessProbe = probe.DeepCopy()
+		}
 	}
 
 	// Build init containers that wait for each dependency to accept TCP connections
@@ -589,6 +598,31 @@ func buildHTTPProbe(hc *appsv1alpha1.HealthCheckSpec, defaultPort int32) *corev1
 			HTTPGet: &corev1.HTTPGetAction{
 				Path: hc.Path,
 				Port: intstr.FromInt(int(port)),
+			},
+		},
+	}
+
+	if hc.InitialDelaySeconds != nil {
+		probe.InitialDelaySeconds = *hc.InitialDelaySeconds
+	}
+	if hc.PeriodSeconds != nil {
+		probe.PeriodSeconds = *hc.PeriodSeconds
+	}
+
+	return probe
+}
+
+// buildGRPCProbe constructs a liveness/readiness probe using the gRPC health checking protocol.
+func buildGRPCProbe(hc *appsv1alpha1.HealthCheckSpec, defaultPort int32) *corev1.Probe {
+	port := defaultPort
+	if hc.Port != nil {
+		port = *hc.Port
+	}
+
+	probe := &corev1.Probe{
+		ProbeHandler: corev1.ProbeHandler{
+			GRPC: &corev1.GRPCAction{
+				Port: port,
 			},
 		},
 	}

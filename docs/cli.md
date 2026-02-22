@@ -316,6 +316,91 @@ kindling logs --all
 
 ---
 
+### `kindling sync`
+
+Live-sync local files into a running pod with language-aware hot reload.
+
+```
+kindling sync [flags]
+```
+
+**What it does:**
+1. Finds the running pod for the specified deployment
+2. Auto-detects the runtime from the container's PID 1 command line
+3. Syncs local files into the container via `kubectl cp`
+4. Restarts the process using the detected strategy
+5. Optionally watches for file changes and re-syncs on each save
+
+**Restart strategies (auto-detected):**
+
+| Strategy | Runtimes | How it works |
+|---|---|---|
+| **wrapper + kill** | Node.js, Python, Ruby, Perl, Lua, Julia, R, Elixir, Deno, Bun | Patches the deployment with a restart-loop wrapper, syncs files, kills the child process so the loop respawns it with new code |
+| **signal reload** | uvicorn, gunicorn, Puma, Unicorn, Nginx, Apache (httpd) | Sends SIGHUP or SIGUSR2 to PID 1 for zero-downtime graceful reload. Falls back to wrapper+kill if PID 1 is the wrapper shell |
+| **auto-reload** | PHP (mod_php, php-fpm), nodemon | Just syncs files — the runtime re-reads on every request or watches for changes itself |
+| **local build + binary sync** | Go, Rust, Java, Kotlin, C#/.NET, C/C++, Zig | Cross-compiles locally for the container's OS/arch, syncs just the binary, and restarts via the wrapper |
+
+**Runtime detection** reads `/proc/1/cmdline` from the container and matches against 30+ known process signatures (`node`, `python`, `ruby`, `uvicorn`, `gunicorn`, `puma`, `nginx`, `httpd`, `go`, `cargo`, `dotnet`, `java`, `mix`, `iex`, `deno`, `bun`, `perl`, `php-fpm`, `lua`, `luajit`, `julia`, `Rscript`, etc.). For Python, it also scans command arguments for framework names (uvicorn, gunicorn, flask, django, etc.).
+
+**Compiled language support:** For `modeRebuild` languages, `kindling sync` queries the Kind node's architecture (`kubectl get nodes -o jsonpath=...`) and auto-generates the correct cross-compilation command:
+- **Go** — `CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o <tmpfile> .`
+- **Rust** — `cargo build --release --target aarch64-unknown-linux-gnu`
+- **Java** — `mvn package -DskipTests` or `gradle build -x test`
+- **.NET** — `dotnet publish -r linux-arm64 -c Release --self-contained`
+
+Use `--build-cmd` and `--build-output` to override the auto-detected build.
+
+**Flags:**
+
+| Flag | Short | Default | Description |
+|---|---|---|---|
+| `--deployment` | `-d` | — (required) | Target deployment name |
+| `--src` | — | `.` | Local source directory to watch |
+| `--dest` | — | `/app` | Destination path inside the container |
+| `--namespace` | `-n` | `default` | Kubernetes namespace |
+| `--restart` | — | `false` | Restart the app process after each sync batch |
+| `--once` | — | `false` | Sync once and exit (no file watching) |
+| `--container` | — | — | Container name (for multi-container pods) |
+| `--exclude` | — | — | Additional patterns to exclude (repeatable) |
+| `--debounce` | — | `500ms` | Debounce interval for batching rapid file changes |
+| `--language` | — | auto-detect | Override runtime detection (`node`, `python`, `ruby`, `php`, `go`, `rust`, `java`, `dotnet`, `elixir`, ...) |
+| `--build-cmd` | — | auto-detect | Local build command for compiled languages |
+| `--build-output` | — | auto-detect | Path to built artifact to sync into the container |
+
+**Default excludes:** `.git`, `node_modules`, `__pycache__`, `.venv`, `vendor`, `target`, `.next`, `dist`, `build`, `*.pyc`, `*.o`, `*.exe`, `*.log`, `.DS_Store`.
+
+**Examples:**
+
+```bash
+# Watch current directory + auto-restart a Node.js service
+kindling sync -d my-api --restart
+
+# One-shot sync + restart (no file watching)
+kindling sync -d my-api --restart --once
+
+# Sync into a Python/uvicorn service (detects SIGHUP strategy)
+kindling sync -d orders --src ./services/orders --restart
+
+# Sync static files into Nginx (SIGHUP zero-downtime reload)
+kindling sync -d frontend --src ./dist --dest /usr/share/nginx/html --restart
+
+# Go service — auto cross-compiles locally for container arch
+kindling sync -d gateway --restart --language go
+
+# Custom build command + output for compiled languages
+kindling sync -d gateway --restart \
+  --build-cmd 'CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o ./bin/gw .' \
+  --build-output ./bin/gw
+
+# Sync a specific source dir with extra excludes
+kindling sync -d my-api --src ./src --exclude '*.test.js' --exclude 'fixtures/'
+
+# Target a specific container in a multi-container pod
+kindling sync -d my-api --container app --restart
+```
+
+---
+
 ### `kindling secrets`
 
 Manage external credentials (API keys, tokens, DSNs) as Kubernetes
@@ -586,22 +671,25 @@ git push origin main
 # 8. Check status (includes crash diagnostics for unhealthy pods)
 kindling status
 
-# 9. Set env vars on a running deployment without redeploying
+# 9. Live-sync code changes without rebuilding the image
+kindling sync -d myapp-dev --restart
+
+# 10. Set env vars on a running deployment without redeploying
 kindling env set myapp-dev DATABASE_PORT=5432
 
-# 10. View controller logs
+# 11. View controller logs
 kindling logs
 
-# 11. Stop the tunnel when done
+# 12. Stop the tunnel when done
 kindling expose --stop
 
-# 12. Re-point runners at a different repo
+# 13. Re-point runners at a different repo
 kindling reset
 kindling runners -u alice -r acme/other-app -t ghp_xxxxx
 
-# 13. Manual deploy (without CI)
+# 14. Manual deploy (without CI)
 kindling deploy -f dev-environment.yaml
 
-# 14. Tear down when done
+# 15. Tear down when done
 kindling destroy -y
 ```

@@ -133,8 +133,8 @@ export function OverviewPage() {
           <div className="card-body">
             {ingressPods?.items?.length ? (
               ingressPods.items.map((p) => (
-                <div key={p.metadata.name} className="stat-row">
-                  <span className="label mono" style={{ fontSize: 11 }}>{p.metadata.name.slice(0, 30)}</span>
+                <div key={p.metadata.name} className="stat-row" style={{ flexWrap: 'nowrap' }}>
+                  <span className="label mono" style={{ fontSize: 11, overflow: 'auto', whiteSpace: 'nowrap', minWidth: 0, flex: '1 1 0' }}>{p.metadata.name}</span>
                   <StatusBadge ok={p.status.phase === 'Running'} label={p.status.phase || 'Unknown'} />
                 </div>
               ))

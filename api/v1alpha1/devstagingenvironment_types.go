@@ -83,7 +83,15 @@ type ResourceRequirements struct {
 
 // HealthCheckSpec configures liveness and readiness probes.
 type HealthCheckSpec struct {
+	// Type is the probe type: "http" (default), "grpc", or "none".
+	// When "grpc", the probe uses the gRPC health checking protocol.
+	// When "none", no probes are attached (useful for services that don't expose health endpoints).
+	//+kubebuilder:validation:Enum=http;grpc;none
+	//+kubebuilder:default="http"
+	Type string `json:"type,omitempty"`
+
 	// Path is the HTTP path for the health check endpoint (e.g. "/healthz").
+	// Only used when Type is "http".
 	//+kubebuilder:default="/healthz"
 	Path string `json:"path,omitempty"`
 

@@ -1332,13 +1332,13 @@ body { margin: 0; overflow-x: hidden; }
 }
 
 .toast-success {
-  background: var(--green-bg);
+  background: color-mix(in srgb, var(--green) 12%, var(--bg-surface));
   color: var(--green);
   border: 1px solid rgba(34, 197, 94, 0.2);
 }
 
 .toast-error {
-  background: var(--red-bg);
+  background: color-mix(in srgb, var(--red) 12%, var(--bg-surface));
   color: var(--red);
   border: 1px solid rgba(239, 68, 68, 0.2);
 }

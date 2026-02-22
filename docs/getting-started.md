@@ -289,7 +289,30 @@ Every `git push` triggers a new build + deploy. The operator updates the
 Deployment in-place, and Kubernetes rolls out the new image with zero
 downtime.
 
-**Useful commands while iterating:**
+For faster iteration without pushing to GitHub, use **live sync** to copy
+local file changes directly into the running container:
+
+```bash
+# Watch for changes and auto-restart (strategy auto-detected per language)
+kindling sync -d myapp-dev --restart
+
+# One-shot sync + restart
+kindling sync -d myapp-dev --restart --once
+
+# Go service — cross-compiles locally, syncs the binary
+kindling sync -d my-gateway --restart --language go
+```
+
+`kindling sync` auto-detects the runtime (Node.js, Python, Ruby, Go, Rust,
+Nginx, PHP, etc.) and chooses the right restart strategy:
+- **Interpreted languages** — syncs files and restarts the process via a wrapper loop
+- **Signal-reload servers** (uvicorn, Nginx, Puma) — sends SIGHUP for zero-downtime reload
+- **Compiled languages** (Go, Rust, Java) — cross-compiles locally for the container's arch, syncs the binary
+- **Auto-reload runtimes** (PHP, nodemon) — just syncs files, no restart needed
+
+See [CLI Reference — kindling sync](cli.md#kindling-sync) for all flags and options.
+
+**Other useful commands while iterating:**
 
 ```bash
 # Check status — includes crash diagnostics for unhealthy pods
@@ -368,6 +391,8 @@ kindling destroy -y
 
 ## Next steps
 
+- [CLI Reference — `kindling sync`](cli.md#kindling-sync) — live-sync files
+  into running pods with language-aware hot reload
 - [Secrets Management](secrets.md) — managing API keys, tokens, and
   credentials across cluster rebuilds
 - [OAuth & Tunnels](oauth-tunnels.md) — setting up public HTTPS for

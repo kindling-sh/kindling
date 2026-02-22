@@ -42,6 +42,10 @@ inputs:
     description: "HTTP health check path"
     required: false
     default: "/healthz"
+  health-check-type:
+    description: "Health check type: http (default), grpc, or none"
+    required: false
+    default: "http"
   replicas:
     description: "Number of replicas"
     required: false
@@ -78,6 +82,7 @@ runs:
         DSE_INGRESS_HOST: ${{ inputs.ingress-host }}
         DSE_INGRESS_CLASS: ${{ inputs.ingress-class }}
         DSE_HEALTH_PATH: ${{ inputs.health-check-path }}
+        DSE_HEALTH_TYPE: ${{ inputs.health-check-type }}
         DSE_REPLICAS: ${{ inputs.replicas }}
         DSE_SVC_TYPE: ${{ inputs.service-type }}
         DSE_WAIT: ${{ inputs.wait }}
@@ -123,9 +128,23 @@ runs:
             image: ${DSE_IMAGE}
             replicas: ${DSE_REPLICAS}
             port: ${DSE_PORT}
-            healthCheck:
-              path: ${DSE_HEALTH_PATH}
         SPECEOF
+
+        # Append health check based on type
+        if [ "${DSE_HEALTH_TYPE}" = "grpc" ]; then
+          cat >> "${YAML_FILE}" <<HCEOF
+            healthCheck:
+              type: grpc
+        HCEOF
+        elif [ "${DSE_HEALTH_TYPE}" = "none" ]; then
+          : # No health check
+        else
+          cat >> "${YAML_FILE}" <<HCEOF
+            healthCheck:
+              type: http
+              path: ${DSE_HEALTH_PATH}
+        HCEOF
+        fi
 
         # Append env if provided
         if [ -n "${DSE_ENV}" ]; then

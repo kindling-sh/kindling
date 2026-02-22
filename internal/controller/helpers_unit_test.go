@@ -154,6 +154,46 @@ func TestBuildHTTPProbe_ZeroDelays(t *testing.T) {
 	}
 }
 
+func TestBuildGRPCProbe_DefaultPort(t *testing.T) {
+	hc := &appsv1alpha1.HealthCheckSpec{Type: "grpc"}
+	probe := buildGRPCProbe(hc, 50051)
+
+	if probe.GRPC == nil {
+		t.Fatal("expected GRPC probe handler, got nil")
+	}
+	if probe.GRPC.Port != 50051 {
+		t.Errorf("port = %d, want 50051", probe.GRPC.Port)
+	}
+}
+
+func TestBuildGRPCProbe_CustomPort(t *testing.T) {
+	port := int32(9555)
+	hc := &appsv1alpha1.HealthCheckSpec{Type: "grpc", Port: &port}
+	probe := buildGRPCProbe(hc, 50051)
+
+	if probe.GRPC.Port != 9555 {
+		t.Errorf("port = %d, want 9555", probe.GRPC.Port)
+	}
+}
+
+func TestBuildGRPCProbe_Delays(t *testing.T) {
+	delay := int32(15)
+	period := int32(5)
+	hc := &appsv1alpha1.HealthCheckSpec{
+		Type:                "grpc",
+		InitialDelaySeconds: &delay,
+		PeriodSeconds:       &period,
+	}
+	probe := buildGRPCProbe(hc, 50051)
+
+	if probe.InitialDelaySeconds != 15 {
+		t.Errorf("InitialDelaySeconds = %d, want 15", probe.InitialDelaySeconds)
+	}
+	if probe.PeriodSeconds != 5 {
+		t.Errorf("PeriodSeconds = %d, want 5", probe.PeriodSeconds)
+	}
+}
+
 func TestBuildDependencyWaitInitContainers_Nil(t *testing.T) {
 	cr := &appsv1alpha1.DevStagingEnvironment{
 		ObjectMeta: metav1.ObjectMeta{Name: "myapp"},
