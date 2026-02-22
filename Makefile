@@ -64,6 +64,10 @@ vet: ## Run go vet against code.
 test: manifests generate fmt vet envtest ## Run tests.
 	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test ./... -coverprofile cover.out
 
+.PHONY: test-cli
+test-cli: ## Run CLI unit tests.
+	cd cli && go test ./... -v -count=1
+
 .PHONY: e2e
 e2e: docker-build ## Run end-to-end tests on a dedicated Kind cluster.
 	./test/e2e/e2e_test.sh
