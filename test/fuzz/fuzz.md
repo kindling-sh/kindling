@@ -208,3 +208,73 @@ and inspect with:
 ```bash
 gh run download <run-id> -n fuzz-results-<run-id>
 ```
+
+---
+
+## Automated analysis steps
+
+When asked to analyze fuzz results, follow these steps in order:
+
+### 1. Find the latest runs
+
+```bash
+cd /Users/jeffvincent/dev/kindling && gh run list --workflow=fuzz.yml --limit=5
+```
+
+Identify the most recent completed run for each job type (`Fuzz (e2e)`
+and `Fuzz (static)` / `Fuzz (curated)`).
+
+### 2. Download artifacts
+
+```bash
+gh run download <RUN_ID> --dir /tmp/fuzz-results-<RUN_ID>
+```
+
+Then `ls` the extracted directory to find the results folder.
+
+### 3. Parse the results
+
+```bash
+cat <path>/results.jsonl | python3 -c "
+import sys, json
+for line in sys.stdin:
+    line = line.strip()
+    if line:
+        r = json.loads(line)
+        print(f\"{r['stage']:20s} {r['status']:8s} {r['repo'].split('/')[-1]:40s} {r.get('detail','')[:80]}\")
+"
+```
+
+Also read `summary.json` for overall pass rates and `action-items.json`
+if present.
+
+### 4. Investigate failures
+
+For each repo with `fail` or `skip` status:
+
+- **Generate failures**: Read `logs/<repo>.generate.stderr`
+- **Build failures**: Read `logs/<repo>.build.<service>.log`, then
+  `logs/<repo>.fix.<service>.log`, then `logs/<repo>.build.<service>.retry.log`
+- **Rollout failures**: Check if images built first, then read pod logs
+- **Static issues**: Cross-reference `issues` array with `workflows/<repo>.yml`
+
+### 5. Classify each bug
+
+| Category | Description | Files to check |
+|----------|-------------|----------------|
+| **generate-prompt** | LLM produced incorrect workflow | `cli/cmd/generate.go` |
+| **generate-infra** | LLM call failed (timeout, parse) | `cli/cmd/genai.go` |
+| **fuzz-harness** | Bug in the test pipeline | `test/fuzz/run.sh`, `test/fuzz/analyze.py` |
+| **dockerfile-fix** | fix-dockerfile.py failed | `test/fuzz/fix-dockerfile.py` |
+| **repo-specific** | Repo is incompatible | `test/fuzz/repos.txt` or `repos-e2e.txt` |
+| **operator** | DSE controller failed | `internal/controller/` |
+
+### 6. Report format
+
+Present findings as:
+
+- **Run Summary**: ID, type, timestamp, pass rates
+- **Bugs Found** (by severity): 🔴/🟡/🟢 + repo + stage + root cause
+  + category + suggested fix with file/line references
+- **Repos to Remove**: dead, archived, or fundamentally incompatible
+- **Pass Rate Trend**: improving or degrading across runs
