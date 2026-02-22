@@ -6,6 +6,7 @@
 #   - Simple, well-maintained repos with real backing dependencies
 #   - Diverse languages (Python, Node, Go/.NET)
 #   - Each Dockerfile in the repo root or a service subdirectory
+#   - 3–5 repos max (each takes 3–5 min to build + deploy + test)
 # ─────────────────────────────────────────────────────────────────
 
 # Docker's official multi-service example — vote (Python), result (Node), worker (.NET)
@@ -17,3 +18,7 @@ https://github.com/hagopj13/node-express-boilerplate
 
 # Python Flask + SQLite/Postgres — single-service, root Dockerfile
 https://github.com/miguelgrinberg/microblog
+
+# Python + Node frontend/backend (compose with build, 2 services)
+# Poetry backend + yarn frontend, self-contained Dockerfiles, EXPOSE 5173
+https://github.com/abi/screenshot-to-code

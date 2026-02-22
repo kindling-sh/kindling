@@ -2,10 +2,13 @@
 # repos.txt — Curated repos for kindling generate fuzz testing
 #
 # Selection criteria:
-#   - Has Dockerfile(s) + docker-compose.yml with build: directives
-#   - Is a real application, not a framework/library
+#   - Has self-contained Dockerfile(s) that build from fresh clone
+#   - Real application, not a framework/library
 #   - Mix of languages, service counts, and complexity
+#   - docker-compose is a signal, not a requirement
 # ─────────────────────────────────────────────────────────────────
+
+# ── RECOMMENDED (clean builds, no pipeline gaps) ─────────────────
 
 # Go multi-service: backend, cache, database, server (4 Dockerfiles + compose)
 https://github.com/ebosas/microservices
@@ -21,3 +24,38 @@ https://github.com/hagopj13/node-express-boilerplate
 
 # Go gRPC e-commerce: accounts, products, orders, payments (compose + subdirs)
 https://github.com/rasadov/EcommerceAPI
+
+# 11 microservices across Go/Python/Node/C#/Java — the ultimate stress test
+# No compose, but each src/<svc>/Dockerfile is self-contained multi-stage
+https://github.com/GoogleCloudPlatform/microservices-demo
+
+# Python + Node frontend/backend (compose with build, 2 services)
+# Exercises env_file edge case
+https://github.com/abi/screenshot-to-code
+
+# Python/Node multi-stage — document management + redis + postgres
+# Self-contained Dockerfile, no compose with build (pull-only)
+https://github.com/paperless-ngx/paperless-ngx
+
+# ── STRETCH (will surface pipeline bugs with clear fix paths) ────
+
+# Rust multi-stage + HEALTHCHECK → generate.go: map to readinessProbe
+# BuildKit $BUILDPLATFORM ARGs → run.sh: resolve or strip
+https://github.com/dani-garcia/vaultwarden
+
+# PHP multi-stage + compose with build.args + build.target
+# → run.sh: extract and pass --build-arg / --target to Kaniko
+https://github.com/appwrite/appwrite
+
+# 7 buildable services + Turborepo (turbo prune inside Dockerfile = self-contained)
+# compose with build.args + env_file → tests monorepo-that-actually-works pattern
+https://github.com/makeplane/plane
+
+# Ruby multi-stage + ARG before FROM → run.sh: resolve ARG default
+# Rails + Postgres + Redis (Sidekiq worker)
+https://github.com/maybe-finance/maybe
+
+# Ruby/Node multi-stage + compose with env_file + healthcheck
+# RUN --mount=type=cache → run.sh: strip for Kaniko
+# ARG before FROM → run.sh: pass --build-arg
+https://github.com/mastodon/mastodon
