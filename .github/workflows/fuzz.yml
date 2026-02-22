@@ -113,7 +113,7 @@ jobs:
       - name: Install kindling operator
         if: inputs.mode == 'full'
         run: |
-          kindling init --cluster fuzz --skip-registry
+          kindling init --cluster fuzz --skip-cluster
           echo "Waiting for operator..."
           kubectl wait --for=condition=available deployment/kindling-operator \
             -n kindling-system --timeout=120s
@@ -204,7 +204,7 @@ jobs:
 
       - name: Install kindling operator
         run: |
-          kindling init --cluster fuzz --skip-registry
+          kindling init --cluster fuzz --skip-cluster
           echo "Waiting for operator..."
           kubectl wait --for=condition=available deployment/kindling-operator \
             -n kindling-system --timeout=120s
@@ -233,7 +233,9 @@ jobs:
 
       - name: Generate action items
         if: always()
-        run: python3 test/fuzz/summarize.py /tmp/fuzz-results --action-items
+        run: |
+          mkdir -p /tmp/fuzz-results
+          python3 test/fuzz/summarize.py /tmp/fuzz-results --action-items
 
       - name: Upload results
         if: always()
