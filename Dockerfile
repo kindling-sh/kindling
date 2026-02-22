@@ -1,5 +1,10 @@
 # Build the manager binary
 FROM golang:1.25 as builder
+
+LABEL org.opencontainers.image.source="https://github.com/kindling-sh/kindling"
+LABEL org.opencontainers.image.description="Kindling operator – local Kubernetes dev environments"
+LABEL org.opencontainers.image.licenses="Apache-2.0"
+
 ARG TARGETOS
 ARG TARGETARCH
 
