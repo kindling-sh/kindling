@@ -14,6 +14,7 @@ configured.
 ## Architecture
 
 ```mermaid
+%%{init: {'theme': 'dark'}}%%
 flowchart LR
     user(("👩‍💻 Developer"))
 

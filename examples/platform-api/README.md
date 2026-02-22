@@ -8,6 +8,7 @@ dashboard gives you a real-time view of every service's health.
 ## Architecture
 
 ```mermaid
+%%{init: {'theme': 'dark'}}%%
 flowchart LR
     user(("👩‍💻 Developer"))
 

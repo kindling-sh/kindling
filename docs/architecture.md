@@ -9,6 +9,7 @@ environment on their local machine using [Kind](https://kind.sigs.k8s.io).
 ## System overview
 
 ```mermaid
+%%{init: {'theme': 'dark'}}%%
 flowchart TB
     dev(("👩‍💻 Developer"))
 

@@ -34,6 +34,7 @@ Most teams pay for cloud CI runners that:
 `kindling` flips the model. Each developer runs a lightweight Kind cluster. Inside it, a self-hosted GitHub Actions runner polls for CI jobs triggered by *their* pushes. When a job arrives, the runner builds containers using **Kaniko** (no Docker daemon required) and pushes them to an **in-cluster registry**. The operator then deploys the result as a full staging environment — Deployment, Service, Ingress, and up to 15 types of auto-provisioned dependencies — right on localhost.
 
 ```mermaid
+%%{init: {'theme': 'dark'}}%%
 flowchart TB
     dev("👩‍💻 Developer\n<i>git push</i>")
     gh("🐙 GitHub.com\nActions")
@@ -644,6 +645,7 @@ The public URL is printed to stdout and saved to `.kindling/tunnel.yaml`. After 
 ## How It All Fits Together
 
 ```mermaid
+%%{init: {'theme': 'dark'}}%%
 flowchart LR
     push("🚀 git push") --> gh("⚡ GitHub\nActions")
     gh -- "runs-on:\n[self-hosted, user]" --> runner
@@ -679,6 +681,7 @@ flowchart LR
 ```
 
 ```mermaid
+%%{init: {'theme': 'dark'}}%%
 flowchart TB
     subgraph workflow["🟢 GitHub Actions Workflow"]
         direction TB
@@ -714,15 +717,15 @@ flowchart TB
     style operator fill:#112240,stroke:#FF6B35,color:#e0e0e0,stroke-width:2px
     style checkout fill:#2ea043,stroke:#2ea043,color:#fff
     style clean fill:#2ea043,stroke:#2ea043,color:#fff
-    style build fill:#2ea043,stroke:#2ea043,color:#fff
-    style deploy fill:#2ea043,stroke:#2ea043,color:#fff
+    style build fill:#38b255,stroke:#2ea043,color:#fff
+    style deploy fill:#38b255,stroke:#2ea043,color:#fff
     style watch fill:#F7931E,stroke:#F7931E,color:#fff
-    style kaniko fill:#F7931E,stroke:#F7931E,color:#fff
-    style apply fill:#F7931E,stroke:#F7931E,color:#fff
+    style kaniko fill:#ffad42,stroke:#F7931E,color:#fff
+    style apply fill:#ffad42,stroke:#F7931E,color:#fff
     style reconcile fill:#FF6B35,stroke:#FF6B35,color:#fff
-    style app_dep fill:#FF6B35,stroke:#FF6B35,color:#fff
-    style deps fill:#FF6B35,stroke:#FF6B35,color:#fff
-    style svc fill:#FF6B35,stroke:#FF6B35,color:#fff
+    style app_dep fill:#ff8352,stroke:#FF6B35,color:#fff
+    style deps fill:#ff8352,stroke:#FF6B35,color:#fff
+    style svc fill:#ff8352,stroke:#FF6B35,color:#fff
 ```
 
 1. **Developer bootstraps** — `kindling init` creates a Kind cluster, deploys the operator, registry, and ingress-nginx.
