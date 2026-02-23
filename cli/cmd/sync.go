@@ -1018,7 +1018,7 @@ func restartViaRebuild(pod, namespace, container, srcDir, dest string, profile r
 	step("🔨", fmt.Sprintf("Building locally: %s", buildCmd))
 	buildExec := exec.Command("sh", "-c", buildCmd)
 	buildExec.Dir = srcDir
-	buildExec.Env = append(os.Environ()) // inherit env; command itself sets GOOS/GOARCH
+	buildExec.Env = os.Environ() // inherit env; command itself sets GOOS/GOARCH
 	out, err := buildExec.CombinedOutput()
 	if err != nil {
 		warn(fmt.Sprintf("Local build failed:\n%s", strings.TrimSpace(string(out))))
