@@ -51,7 +51,7 @@ export function OverviewPage() {
         </div>
         <div className="page-actions">
           {!cluster.exists && (
-            <ActionButton icon="▶" label="Init Cluster" onClick={handleInit} disabled={initRunning} />
+            <ActionButton icon="▶" label="Init Cluster" onClick={handleInit} disabled={initRunning} primary />
           )}
         </div>
       </div>

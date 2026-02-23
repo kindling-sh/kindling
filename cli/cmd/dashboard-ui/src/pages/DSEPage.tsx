@@ -51,7 +51,7 @@ export function DSEPage() {
           <p className="page-subtitle">Managed by the kindling operator</p>
         </div>
         <div className="page-actions">
-          <ActionButton icon="+" label="Deploy" onClick={() => setShowDeploy(true)} />
+          <ActionButton icon="+" label="Deploy" onClick={() => setShowDeploy(true)} primary />
         </div>
       </div>
 

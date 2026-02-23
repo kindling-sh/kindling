@@ -49,7 +49,7 @@ export function RunnersPage() {
           <p className="page-subtitle">Self-hosted runner pools in the cluster</p>
         </div>
         <div className="page-actions">
-          <ActionButton icon="+" label="Create Runner" onClick={() => setShowCreate(true)} />
+          <ActionButton icon="+" label="Create Runner" onClick={() => setShowCreate(true)} primary />
           {pools.length > 0 && (
             <ActionButton icon="↻" label="Reset All" onClick={() => setShowReset(true)} danger />
           )}

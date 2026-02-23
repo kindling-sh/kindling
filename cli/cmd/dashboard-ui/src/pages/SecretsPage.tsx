@@ -55,7 +55,7 @@ export function SecretsPage() {
           <p className="page-subtitle">Managed secrets in the cluster</p>
         </div>
         <div className="page-actions">
-          <ActionButton icon="+" label="Create Secret" onClick={() => setShowCreate(true)} />
+          <ActionButton icon="+" label="Create Secret" onClick={() => setShowCreate(true)} primary />
         </div>
       </div>
 

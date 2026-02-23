@@ -82,10 +82,10 @@ func runDashboard(cmd *cobra.Command, args []string) error {
 	mux.HandleFunc("/api/scale/", handleScaleDeployment)
 	mux.HandleFunc("/api/pods/", handleDeletePod) // DELETE /api/pods/{ns}/{name}
 	mux.HandleFunc("/api/apply", handleApplyYAML)
-	mux.HandleFunc("/api/sync", handleSyncAction)        // POST=start, DELETE=stop
-	mux.HandleFunc("/api/sync/status", handleSyncStatus) // GET
-	mux.HandleFunc("/api/runtime/", handleRuntimeDetect) // GET /api/runtime/{ns}/{dep}
-	mux.HandleFunc("/api/load", handleLoadAction)        // POST — build + load + rollout
+	mux.HandleFunc("/api/sync", handleSyncAction)          // POST=start, DELETE=stop
+	mux.HandleFunc("/api/sync/status", handleSyncStatus)   // GET
+	mux.HandleFunc("/api/runtime/", handleRuntimeDetect)   // GET /api/runtime/{ns}/{dep}
+	mux.HandleFunc("/api/load", handleLoadAction)          // POST — build + load + rollout
 	mux.HandleFunc("/api/load-context", handleLoadContext) // GET — discover service dirs
 
 	// ── Static frontend ─────────────────────────────────────────

@@ -1150,15 +1150,15 @@ body { margin: 0; overflow-x: hidden; }
 }
 
 .btn-primary {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #fff;
+  background: var(--accent-muted);
+  border-color: rgba(59, 130, 246, 0.25);
+  color: var(--accent-hover);
   font-weight: 500;
 }
 
 .btn-primary:hover {
-  background: var(--accent-hover);
-  border-color: var(--accent-hover);
+  background: rgba(59, 130, 246, 0.22);
+  border-color: rgba(59, 130, 246, 0.4);
 }
 
 .btn-danger {

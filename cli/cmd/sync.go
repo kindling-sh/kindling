@@ -329,14 +329,14 @@ var defaultExcludes = []string{
 	"vendor",
 	".idea",
 	".vscode",
-	"target",    // Rust/Java
-	"bin",       // Go/.NET
-	"obj",       // .NET
-	"_build",    // Elixir
-	"deps",      // Elixir
-	"*.class",   // Java
-	"*.o",       // C/C++
-	"*.so",      // shared objects
+	"target",     // Rust/Java
+	"bin",        // Go/.NET
+	"obj",        // .NET
+	"_build",     // Elixir
+	"deps",       // Elixir
+	"*.class",    // Java
+	"*.o",        // C/C++
+	"*.so",       // shared objects
 	".zig-cache", // Zig
 	"dist",       // Frontend build output (Vite, Webpack)
 	".next",      // Next.js build output

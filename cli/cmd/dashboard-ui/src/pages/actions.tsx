@@ -131,6 +131,7 @@ export function ActionButton({
   icon,
   onClick,
   danger = false,
+  primary = false,
   small = false,
   disabled = false,
   ghost = false,
@@ -139,13 +140,14 @@ export function ActionButton({
   icon?: string;
   onClick: () => void;
   danger?: boolean;
+  primary?: boolean;
   small?: boolean;
   disabled?: boolean;
   ghost?: boolean;
 }) {
   const cls = [
     'btn',
-    danger ? 'btn-danger' : ghost ? 'btn-ghost' : 'btn-primary',
+    danger ? 'btn-danger' : ghost ? 'btn-ghost' : primary ? 'btn-primary' : '',
     small ? 'btn-sm' : '',
   ].filter(Boolean).join(' ');
 
