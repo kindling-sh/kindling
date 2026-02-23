@@ -1,8 +1,10 @@
 # CLI Reference
 
-The `kindling` CLI bootstraps and manages a local Kind cluster running
-the kindling operator. It wraps `kind`, `kubectl`, and Docker into a
-streamlined developer workflow.
+The `kindling` CLI provides a **dev-in-CI** workflow with two nested loops.
+The **outer loop** commands (`init`, `runners`, `generate`, `deploy`) set up
+CI/CD on your laptop. The **inner loop** commands (`sync`, `dashboard`) give
+you sub-second iteration on running containers. The CLI wraps `kind`, `kubectl`,
+and Docker into a streamlined developer workflow.
 
 ## Installation
 
@@ -401,6 +403,79 @@ kindling sync -d my-api --container app --restart
 
 ---
 
+### `kindling dashboard`
+
+Launch the kindling web dashboard — a visual interface for both
+development loops.
+
+```
+kindling dashboard [flags]
+```
+
+**What it does:**
+1. Starts an HTTP server serving the embedded React/TypeScript SPA
+2. Exposes read-only API endpoints for all cluster resources
+3. Exposes action API endpoints for sync, load, deploy, and management
+4. Opens at `http://localhost:9090` (default)
+
+**Dashboard features:**
+
+| Feature | Description |
+|---|---|
+| **Environments** | View all DevStagingEnvironments with status, image, replicas |
+| **Sync button** | One-click live sync with auto-detected runtime and real-time status |
+| **Load button** | Rebuild container image locally + load into Kind + rolling update |
+| **Runtime badges** | Per-service runtime detection (Node.js, Python, Go, nginx, etc.) |
+| **Pod status** | View pod status, restart counts, container readiness |
+| **Log viewer** | Tail container logs in real time |
+| **Services** | View all services with ports and selectors |
+| **Ingresses** | View routing rules and hostnames |
+| **Events** | Kubernetes events stream for debugging |
+| **Secrets** | Create and manage kindling secrets |
+| **Runners** | View and create GitHub Actions runner pools |
+| **Deploy** | Apply DevStagingEnvironment YAML directly |
+| **Env Vars** | Set/unset environment variables on deployments |
+| **Scale** | Scale deployments up or down |
+| **Restart** | Rolling restart deployments |
+| **Expose** | Start/stop public HTTPS tunnels |
+| **Destroy** | Tear down the cluster |
+
+**Sync via dashboard:**
+
+The Sync button on each service:
+1. Auto-detects the runtime from the container's PID 1 process
+2. Shows the detected runtime as a badge (e.g., `Python/uvicorn`, `Go`, `Node.js`)
+3. Prompts for the local source directory
+4. Starts a sync session with the correct restart strategy
+5. Shows sync count and status in real time
+6. On Stop — automatically rolls back the deployment to its pre-sync state
+
+**Load via dashboard:**
+
+The Load button rebuilds a container image without going through GitHub Actions:
+1. Discovers local service directories matching the deployment name
+2. Runs `docker build` locally
+3. Loads the image into Kind via `kind load docker-image`
+4. Triggers a rolling update on the deployment
+
+**Flags:**
+
+| Flag | Default | Description |
+|---|---|---|
+| `--port` | `9090` | Port to serve the dashboard on |
+
+**Examples:**
+
+```bash
+# Default port
+kindling dashboard
+
+# Custom port
+kindling dashboard --port 8080
+```
+
+---
+
 ### `kindling secrets`
 
 Manage external credentials (API keys, tokens, DSNs) as Kubernetes
@@ -646,6 +721,8 @@ go build -ldflags "-X github.com/jeffvincent/kindling/cli/cmd.Version=v1.0.0" -o
 ## Typical workflow
 
 ```bash
+# ── OUTER LOOP SETUP ─────────────────────────────────────
+
 # 1. Bootstrap everything
 kindling init
 
@@ -660,36 +737,36 @@ kindling generate -k sk-... -r /path/to/myapp
 
 # 5. Set any external credentials that were detected
 kindling secrets set STRIPE_KEY sk_live_...
-kindling secrets set OPENAI_API_KEY sk-...
 
-# 6. If OAuth is needed, start a tunnel
-kindling expose
-
-# 7. Push code → CI builds + deploys automatically
+# 6. Push code → outer loop builds + deploys automatically
 git push origin main
 
-# 8. Check status (includes crash diagnostics for unhealthy pods)
+# 7. Check status
 kindling status
 
-# 9. Live-sync code changes without rebuilding the image
-kindling sync -d myapp-dev --restart
+# ── INNER LOOP (fast iteration) ──────────────────────────
 
-# 10. Set env vars on a running deployment without redeploying
-kindling env set myapp-dev DATABASE_PORT=5432
+# 8. Open the dashboard for visual control
+kindling dashboard
 
-# 11. View controller logs
-kindling logs
+# 9. Start live sync from the CLI (or click Sync in the dashboard)
+kindling sync -d alice-myapp --restart
 
-# 12. Stop the tunnel when done
-kindling expose --stop
+# 10. Edit files → changes appear instantly
+#     Stop sync (Ctrl+C) → deployment rolls back automatically
 
-# 13. Re-point runners at a different repo
+# 11. Set env vars without redeploying
+kindling env set alice-myapp DATABASE_PORT=5432
+
+# ── MANAGEMENT ───────────────────────────────────────────
+
+# 12. Re-point runners at a different repo
 kindling reset
 kindling runners -u alice -r acme/other-app -t ghp_xxxxx
 
-# 14. Manual deploy (without CI)
+# 13. Manual deploy (without CI)
 kindling deploy -f dev-environment.yaml
 
-# 15. Tear down when done
+# 14. Tear down when done
 kindling destroy -y
 ```

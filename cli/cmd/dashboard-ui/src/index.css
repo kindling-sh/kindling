@@ -1652,3 +1652,71 @@ details[open] summary {
   color: var(--accent);
   border-bottom-color: var(--accent);
 }
+
+/* ─── Card Footer Actions ────────────────────────────────── */
+.card-footer-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+/* ─── Sync Status Bar ────────────────────────────────────── */
+.sync-status-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg-well));
+  border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);
+  font-size: 12px;
+  color: var(--accent);
+}
+
+.sync-pulse {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: syncPulse 1.5s ease-in-out infinite;
+  flex-shrink: 0;
+}
+
+@keyframes syncPulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.85); }
+}
+
+/* ─── Sync Modal Strategy ────────────────────────────────── */
+.sync-modal-strategy {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-well);
+  border: 1px solid var(--border-subtle);
+}
+
+/* ─── Form Checkbox ──────────────────────────────────────── */
+.form-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.form-checkbox input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  border: 1px solid var(--border-default);
+  background: var(--bg-well);
+  accent-color: var(--accent);
+  cursor: pointer;
+}

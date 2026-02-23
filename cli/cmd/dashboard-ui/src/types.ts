@@ -322,3 +322,39 @@ export interface ClusterInfo {
 export interface K8sList<T> {
   items: T[];
 }
+
+// ── Runtime Info (from /api/runtime/) ───────────────────────────
+
+export interface RuntimeInfo {
+  runtime: string;
+  mode: string;
+  sync_supported: boolean;
+  strategy: string;
+  language: string;
+  is_frontend: boolean;
+  container: string;
+  default_dest: string;
+}
+
+// ── Sync Status ─────────────────────────────────────────────────
+
+export interface SyncStatus {
+  running: boolean;
+  deployment?: string;
+  namespace?: string;
+  src?: string;
+  dest?: string;
+  pod?: string;
+  sync_count: number;
+  last_sync?: string;
+  started_at?: string;
+}
+
+// ── Service Directory (from /api/load-context) ──────────────────
+
+export interface ServiceDir {
+  name: string;
+  path: string;
+  has_dockerfile: boolean;
+  language: string;
+}

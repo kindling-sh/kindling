@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import type { RuntimeInfo, SyncStatus, ServiceDir } from './types';
 
 const API_BASE = '';
 
@@ -99,4 +100,20 @@ export async function streamInit(onMessage: (msg: string) => void): Promise<Acti
     }
   }
   return lastResult;
+}
+
+// ── Runtime / Sync / Load helpers ────────────────────────────────
+
+export async function fetchRuntimeInfo(namespace: string, deployment: string, src?: string): Promise<RuntimeInfo> {
+  let url = `/api/runtime/${namespace}/${deployment}`;
+  if (src) url += `?src=${encodeURIComponent(src)}`;
+  return apiFetch<RuntimeInfo>(url);
+}
+
+export async function fetchSyncStatus(): Promise<SyncStatus> {
+  return apiFetch<SyncStatus>('/api/sync/status');
+}
+
+export async function fetchServiceDirs(): Promise<ServiceDir[]> {
+  return apiFetch<ServiceDir[]>('/api/load-context');
 }

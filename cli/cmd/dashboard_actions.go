@@ -783,16 +783,19 @@ var (
 )
 
 type syncInfo struct {
-	Deployment string    `json:"deployment"`
-	Namespace  string    `json:"namespace"`
-	Src        string    `json:"src"`
-	Dest       string    `json:"dest"`
-	Container  string    `json:"container,omitempty"`
-	Restart    bool      `json:"restart"`
-	Pod        string    `json:"pod"`
-	SyncCount  int       `json:"sync_count"`
-	LastSync   time.Time `json:"last_sync,omitempty"`
-	StartedAt  time.Time `json:"started_at"`
+	Deployment    string    `json:"deployment"`
+	Namespace     string    `json:"namespace"`
+	Src           string    `json:"src"`
+	Dest          string    `json:"dest"`
+	Container     string    `json:"container,omitempty"`
+	Restart       bool      `json:"restart"`
+	Pod           string    `json:"pod"`
+	SyncCount     int       `json:"sync_count"`
+	LastSync      time.Time `json:"last_sync,omitempty"`
+	StartedAt     time.Time `json:"started_at"`
+	IsFrontend    bool      `json:"is_frontend"`
+	SavedRevision string    `json:"-"` // deployment revision before sync, for rollback
+	WasPatched    bool      `json:"-"` // true if deployment command was patched (wrapper)
 }
 
 // ── POST /api/sync ──────────────────────────────────────────────
@@ -858,35 +861,76 @@ func handleSyncAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Do initial sync
-	if syncErr := syncDir(pod, body.Namespace, srcAbs, body.Dest, body.Container); syncErr != nil {
+	// Detect the sync mode for the watch loop (must happen before initial
+	// sync so we can back up the html root for frontend projects).
+	frontend := isFrontendProject(srcAbs)
+	profile, _ := detectRuntime(pod, body.Namespace, body.Container)
+	if strings.HasPrefix(profile.Name, "unknown") && srcAbs != "" {
+		if detected := detectLanguageFromSource(srcAbs); detected != "" {
+			if p, ok := runtimeTable[detected]; ok {
+				profile = p
+			}
+		}
+	}
+	compiled := profile.Mode == modeRebuild
+
+	if frontend {
+		body.Dest = detectNginxHtmlRoot(pod, body.Namespace, body.Container)
+	}
+
+	// Save the current deployment revision so we can rollback on stop.
+	savedRevision := getDeploymentRevision(body.Deployment, body.Namespace)
+
+	// Use the unified syncAndRestart dispatcher for the initial sync.
+	// This handles ALL modes: frontend build, Go cross-compile, signal reload,
+	// wrapper+kill, etc. — the same logic as `kindling sync` CLI.
+	newPod, syncErr := syncAndRestart(pod, body.Namespace, body.Container, srcAbs, body.Dest, nil)
+	if syncErr != nil {
 		activeSyncMu.Unlock()
 		actionErr(w, "initial sync failed: "+syncErr.Error(), http.StatusInternalServerError)
 		return
 	}
+	pod = newPod
+
+	// Check if the deployment was actually patched (revision changed).
+	// This handles fallback cases (e.g. modeSignal failing → wrapper restart).
+	postRevision := getDeploymentRevision(body.Deployment, body.Namespace)
+	wasPatched := postRevision != savedRevision
 
 	stopCh := make(chan struct{})
 	activeSyncStop = stopCh
+	now := time.Now()
 	activeSyncInfo = &syncInfo{
-		Deployment: body.Deployment,
-		Namespace:  body.Namespace,
-		Src:        srcAbs,
-		Dest:       body.Dest,
-		Container:  body.Container,
-		Restart:    body.Restart,
-		Pod:        pod,
-		StartedAt:  time.Now(),
+		Deployment:    body.Deployment,
+		Namespace:     body.Namespace,
+		Src:           srcAbs,
+		Dest:          body.Dest,
+		Container:     body.Container,
+		Restart:       body.Restart,
+		Pod:           pod,
+		SyncCount:     1,
+		LastSync:      now,
+		StartedAt:     now,
+		IsFrontend:    frontend,
+		SavedRevision: savedRevision,
+		WasPatched:    wasPatched,
 	}
 	activeSyncMu.Unlock()
 
 	// Start the watcher in a goroutine
-	go runDashboardSync(body.Deployment, body.Namespace, srcAbs, body.Dest, body.Container, body.Restart, stopCh)
+	go runDashboardSync(body.Deployment, body.Namespace, srcAbs, body.Dest, body.Container, body.Restart, frontend, compiled, stopCh)
 
-	actionOK(w, fmt.Sprintf("Sync started: %s → %s:%s", srcAbs, pod, body.Dest))
+	modeDesc := profile.Name
+	if frontend {
+		modeDesc = "frontend build"
+	} else if compiled {
+		modeDesc = fmt.Sprintf("%s (cross-compile)", profile.Name)
+	}
+	actionOK(w, fmt.Sprintf("Sync started (%s): %s → %s:%s", modeDesc, srcAbs, pod, body.Dest))
 }
 
 // runDashboardSync is the background goroutine for dashboard-initiated sync.
-func runDashboardSync(deployment, namespace, srcDir, dest, container string, restart bool, stopCh chan struct{}) {
+func runDashboardSync(deployment, namespace, srcDir, dest, container string, restart, frontend, compiled bool, stopCh chan struct{}) {
 	excludes := append([]string{}, defaultExcludes...)
 
 	watcher, err := fsnotify.NewWatcher()
@@ -899,6 +943,32 @@ func runDashboardSync(deployment, namespace, srcDir, dest, container string, res
 	}
 	defer func() {
 		watcher.Close()
+
+		// Restore the deployment to its pre-sync state.
+		// If the deployment command was patched (wrapper for Go/Python/Node),
+		// rollout undo reverts both the command AND creates a fresh pod.
+		// Otherwise, rollout restart just creates a fresh pod from the image.
+		activeSyncMu.Lock()
+		info := activeSyncInfo
+		activeSyncMu.Unlock()
+
+		if info != nil {
+			ctx := "kind-" + clusterName
+			if info.WasPatched && info.SavedRevision != "" {
+				step("♻️", fmt.Sprintf("Rolling back deployment/%s to revision %s", deployment, info.SavedRevision))
+				_ = run("kubectl", "rollout", "undo", fmt.Sprintf("deployment/%s", deployment),
+					"-n", namespace, "--context", ctx,
+					fmt.Sprintf("--to-revision=%s", info.SavedRevision))
+			} else {
+				step("♻️", fmt.Sprintf("Restarting deployment/%s to restore original state", deployment))
+				_ = run("kubectl", "rollout", "restart", fmt.Sprintf("deployment/%s", deployment),
+					"-n", namespace, "--context", ctx)
+			}
+			_ = run("kubectl", "rollout", "status", fmt.Sprintf("deployment/%s", deployment),
+				"-n", namespace, "--context", ctx, "--timeout=90s")
+			success(fmt.Sprintf("Deployment %s restored to original state", deployment))
+		}
+
 		activeSyncMu.Lock()
 		activeSyncStop = nil
 		activeSyncInfo = nil
@@ -931,11 +1001,49 @@ func runDashboardSync(deployment, namespace, srcDir, dest, container string, res
 			return
 		}
 
+		pendingFiles = make(map[string]bool)
+
+		if frontend {
+			// Frontend: rebuild and sync dist/ — don't sync individual source files
+			profile := runtimeProfile{Name: "Nginx", Mode: modeSignal, Signal: "HUP"}
+			if _, err := restartViaFrontendBuild(pod, namespace, container, srcDir, profile); err != nil {
+				// Build failed — don't update sync count
+				return
+			}
+
+			activeSyncMu.Lock()
+			if activeSyncInfo != nil {
+				activeSyncInfo.Pod = pod
+				activeSyncInfo.SyncCount++
+				activeSyncInfo.LastSync = time.Now()
+			}
+			activeSyncMu.Unlock()
+			return
+		}
+
+		if compiled {
+			// Compiled languages (Go, Rust, etc.): use syncAndRestart which
+			// handles cross-compile + binary sync — don't sync individual files
+			newPod, err := syncAndRestart(pod, namespace, container, srcDir, dest, nil)
+			if err != nil {
+				return
+			}
+
+			activeSyncMu.Lock()
+			if activeSyncInfo != nil {
+				activeSyncInfo.Pod = newPod
+				activeSyncInfo.SyncCount++
+				activeSyncInfo.LastSync = time.Now()
+			}
+			activeSyncMu.Unlock()
+			return
+		}
+
+		// Standard file sync
 		fileList := make([]string, 0, len(pendingFiles))
 		for f := range pendingFiles {
 			fileList = append(fileList, f)
 		}
-		pendingFiles = make(map[string]bool)
 
 		var synced int
 		for _, localPath := range fileList {
@@ -1046,4 +1154,139 @@ func handleSyncStatus(w http.ResponseWriter, r *http.Request) {
 		LastSync:   activeSyncInfo.LastSync,
 		StartedAt:  activeSyncInfo.StartedAt,
 	})
+}
+
+// ── POST /api/load ──────────────────────────────────────────────
+// Builds a Docker image, loads it into Kind, and patches the DSE.
+// Body: { "service": "...", "context": ".", "dockerfile": "Dockerfile",
+//         "namespace": "default", "no_deploy": false, "platform": "" }
+
+func handleLoadAction(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) {
+		return
+	}
+
+	var body struct {
+		Service    string `json:"service"`
+		Context    string `json:"context"`
+		Dockerfile string `json:"dockerfile"`
+		Namespace  string `json:"namespace"`
+		NoDeploy   bool   `json:"no_deploy"`
+		Platform   string `json:"platform"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		actionErr(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	if body.Service == "" {
+		actionErr(w, "service is required", http.StatusBadRequest)
+		return
+	}
+	if body.Context == "" {
+		body.Context = "."
+	}
+	if body.Namespace == "" {
+		body.Namespace = "default"
+	}
+
+	ctxAbs, err := filepath.Abs(body.Context)
+	if err != nil {
+		actionErr(w, "cannot resolve context path: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if _, err := os.Stat(ctxAbs); os.IsNotExist(err) {
+		actionErr(w, "context directory does not exist: "+ctxAbs, http.StatusBadRequest)
+		return
+	}
+
+	// Resolve Dockerfile
+	dockerfile := body.Dockerfile
+	if dockerfile == "" {
+		dockerfile = filepath.Join(ctxAbs, "Dockerfile")
+	} else if !filepath.IsAbs(dockerfile) {
+		dockerfile = filepath.Join(ctxAbs, dockerfile)
+	}
+	if _, err := os.Stat(dockerfile); os.IsNotExist(err) {
+		actionErr(w, "Dockerfile not found: "+dockerfile, http.StatusBadRequest)
+		return
+	}
+
+	// Check cluster
+	if !clusterExists(clusterName) {
+		actionErr(w, "Kind cluster not found — run kindling init first", http.StatusUnprocessableEntity)
+		return
+	}
+
+	imageTag := loadImageTag(body.Service)
+	var outputs []string
+
+	// 1. Docker build
+	dockerArgs := []string{"build", "-t", imageTag, "-f", dockerfile}
+	if body.Platform != "" {
+		dockerArgs = append(dockerArgs, "--platform", body.Platform)
+	}
+	dockerArgs = append(dockerArgs, ctxAbs)
+
+	buildOut, err := runCapture("docker", dockerArgs...)
+	if err != nil {
+		actionErr(w, "docker build failed: "+buildOut, http.StatusInternalServerError)
+		return
+	}
+	outputs = append(outputs, "✓ Image built: "+imageTag)
+
+	// 2. Load into Kind
+	loadOut, err := runCapture("kind", "load", "docker-image", imageTag, "--name", clusterName)
+	if err != nil {
+		actionErr(w, "kind load failed: "+loadOut, http.StatusInternalServerError)
+		return
+	}
+	outputs = append(outputs, "✓ Image loaded into cluster")
+
+	// 3. Patch DSE (unless no_deploy)
+	if !body.NoDeploy {
+		// Check DSE exists
+		if _, err := runCapture("kubectl", "--context", "kind-"+clusterName,
+			"get", "dse", body.Service, "-n", body.Namespace); err != nil {
+			// Try patching deployment directly if no DSE
+			patch := fmt.Sprintf(`{"spec":{"template":{"spec":{"containers":[{"name":"%s","image":"%s"}]}}}}`,
+				body.Service, imageTag)
+			patchOut, err := runCapture("kubectl", "--context", "kind-"+clusterName,
+				"patch", "deployment", body.Service,
+				"-n", body.Namespace,
+				"--type=strategic",
+				"-p", patch)
+			if err != nil {
+				actionErr(w, "no DSE or deployment found for "+body.Service+": "+patchOut, http.StatusUnprocessableEntity)
+				return
+			}
+			outputs = append(outputs, "✓ Deployment patched: "+body.Service+" → "+imageTag)
+		} else {
+			// Patch the DSE image
+			patch := fmt.Sprintf(`{"spec":{"deployment":{"image":"%s"}}}`, imageTag)
+			patchOut, err := runCapture("kubectl", "--context", "kind-"+clusterName,
+				"patch", "dse", body.Service,
+				"-n", body.Namespace,
+				"--type=merge",
+				"-p", patch)
+			if err != nil {
+				actionErr(w, "failed to patch DSE: "+patchOut, http.StatusInternalServerError)
+				return
+			}
+			outputs = append(outputs, "✓ DSE patched: "+body.Service+" → "+imageTag)
+		}
+
+		// Wait for rollout (with timeout)
+		rollOut, _ := runCapture("kubectl", "--context", "kind-"+clusterName,
+			"rollout", "status", "deployment/"+body.Service,
+			"-n", body.Namespace, "--timeout=60s")
+		if strings.Contains(rollOut, "successfully rolled out") {
+			outputs = append(outputs, "✓ Rollout complete")
+		} else {
+			outputs = append(outputs, "⚠ Rollout may still be in progress")
+		}
+	} else {
+		outputs = append(outputs, "⏭ Skipped deploy (no_deploy=true)")
+	}
+
+	actionOK(w, strings.Join(outputs, "\n"))
 }

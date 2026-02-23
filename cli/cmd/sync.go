@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -260,6 +261,11 @@ runtime:
     Files are synced — no restart needed. PHP re-reads on every
     request.
 
+  FRONTEND BUILD (React, Vue, Svelte, Angular + Nginx/Caddy):
+    Auto-detected when Nginx/Caddy serves a project with a "build"
+    script in package.json.  Runs the build locally, then syncs the
+    built assets (dist/) into the container — no restart needed.
+
   COMPILED (Go, Rust, Java, C#, C/C++, Zig):
     Auto-detected: builds locally with cross-compilation, syncs the
     binary into the container, and restarts the process.
@@ -332,6 +338,9 @@ var defaultExcludes = []string{
 	"*.o",       // C/C++
 	"*.so",      // shared objects
 	".zig-cache", // Zig
+	"dist",       // Frontend build output (Vite, Webpack)
+	".next",      // Next.js build output
+	"out",        // Static export output
 }
 
 func init() {
@@ -548,6 +557,158 @@ func detectLanguageFromSource(srcDir string) string {
 	return ""
 }
 
+// ════════════════════════════════════════════════════════════════════
+// Frontend build detection
+// ════════════════════════════════════════════════════════════════════
+
+// isFrontendProject checks if the source directory looks like a JavaScript/TypeScript
+// frontend project with a build step (React, Vue, Svelte, Angular, etc.).
+func isFrontendProject(srcDir string) bool {
+	if srcDir == "" {
+		return false
+	}
+	pkgPath := filepath.Join(srcDir, "package.json")
+	data, err := os.ReadFile(pkgPath)
+	if err != nil {
+		return false
+	}
+	var pkg struct {
+		Scripts map[string]string `json:"scripts"`
+	}
+	if err := json.Unmarshal(data, &pkg); err != nil {
+		return false
+	}
+	_, hasBuild := pkg.Scripts["build"]
+	return hasBuild
+}
+
+// detectPackageManager returns the package manager for a frontend project.
+func detectPackageManager(srcDir string) string {
+	if _, err := os.Stat(filepath.Join(srcDir, "pnpm-lock.yaml")); err == nil {
+		return "pnpm"
+	}
+	if _, err := os.Stat(filepath.Join(srcDir, "yarn.lock")); err == nil {
+		return "yarn"
+	}
+	return "npm"
+}
+
+// detectFrontendOutputDir returns the build output subdirectory for a frontend project.
+func detectFrontendOutputDir(srcDir string) string {
+	// Vite → dist/
+	for _, f := range []string{"vite.config.ts", "vite.config.js", "vite.config.mts"} {
+		if _, err := os.Stat(filepath.Join(srcDir, f)); err == nil {
+			return "dist"
+		}
+	}
+	// Next.js → out/ (static export)
+	for _, f := range []string{"next.config.js", "next.config.mjs", "next.config.ts"} {
+		if _, err := os.Stat(filepath.Join(srcDir, f)); err == nil {
+			return "out"
+		}
+	}
+	// Angular → dist/
+	if _, err := os.Stat(filepath.Join(srcDir, "angular.json")); err == nil {
+		return "dist"
+	}
+	// SvelteKit → build/
+	if _, err := os.Stat(filepath.Join(srcDir, "svelte.config.js")); err == nil {
+		return "build"
+	}
+	// Default — check what exists after build, otherwise assume dist/
+	if _, err := os.Stat(filepath.Join(srcDir, "dist")); err == nil {
+		return "dist"
+	}
+	if _, err := os.Stat(filepath.Join(srcDir, "build")); err == nil {
+		return "build"
+	}
+	return "dist"
+}
+
+// detectNginxHtmlRoot tries to determine the nginx document root from the
+// container's configuration.  Falls back to /usr/share/nginx/html.
+func detectNginxHtmlRoot(pod, namespace, container string) string {
+	args := []string{"exec", pod, "-n", namespace, "--context", "kind-" + clusterName}
+	if container != "" {
+		args = append(args, "-c", container)
+	}
+	args = append(args, "--", "sh", "-c", `nginx -T 2>/dev/null | grep -m1 'root ' | awk '{print $2}' | tr -d ';'`)
+	out, err := runCapture("kubectl", args...)
+	if err == nil {
+		root := strings.TrimSpace(out)
+		if root != "" && strings.HasPrefix(root, "/") {
+			return root
+		}
+	}
+	return "/usr/share/nginx/html"
+}
+
+// restartViaFrontendBuild builds a frontend project locally and syncs the
+// built assets into the container's static file directory.
+// No process restart is needed — static file servers serve new content immediately.
+func restartViaFrontendBuild(pod, namespace, container, srcDir string, profile runtimeProfile) (string, error) {
+	pkgMgr := detectPackageManager(srcDir)
+	outputDir := detectFrontendOutputDir(srcDir)
+
+	step("\U0001f3d7\ufe0f", fmt.Sprintf("Frontend project detected — building with %s", pkgMgr))
+
+	// Install dependencies if node_modules doesn't exist
+	nmPath := filepath.Join(srcDir, "node_modules")
+	if _, err := os.Stat(nmPath); err != nil {
+		step("📦", "Installing dependencies...")
+		installCmd := pkgMgr + " install"
+		installExec := exec.Command("sh", "-c", installCmd)
+		installExec.Dir = srcDir
+		if out, err := installExec.CombinedOutput(); err != nil {
+			warn(fmt.Sprintf("Dependency install failed:\n%s", strings.TrimSpace(string(out))))
+			return pod, fmt.Errorf("dependency install failed: %w", err)
+		}
+		success("Dependencies installed")
+	}
+
+	// Build
+	buildCmd := pkgMgr + " run build"
+	step("🔨", fmt.Sprintf("Building: %s", buildCmd))
+	buildExec := exec.Command("sh", "-c", buildCmd)
+	buildExec.Dir = srcDir
+	out, err := buildExec.CombinedOutput()
+	if err != nil {
+		warn(fmt.Sprintf("Build failed:\n%s", strings.TrimSpace(string(out))))
+		return pod, fmt.Errorf("frontend build failed: %w", err)
+	}
+	success("Build complete")
+
+	// Verify the build output exists
+	absOutputDir := filepath.Join(srcDir, outputDir)
+	if _, err := os.Stat(absOutputDir); err != nil {
+		// Try alternative output dirs
+		for _, alt := range []string{"dist", "build", "out"} {
+			altPath := filepath.Join(srcDir, alt)
+			if _, errAlt := os.Stat(altPath); errAlt == nil {
+				absOutputDir = altPath
+				outputDir = alt
+				break
+			}
+		}
+	}
+
+	if _, err := os.Stat(absOutputDir); err != nil {
+		return pod, fmt.Errorf("build output not found at %s — check your build configuration", absOutputDir)
+	}
+
+	// Detect the static file root in the container
+	htmlRoot := detectNginxHtmlRoot(pod, namespace, container)
+
+	// Sync the built output
+	step("📦", fmt.Sprintf("Syncing %s/ → %s:%s", outputDir, pod, htmlRoot))
+	if err := syncDir(pod, namespace, absOutputDir, htmlRoot, container); err != nil {
+		return pod, fmt.Errorf("sync failed: %w", err)
+	}
+
+	success(fmt.Sprintf("Frontend assets deployed — %s serving new content immediately", profile.Name))
+	return pod, nil
+}
+
 // resolveProfile returns the runtime profile to use — either from --language
 // flag or auto-detected from the container.
 func resolveProfile(pod, namespace, container, langOverride string) (runtimeProfile, string) {
@@ -638,6 +799,18 @@ func findPodForDeployment(deployment, namespace string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("no running pod found for deployment %q in namespace %q", deployment, namespace)
+}
+
+// getDeploymentRevision returns the current revision annotation for a deployment.
+// Used to snapshot the revision before sync so we can rollback on stop.
+func getDeploymentRevision(deployment, namespace string) string {
+	out, err := runCapture("kubectl", "get", fmt.Sprintf("deployment/%s", deployment),
+		"-n", namespace, "--context", "kind-"+clusterName,
+		"-o", "jsonpath={.metadata.annotations.deployment\\.kubernetes\\.io/revision}")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(out)
 }
 
 // deploymentFromPod extracts the deployment name from a pod name.
@@ -738,6 +911,9 @@ func patchDeploymentWrapper(deployment, pod, namespace, container string) (strin
 	step("⏳", "Waiting for patched pod to roll out...")
 	_ = run("kubectl", "rollout", "status", fmt.Sprintf("deployment/%s", deployment),
 		"-n", namespace, "--context", "kind-"+clusterName, "--timeout=90s")
+
+	// Brief wait for old pod termination to avoid stale pod lookup
+	time.Sleep(2 * time.Second)
 
 	newPod, err := findPodForDeployment(deployment, namespace)
 	if err != nil {
@@ -1165,6 +1341,20 @@ func syncAndRestart(pod, namespace, container, srcDir, dest string, excludes []s
 		}
 	}
 
+	// ── Frontend build detection ────────────────────────────────
+	// If the runtime is a static file server (Nginx, Caddy) and the source
+	// directory is a frontend project with a build step, run the build locally
+	// and sync the built assets instead of raw source files.
+	if srcDir != "" && profile.Mode == modeSignal && !profile.Interpreted && isFrontendProject(srcDir) {
+		step("🔍", fmt.Sprintf("Detected runtime: %s%s + Frontend Build%s  →  strategy: %slocal build + asset sync%s",
+			colorCyan, profile.Name, colorReset,
+			colorGreen, colorReset))
+		if cmdline != "" {
+			step("📝", fmt.Sprintf("Process: %s", cmdline))
+		}
+		return restartViaFrontendBuild(pod, namespace, container, srcDir, profile)
+	}
+
 	// Print detected runtime info
 	modeLabel := ""
 	switch profile.Mode {
@@ -1393,6 +1583,7 @@ func runSync(cmd *cobra.Command, args []string) error {
 
 	// ── Detect runtime (quiet — for display only; syncAndRestart will print details) ──
 	profile, _ := detectRuntime(pod, syncNamespace, syncContainer)
+	frontendMode := profile.Mode == modeSignal && !profile.Interpreted && isFrontendProject(srcDir)
 
 	// ── Initial sync ────────────────────────────────────────────
 	if syncRestart {
@@ -1426,18 +1617,28 @@ func runSync(cmd *cobra.Command, args []string) error {
 	// ── Watch mode ──────────────────────────────────────────────
 	header("Watching for changes")
 	fmt.Printf("  📂  %s\n", srcDir)
-	fmt.Printf("  🎯  %s:%s\n", pod, syncDest)
-	fmt.Printf("  🌐  Runtime: %s%s%s\n", colorCyan, profile.Name, colorReset)
+	if frontendMode {
+		htmlRoot := detectNginxHtmlRoot(pod, syncNamespace, syncContainer)
+		fmt.Printf("  🎯  %s:%s\n", pod, htmlRoot)
+		fmt.Printf("  🌐  Runtime: %s%s + Frontend Build%s\n", colorCyan, profile.Name, colorReset)
+	} else {
+		fmt.Printf("  🎯  %s:%s\n", pod, syncDest)
+		fmt.Printf("  🌐  Runtime: %s%s%s\n", colorCyan, profile.Name, colorReset)
+	}
 	fmt.Printf("  ⏱️   Debounce: %s\n", syncDebounce)
 	if syncRestart {
 		modeDesc := "wrapper + kill"
-		switch profile.Mode {
-		case modeSignal:
-			modeDesc = fmt.Sprintf("SIG%s reload", profile.Signal)
-		case modeNone:
-			modeDesc = "auto-reload (no restart)"
-		case modeRebuild:
-			modeDesc = "local build + binary sync"
+		if frontendMode {
+			modeDesc = "local build + asset sync"
+		} else {
+			switch profile.Mode {
+			case modeSignal:
+				modeDesc = fmt.Sprintf("SIG%s reload", profile.Signal)
+			case modeNone:
+				modeDesc = "auto-reload (no restart)"
+			case modeRebuild:
+				modeDesc = "local build + binary sync"
+			}
 		}
 		fmt.Printf("  🔄  Restart: %s%s%s\n", colorGreen, modeDesc, colorReset)
 	}
@@ -1493,32 +1694,43 @@ func runSync(cmd *cobra.Command, args []string) error {
 			fmt.Printf("  %s[%s]%s  ↑ %d files changed\n", colorDim, ts, colorReset, count)
 		}
 
-		var syncErrors int
-		for _, localPath := range fileList {
-			relPath, _ := filepath.Rel(srcDir, localPath)
-			destPath := filepath.Join(syncDest, relPath)
-			destPath = strings.ReplaceAll(destPath, "\\", "/")
-
-			if err := syncFile(pod, syncNamespace, localPath, destPath, syncContainer); err != nil {
-				syncErrors++
-				if syncErrors <= 3 {
-					warn(fmt.Sprintf("  %s: %v", relPath, err))
-				}
-			}
-		}
-
-		if syncErrors > 0 {
-			warn(fmt.Sprintf("%d/%d files failed to sync", syncErrors, count))
-		} else {
-			fmt.Printf("  %s✓ %d file(s) synced%s\n", colorGreen, count, colorReset)
-		}
-
-		if syncRestart {
+		// For frontend builds, skip individual file sync — the full build
+		// + asset sync in syncAndRestart handles everything.
+		if frontendMode && syncRestart {
 			newPod, err := syncAndRestart(pod, syncNamespace, syncContainer, srcDir, syncDest, excludes)
 			if err != nil {
-				warn(fmt.Sprintf("Restart failed: %v", err))
+				warn(fmt.Sprintf("Build failed: %v", err))
 			} else {
 				pod = newPod
+			}
+		} else {
+			var syncErrors int
+			for _, localPath := range fileList {
+				relPath, _ := filepath.Rel(srcDir, localPath)
+				destPath := filepath.Join(syncDest, relPath)
+				destPath = strings.ReplaceAll(destPath, "\\", "/")
+
+				if err := syncFile(pod, syncNamespace, localPath, destPath, syncContainer); err != nil {
+					syncErrors++
+					if syncErrors <= 3 {
+						warn(fmt.Sprintf("  %s: %v", relPath, err))
+					}
+				}
+			}
+
+			if syncErrors > 0 {
+				warn(fmt.Sprintf("%d/%d files failed to sync", syncErrors, count))
+			} else {
+				fmt.Printf("  %s✓ %d file(s) synced%s\n", colorGreen, count, colorReset)
+			}
+
+			if syncRestart {
+				newPod, err := syncAndRestart(pod, syncNamespace, syncContainer, srcDir, syncDest, excludes)
+				if err != nil {
+					warn(fmt.Sprintf("Restart failed: %v", err))
+				} else {
+					pod = newPod
+				}
 			}
 		}
 	}

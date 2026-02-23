@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -428,4 +430,259 @@ func handleLogs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	jsonResponse(w, map[string]string{"logs": out})
+}
+
+// ── /api/runtime/{namespace}/{deployment} ───────────────────────
+// Detects the language/runtime of a deployment by inspecting the running
+// container and returns whether hot-sync is supported.
+
+func handleRuntimeDetect(w http.ResponseWriter, r *http.Request) {
+	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/runtime/"), "/")
+	if len(parts) < 2 {
+		jsonError(w, "usage: /api/runtime/{namespace}/{deployment}", 400)
+		return
+	}
+	ns, deployment := parts[0], parts[1]
+
+	// Optional query param: src directory for local language detection
+	srcDir := r.URL.Query().Get("src")
+
+	type runtimeInfo struct {
+		Runtime       string `json:"runtime"`
+		Mode          string `json:"mode"`
+		SyncSupported bool   `json:"sync_supported"`
+		Strategy      string `json:"strategy"`
+		Language      string `json:"language"`
+		IsFrontend    bool   `json:"is_frontend"`
+		Container     string `json:"container"`
+		DefaultDest   string `json:"default_dest"`
+	}
+
+	info := runtimeInfo{
+		Runtime:     "unknown",
+		Mode:        "unknown",
+		DefaultDest: "/app",
+	}
+
+	// Try to find the pod for this deployment
+	pod, err := findPodForDeployment(deployment, ns)
+	if err != nil {
+		// Can't find pod — still return partial info from source detection
+		if srcDir != "" {
+			info.Language = detectLanguageFromSource(srcDir)
+			info.IsFrontend = isFrontendProject(srcDir)
+		}
+		jsonResponse(w, info)
+		return
+	}
+
+	// Detect which container to target (first non-init container)
+	containerName := ""
+	depJSON, _ := kubectlJSON("get", "deployment", deployment, "-n", ns, "-o", "json")
+	if depJSON != "" {
+		var dep struct {
+			Spec struct {
+				Template struct {
+					Spec struct {
+						Containers []struct {
+							Name string `json:"name"`
+						} `json:"containers"`
+					} `json:"spec"`
+				} `json:"template"`
+			} `json:"spec"`
+		}
+		if json.Unmarshal([]byte(depJSON), &dep) == nil && len(dep.Spec.Template.Spec.Containers) > 0 {
+			containerName = dep.Spec.Template.Spec.Containers[0].Name
+		}
+	}
+	info.Container = containerName
+
+	// Detect runtime from the running container
+	profile, cmdline := detectRuntime(pod, ns, containerName)
+	info.Runtime = profile.Name
+
+	switch profile.Mode {
+	case modeSignal:
+		info.Mode = "signal"
+		info.Strategy = "Send SIG" + profile.Signal + " to reload"
+		info.SyncSupported = true
+	case modeKill:
+		info.Mode = "kill"
+		info.Strategy = "Restart process via wrapper script"
+		info.SyncSupported = true
+	case modeNone:
+		info.Mode = "none"
+		info.Strategy = "Sync files — no restart needed"
+		info.SyncSupported = true
+	case modeRebuild:
+		info.Mode = "compiled"
+		info.Strategy = "Cross-compile locally, sync binary"
+		info.SyncSupported = true
+	}
+
+	// Detect source language if src provided
+	if srcDir != "" {
+		absSrc, _ := filepath.Abs(srcDir)
+		info.Language = detectLanguageFromSource(absSrc)
+		info.IsFrontend = isFrontendProject(absSrc)
+		if info.IsFrontend {
+			info.Strategy = "Build locally, sync static assets to nginx"
+			info.SyncSupported = true
+		}
+	}
+
+	// If runtime is still unknown, try to auto-detect from local source directories
+	// by matching the deployment name to a subdirectory of cwd.
+	if info.Runtime == "unknown" || strings.HasPrefix(info.Runtime, "unknown (") {
+		if info.Language == "" {
+			cwd, _ := os.Getwd()
+
+			// Build a set of name variants to match against directories.
+			// DSE names are often prefixed (e.g. "jeff-vincent-gateway") while
+			// the local directory is just "gateway".
+			depLower := strings.ToLower(deployment)
+			nameVariants := []string{depLower}
+			// Add all dash-suffix segments: "jeff-vincent-gateway" → also try "vincent-gateway", "gateway"
+			for i := 0; i < len(depLower); i++ {
+				if depLower[i] == '-' && i+1 < len(depLower) {
+					nameVariants = append(nameVariants, depLower[i+1:])
+				}
+			}
+			// Also use the process name from the cmdline if available (e.g. "gateway" from the wrapper)
+			if cmdline != "" {
+				// Extract the inner command's basename
+				innerFields := strings.Fields(cmdline)
+				if len(innerFields) > 0 {
+					procBase := filepath.Base(innerFields[0])
+					nameVariants = append(nameVariants, strings.ToLower(procBase))
+				}
+			}
+
+			// Scan cwd entries for matches
+			var candidates []string
+			if entries, err := os.ReadDir(cwd); err == nil {
+				for _, e := range entries {
+					if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+						continue
+					}
+					dirLower := strings.ToLower(e.Name())
+					for _, variant := range nameVariants {
+						if dirLower == variant || strings.Contains(dirLower, variant) || strings.Contains(variant, dirLower) {
+							candidates = append(candidates, filepath.Join(cwd, e.Name()))
+							break
+						}
+					}
+				}
+			}
+
+			for _, dir := range candidates {
+				if lang := detectLanguageFromSource(dir); lang != "" {
+					info.Language = lang
+					info.IsFrontend = isFrontendProject(dir)
+					break
+				}
+			}
+		}
+
+		// If we found a language from source, apply the corresponding profile
+		if info.Language != "" {
+			if p, ok := runtimeTable[info.Language]; ok {
+				info.Runtime = p.Name
+				switch p.Mode {
+				case modeSignal:
+					info.Mode = "signal"
+					info.Strategy = "Send SIG" + p.Signal + " to reload"
+					info.SyncSupported = true
+				case modeKill:
+					info.Mode = "kill"
+					info.Strategy = "Restart process via wrapper script"
+					info.SyncSupported = true
+				case modeNone:
+					info.Mode = "none"
+					info.Strategy = "Sync files — no restart needed"
+					info.SyncSupported = true
+				case modeRebuild:
+					info.Mode = "compiled"
+					info.Strategy = "Cross-compile locally, sync binary"
+					info.SyncSupported = true
+				}
+			} else {
+				// Language detected but no runtimeTable entry — still mark as syncable
+				info.SyncSupported = true
+				info.Strategy = "Sync files to container"
+			}
+		}
+
+		if info.IsFrontend {
+			info.Strategy = "Build locally, sync static assets to nginx"
+			info.SyncSupported = true
+		}
+	}
+
+	// Detect nginx → frontend likely
+	if strings.Contains(cmdline, "nginx") {
+		info.DefaultDest = "/usr/share/nginx/html"
+		if info.Strategy == "" {
+			info.Strategy = "Sync static files to nginx html root"
+			info.SyncSupported = true
+		}
+	}
+
+	// Default dest for compiled languages
+	if profile.Name == "go" || profile.Name == "rust" || profile.Name == "cargo" {
+		info.DefaultDest = "/app"
+	}
+
+	// If runtime is truly unknown and no source hints, mark unsupported
+	if info.Runtime == "unknown" && info.Language == "" && !info.IsFrontend {
+		info.SyncSupported = false
+		info.Strategy = "Runtime not detected — use Load instead"
+	}
+
+	jsonResponse(w, info)
+}
+
+// ── /api/load-context — resolve local source directories ────────
+// Returns a list of subdirectories in the working directory that look
+// like service source roots (contain Dockerfile, go.mod, package.json, etc.)
+
+func handleLoadContext(w http.ResponseWriter, r *http.Request) {
+	type serviceDir struct {
+		Name          string `json:"name"`
+		Path          string `json:"path"`
+		HasDockerfile bool   `json:"has_dockerfile"`
+		Language      string `json:"language"`
+	}
+
+	cwd, _ := os.Getwd()
+	entries, err := os.ReadDir(cwd)
+	if err != nil {
+		jsonError(w, "cannot read working directory", 500)
+		return
+	}
+
+	var dirs []serviceDir
+	for _, e := range entries {
+		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
+		dirPath := filepath.Join(cwd, e.Name())
+
+		// Check for Dockerfile
+		_, hasDF := os.Stat(filepath.Join(dirPath, "Dockerfile"))
+
+		// Detect language
+		lang := detectLanguageFromSource(dirPath)
+
+		if hasDF == nil || lang != "" {
+			dirs = append(dirs, serviceDir{
+				Name:          e.Name(),
+				Path:          dirPath,
+				HasDockerfile: hasDF == nil,
+				Language:      lang,
+			})
+		}
+	}
+
+	jsonResponse(w, dirs)
 }
