@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jeffvincent/kindling/cli/core"
 	"github.com/spf13/cobra"
 )
 
@@ -37,9 +38,7 @@ func runReset(cmd *cobra.Command, args []string) error {
 	}
 
 	// ── Find existing runner pools ──────────────────────────────
-	poolsOut, err := runSilent("kubectl", "get", "githubactionrunnerpools",
-		"-o", "custom-columns=NAME:.metadata.name,REPO:.spec.repository,USER:.spec.githubUsername",
-		"--no-headers")
+	poolsOut, err := core.ListRunnerPools(clusterName)
 	if err != nil || strings.TrimSpace(poolsOut) == "" {
 		warn("No runner pools found — nothing to reset")
 		return nil
@@ -68,13 +67,11 @@ func runReset(cmd *cobra.Command, args []string) error {
 
 	// ── Delete all GithubActionRunnerPool CRs ───────────────────
 	step("🗑️ ", "Deleting GithubActionRunnerPool CRs")
-	if err := run("kubectl", "delete", "githubactionrunnerpools", "--all"); err != nil {
-		return fmt.Errorf("failed to delete runner pools: %w", err)
-	}
-
-	// ── Delete the token secret ─────────────────────────────────
 	step("🔑", "Removing github-runner-token secret")
-	_, _ = runSilent("kubectl", "delete", "secret", "github-runner-token", "--ignore-not-found")
+	outputs, _ := core.ResetRunners(clusterName, "default")
+	for _, o := range outputs {
+		success(o)
+	}
 
 	// ── Wait for runner pods to terminate ────────────────────────
 	step("⏳", "Waiting for runner pods to terminate...")

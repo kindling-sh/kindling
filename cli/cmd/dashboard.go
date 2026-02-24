@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jeffvincent/kindling/cli/core"
 	"github.com/spf13/cobra"
 )
 
@@ -166,8 +167,7 @@ func jsonError(w http.ResponseWriter, msg string, code int) {
 
 // kubectl runs a kubectl command and returns stdout.
 func kubectlJSON(args ...string) (string, error) {
-	fullArgs := append([]string{"--context", "kind-" + clusterName}, args...)
-	return runCapture("kubectl", fullArgs...)
+	return core.Kubectl(clusterName, args...)
 }
 
 // findProcessOnPort uses lsof to find the PID listening on a TCP port.

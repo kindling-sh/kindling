@@ -80,6 +80,63 @@
   margin-bottom: 2rem;
 }
 
+/* Install banner */
+.installBanner {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  background: rgba(255, 107, 53, 0.08);
+  border: 1.5px solid rgba(255, 107, 53, 0.25);
+  border-radius: 10px;
+  padding: 0.9rem 1.25rem;
+  margin-bottom: 1.75rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  max-width: 480px;
+  user-select: none;
+}
+
+.installBanner:hover {
+  background: rgba(255, 107, 53, 0.12);
+  border-color: rgba(255, 107, 53, 0.4);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 20px rgba(255, 107, 53, 0.15);
+}
+
+.installPrompt {
+  color: #ff6b35;
+  font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+  font-weight: 700;
+  font-size: 1.05rem;
+  flex-shrink: 0;
+}
+
+.installText {
+  color: #e8e0f0;
+  font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+  font-size: 0.95rem;
+  font-weight: 500;
+  flex: 1;
+  letter-spacing: -0.01em;
+}
+
+.installCopy {
+  color: #7a7490;
+  font-size: 0.78rem;
+  font-weight: 500;
+  flex-shrink: 0;
+  padding: 0.2rem 0.6rem;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  transition: all 0.15s ease;
+}
+
+.installBanner:hover .installCopy {
+  color: #ffad60;
+  border-color: rgba(255, 107, 53, 0.3);
+}
+
 .heroButtons {
   display: flex;
   gap: 1rem;

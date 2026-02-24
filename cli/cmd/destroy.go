@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 
+	"github.com/jeffvincent/kindling/cli/core"
 	"github.com/spf13/cobra"
 )
 
@@ -25,7 +26,7 @@ func init() {
 func runDestroy(cmd *cobra.Command, args []string) error {
 	header("Destroying Kind cluster")
 
-	if !clusterExists(clusterName) {
+	if !core.ClusterExists(clusterName) {
 		warn(fmt.Sprintf("Cluster %q does not exist — nothing to do", clusterName))
 		return nil
 	}
@@ -43,13 +44,14 @@ func runDestroy(cmd *cobra.Command, args []string) error {
 	}
 
 	// Stop any running tunnel before tearing down the cluster.
-	if info, _ := readTunnelInfo(); info != nil && info.PID > 0 && processAlive(info.PID) {
+	if info, _ := core.ReadTunnelInfo(); info != nil && info.PID > 0 && core.ProcessAlive(info.PID) {
 		step("🛑", "Stopping tunnel...")
 		_ = stopTunnel()
 	}
 
 	step("💥", fmt.Sprintf("kind delete cluster --name %s", clusterName))
-	if err := run("kind", "delete", "cluster", "--name", clusterName); err != nil {
+	_, err := core.DestroyCluster(clusterName)
+	if err != nil {
 		return fmt.Errorf("failed to delete cluster: %w", err)
 	}
 

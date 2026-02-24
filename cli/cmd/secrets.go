@@ -7,16 +7,13 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/jeffvincent/kindling/cli/core"
 	"github.com/spf13/cobra"
 )
 
 const (
 	// secretsNamespace is the namespace where kindling user secrets are stored.
 	secretsNamespace = "default"
-	// secretsLabelKey marks secrets as managed by kindling.
-	secretsLabelKey = "app.kubernetes.io/managed-by"
-	// secretsLabelValue is the label value for kindling-managed secrets.
-	secretsLabelValue = "kindling"
 	// secretsDirName is the local config directory for kindling.
 	secretsDirName = ".kindling"
 	// secretsFileName is the local plaintext secrets mapping file (gitignored).
@@ -107,31 +104,19 @@ func runSecretsSet(cmd *cobra.Command, args []string) error {
 
 	header("Setting secret")
 
-	// Kubernetes secret name: kindling-secret-<NAME> (lowercased)
-	k8sName := kindlingSecretName(name)
+	k8sName := core.KindlingSecretName(name)
 
-	// Create or update the K8s secret
 	step("☸️", fmt.Sprintf("Creating K8s Secret %s in namespace %s", k8sName, secretsNamespace))
 
-	// Delete existing if present (kubectl create secret doesn't support update)
-	_ = runSilent2("kubectl", "delete", "secret", k8sName,
-		"-n", secretsNamespace, "--ignore-not-found")
-
-	err := run("kubectl", "create", "secret", "generic", k8sName,
-		"-n", secretsNamespace,
-		"--from-literal="+name+"="+value,
-		"--from-literal=value="+value,
-	)
+	_, err := core.CreateSecret(core.SecretConfig{
+		ClusterName: clusterName,
+		Name:        name,
+		Value:       value,
+		Namespace:   secretsNamespace,
+	})
 	if err != nil {
-		return fmt.Errorf("failed to create K8s secret: %w", err)
+		return err
 	}
-
-	// Label it so we can find it later
-	_ = run("kubectl", "label", "secret", k8sName,
-		"-n", secretsNamespace,
-		secretsLabelKey+"="+secretsLabelValue,
-		"--overwrite",
-	)
 
 	success(fmt.Sprintf("Secret %s created in cluster", k8sName))
 
@@ -158,12 +143,7 @@ func runSecretsSet(cmd *cobra.Command, args []string) error {
 func runSecretsList(cmd *cobra.Command, args []string) error {
 	header("Kindling-managed secrets")
 
-	output, err := runCapture("kubectl", "get", "secrets",
-		"-n", secretsNamespace,
-		"-l", secretsLabelKey+"="+secretsLabelValue,
-		"-o", "custom-columns=NAME:.metadata.name,KEYS:.data,AGE:.metadata.creationTimestamp",
-		"--no-headers",
-	)
+	output, err := core.ListSecrets(clusterName, secretsNamespace)
 	if err != nil {
 		return fmt.Errorf("failed to list secrets: %w", err)
 	}
@@ -189,12 +169,7 @@ func runSecretsList(cmd *cobra.Command, args []string) error {
 		}
 		secretName := fields[0]
 
-		// Get the actual key names from the secret
-		keys, _ := runCapture("kubectl", "get", "secret", secretName,
-			"-n", secretsNamespace,
-			"-o", "jsonpath={.data}",
-		)
-		keyNames := parseSecretKeys(keys)
+		keyNames, _ := core.GetSecretKeys(clusterName, secretName, secretsNamespace)
 
 		fmt.Printf("  %-40s %s\n", secretName, strings.Join(keyNames, ", "))
 	}
@@ -207,13 +182,12 @@ func runSecretsList(cmd *cobra.Command, args []string) error {
 
 func runSecretsDelete(cmd *cobra.Command, args []string) error {
 	name := args[0]
-	k8sName := kindlingSecretName(name)
+	k8sName := core.KindlingSecretName(name)
 
 	header("Deleting secret")
 
 	step("☸️", fmt.Sprintf("Removing K8s Secret %s", k8sName))
-	_, err := runSilent("kubectl", "delete", "secret", k8sName,
-		"-n", secretsNamespace, "--ignore-not-found")
+	_, err := core.DeleteSecret(clusterName, name, secretsNamespace)
 	if err != nil {
 		warn(fmt.Sprintf("Could not delete from cluster: %v", err))
 	} else {
@@ -246,26 +220,19 @@ func runSecretsRestore(cmd *cobra.Command, args []string) error {
 
 	restored := 0
 	for name, value := range secrets {
-		k8sName := kindlingSecretName(name)
+		k8sName := core.KindlingSecretName(name)
 		step("☸️", fmt.Sprintf("Restoring %s → %s", name, k8sName))
 
-		_ = runSilent2("kubectl", "delete", "secret", k8sName,
-			"-n", secretsNamespace, "--ignore-not-found")
-
-		err := runSilent2("kubectl", "create", "secret", "generic", k8sName,
-			"-n", secretsNamespace,
-			"--from-literal="+name+"="+value,
-		)
+		_, err := core.CreateSecret(core.SecretConfig{
+			ClusterName: clusterName,
+			Name:        name,
+			Value:       value,
+			Namespace:   secretsNamespace,
+		})
 		if err != nil {
 			warn(fmt.Sprintf("Failed to restore %s: %v", name, err))
 			continue
 		}
-
-		_ = runSilent2("kubectl", "label", "secret", k8sName,
-			"-n", secretsNamespace,
-			secretsLabelKey+"="+secretsLabelValue,
-			"--overwrite",
-		)
 		restored++
 	}
 
@@ -277,29 +244,7 @@ func runSecretsRestore(cmd *cobra.Command, args []string) error {
 // Helpers
 // ────────────────────────────────────────────────────────────────────────────
 
-// kindlingSecretName returns the K8s Secret name for a given logical secret name.
-func kindlingSecretName(name string) string {
-	clean := strings.ToLower(strings.ReplaceAll(name, "_", "-"))
-	return "kindling-secret-" + clean
-}
 
-// parseSecretKeys extracts key names from a kubectl JSON data output like
-// map[KEY1:base64... KEY2:base64...]
-func parseSecretKeys(jsonData string) []string {
-	// jsonData looks like: map[STRIPE_API_KEY:c2t...]
-	jsonData = strings.TrimPrefix(jsonData, "map[")
-	jsonData = strings.TrimSuffix(jsonData, "]")
-	if jsonData == "" {
-		return nil
-	}
-	var keys []string
-	for _, pair := range strings.Fields(jsonData) {
-		if idx := strings.Index(pair, ":"); idx > 0 {
-			keys = append(keys, pair[:idx])
-		}
-	}
-	return keys
-}
 
 // ── Local secrets file (plaintext, gitignored) ──────────────────
 
@@ -416,8 +361,3 @@ func ensureGitignored(kindlingDir string) {
 	_, _ = f.WriteString(entry)
 }
 
-// runSilent2 is like runSilent but discards output and only returns error.
-func runSilent2(name string, args ...string) error {
-	_, err := runSilent(name, args...)
-	return err
-}

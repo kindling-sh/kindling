@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/jeffvincent/kindling/cli/core"
 	"github.com/spf13/cobra"
 )
 
@@ -59,22 +60,18 @@ func runEnvSet(cmd *cobra.Command, args []string) error {
 	pairs := args[1:]
 
 	// Validate KEY=VALUE format
-	for _, p := range pairs {
-		if !strings.Contains(p, "=") {
-			return fmt.Errorf("invalid format %q — expected KEY=VALUE", p)
-		}
+	if err := core.ValidateEnvPairs(pairs); err != nil {
+		return err
 	}
 
 	// Verify deployment exists
-	if _, err := runSilent("kubectl", "get", "deployment/"+deploy); err != nil {
+	if !core.DeploymentExists(clusterName, deploy, "default") {
 		return fmt.Errorf("deployment %q not found", deploy)
 	}
 
 	header("Setting environment variables")
 
-	// kubectl set env handles rolling restart automatically
-	setArgs := append([]string{"set", "env", "deployment/" + deploy}, pairs...)
-	if err := run("kubectl", setArgs...); err != nil {
+	if _, err := core.SetEnv(clusterName, deploy, "default", pairs); err != nil {
 		return fmt.Errorf("failed to set env: %w", err)
 	}
 
@@ -90,15 +87,13 @@ func runEnvSet(cmd *cobra.Command, args []string) error {
 func runEnvList(cmd *cobra.Command, args []string) error {
 	deploy := args[0]
 
-	if _, err := runSilent("kubectl", "get", "deployment/"+deploy); err != nil {
+	if !core.DeploymentExists(clusterName, deploy, "default") {
 		return fmt.Errorf("deployment %q not found", deploy)
 	}
 
 	header(fmt.Sprintf("Environment: %s", deploy))
 
-	// Get env vars from the first container
-	out, err := runCapture("kubectl", "get", "deployment/"+deploy,
-		"-o", "jsonpath={range .spec.template.spec.containers[0].env[*]}{.name}={.value}{\"\\n\"}{end}")
+	out, err := core.GetEnvJSONPath(clusterName, deploy, "default")
 	if err != nil {
 		return fmt.Errorf("failed to read env: %w", err)
 	}
@@ -127,20 +122,17 @@ func runEnvUnset(cmd *cobra.Command, args []string) error {
 	deploy := args[0]
 	keys := args[1:]
 
-	if _, err := runSilent("kubectl", "get", "deployment/"+deploy); err != nil {
+	if !core.DeploymentExists(clusterName, deploy, "default") {
 		return fmt.Errorf("deployment %q not found", deploy)
 	}
 
 	header("Removing environment variables")
 
-	// kubectl set env KEY- removes the variable
-	unsetArgs := []string{"set", "env", "deployment/" + deploy}
 	for _, k := range keys {
-		unsetArgs = append(unsetArgs, k+"-")
 		step("🗑️ ", k)
 	}
 
-	if err := run("kubectl", unsetArgs...); err != nil {
+	if _, err := core.UnsetEnv(clusterName, deploy, "default", keys); err != nil {
 		return fmt.Errorf("failed to unset env: %w", err)
 	}
 
