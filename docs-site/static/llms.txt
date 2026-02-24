@@ -1,0 +1,64 @@
+# kindling
+
+> A Kubernetes operator that turns your laptop into a personal CI/CD environment. Push code, build locally, deploy instantly — with real GitHub Actions runners, 15 auto-provisioned dependencies, and zero cloud costs.
+
+kindling runs a Kind cluster on your Mac or Linux machine. It registers self-hosted GitHub Actions runners, builds container images with Kaniko, and deploys applications using a custom Kubernetes operator. Every `git push` triggers a local build-and-deploy cycle identical to what you'd get from a cloud CI system.
+
+## Documentation
+
+- [Quickstart](https://kindling.sh/docs/quickstart): Install, bootstrap, and deploy a demo app in 5 minutes
+- [CLI Reference](https://kindling.sh/docs/cli): Complete reference for all kindling CLI commands and flags
+- [Architecture](https://kindling.sh/docs/architecture): Internal architecture — components, data flow, and system design
+- [CRD Reference](https://kindling.sh/docs/crd-reference): Full spec reference for DevStagingEnvironment and GithubActionRunnerPool custom resources
+
+## Features
+
+- [Secrets Management](https://kindling.sh/docs/secrets): Manage API keys, tokens, and credentials across cluster rebuilds
+- [Dependency Reference](https://kindling.sh/docs/dependencies): All 15 auto-provisioned dependency types (Postgres, Redis, MongoDB, Kafka, etc.)
+- [GitHub Actions Reference](https://kindling.sh/docs/github-actions): kindling-build and kindling-deploy reusable composite actions
+- [AI Workflow Generation](https://kindling.sh/docs/generate): Auto-generate GitHub Actions workflows tailored to your repo using AI
+- [OAuth & Tunnels](https://kindling.sh/docs/oauth-tunnels): Public HTTPS tunnels for OAuth callbacks with kindling expose
+- [File Sync & Hot Reload](https://kindling.sh/docs/sync): Live-sync local files into running pods with language-aware restart strategies
+- [Environment Variables](https://kindling.sh/docs/env-vars): Set, list, and unset env vars on running deployments without redeploying
+- [Dashboard](https://kindling.sh/docs/dashboard): Web-based dashboard for monitoring and managing your kindling cluster
+
+## Walkthroughs
+
+- [Stripe Integration](https://kindling.sh/docs/guides/stripe-integration): Configure Stripe API keys and test webhooks locally
+- [Auth0 Integration](https://kindling.sh/docs/guides/auth0-integration): Wire up OAuth/OIDC providers with tunnel support
+- [Multi-Service](https://kindling.sh/docs/guides/multi-service): Deploy microservices architectures with shared dependencies
+- [Background Workers](https://kindling.sh/docs/guides/background-workers): Redis task queue with API + worker service pattern
+- [WebSocket Real-Time](https://kindling.sh/docs/guides/websocket-realtime): Live updates with WebSockets and Redis pub/sub
+- [Webhook Testing](https://kindling.sh/docs/guides/webhook-testing): Test inbound webhooks from third-party services locally
+- [S3-Compatible File Uploads](https://kindling.sh/docs/guides/s3-file-uploads): File uploads with MinIO as a local S3 replacement
+
+## Agent Development
+
+- [RAG with LangChain](https://kindling.sh/docs/guides/rag-langchain): Build a RAG agent with LangChain, pgvector, and Redis
+- [CrewAI Multi-Agent](https://kindling.sh/docs/guides/crewai-multi-agent): Deploy CrewAI multi-agent systems as microservices with NATS
+- [LangGraph Stateful Agents](https://kindling.sh/docs/guides/langgraph-stateful): Stateful multi-step agents with Redis checkpointing and Postgres
+- [OpenAI Agents SDK](https://kindling.sh/docs/guides/openai-agents-sdk): Tool-calling agent with the OpenAI Agents SDK
+- [MongoDB Atlas Vector Search](https://kindling.sh/docs/guides/mongodb-atlas-vectors): Connect to Atlas for managed vector search with Voyage reranking
+- [NeonDB Pre-Seeded Data](https://kindling.sh/docs/guides/neondb-seeded-data): Neon database branching for instant pre-seeded dev data
+
+## Key Concepts
+
+- **Kind cluster**: Local Kubernetes via Kind with ingress-nginx, in-cluster registry, and the kindling operator
+- **DevStagingEnvironment (DSE)**: Custom resource that declares an app + backing services; operator reconciles Deployment, Service, Ingress, and dependencies
+- **GithubActionRunnerPool**: Custom resource that registers self-hosted GitHub Actions runners bound to a repo
+- **Kaniko build-agent**: Sidecar in runner pods that builds container images via signal-file protocol
+- **15 dependency types**: postgres, redis, mysql, mongodb, rabbitmq, minio, elasticsearch, kafka, nats, memcached, cassandra, consul, vault, influxdb, jaeger — all auto-provisioned with connection URL injection
+- **kindling generate**: AI-powered workflow generation using OpenAI or Anthropic; scans Dockerfiles, docker-compose, Helm charts, source code
+- **kindling sync**: Live file sync with language-aware restart strategies (wrapper+kill, signal reload, auto-reload, local build+binary sync)
+- **kindling secrets**: Kubernetes Secrets with local backup file; survives cluster rebuilds via `kindling secrets restore`
+- **kindling expose**: Public HTTPS tunnels via cloudflared or ngrok for OAuth callbacks
+
+## Installation
+
+```bash
+brew install kindling-sh/tap/kindling
+```
+
+## Optional
+
+- [llms-full.txt](https://kindling.sh/llms-full.txt): Full documentation content for AI model consumption

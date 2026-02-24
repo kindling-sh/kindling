@@ -28,6 +28,29 @@ const config: Config = {
   },
   themes: ["@docusaurus/theme-mermaid"],
 
+  headTags: [
+    {
+      tagName: "script",
+      attributes: { type: "application/ld+json" },
+      innerHTML: JSON.stringify({
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        name: "kindling",
+        description:
+          "Local staging environments for every developer. Push code, your laptop builds it, your laptop runs it.",
+        url: "https://kindling.sh",
+        applicationCategory: "DeveloperApplication",
+        operatingSystem: "macOS, Linux",
+        offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
+        sourceOrganization: {
+          "@type": "Organization",
+          name: "kindling",
+          url: "https://github.com/kindling-sh",
+        },
+      }),
+    },
+  ],
+
   presets: [
     [
       "classic",
@@ -39,6 +62,11 @@ const config: Config = {
         blog: false,
         theme: {
           customCss: "./src/css/custom.css",
+        },
+        sitemap: {
+          lastmod: "date",
+          changefreq: "weekly",
+          priority: 0.5,
         },
       } satisfies Preset.Options,
     ],

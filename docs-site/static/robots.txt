@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://kindling.sh/sitemap.xml

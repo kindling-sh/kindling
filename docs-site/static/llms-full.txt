@@ -1,0 +1,743 @@
+# kindling — Full Documentation
+
+> kindling gives every developer an isolated staging environment on their
+> laptop. Push code, your machine builds it, your machine runs it. No
+> cloud CI. No shared staging servers. No waiting.
+
+- Website: https://kindling.sh
+- GitHub: https://github.com/kindling-sh/kindling
+- Install: `brew install kindling-sh/tap/kindling`
+
+---
+
+# Quickstart
+
+Zero to a running app — publicly accessible on the internet — in 5 minutes.
+
+## Install
+
+```bash
+brew install kindling-sh/tap/kindling
+```
+
+This installs kindling, `kind`, and `kubectl` automatically. That's it — one command, all dependencies handled.
+
+## Bootstrap
+
+```bash
+kindling init
+```
+
+Creates a local Kubernetes cluster with an in-cluster container registry, ingress controller, and the kindling operator — all in one shot.
+
+## Try the demo app
+
+`kindling init` auto-clones the project to `~/.kindling`. Copy the included microservices demo — Go, Python, Node.js, and React — into a fresh directory:
+
+```bash
+cp -r ~/.kindling/examples/microservices ~/kindling-demo
+```
+
+This gives you a working 4-service app (API gateway, orders service, inventory service, React UI) with Postgres, Redis, and MongoDB — plus a pre-built GitHub Actions workflow. No AI key needed.
+
+## Create a repo and push
+
+```bash
+cd ~/kindling-demo
+git init && git add -A && git commit -m "initial commit"
+gh repo create kindling-demo --private --source . --push
+```
+
+## Connect the runner
+
+You need a GitHub Personal Access Token with the **repo** scope.
+
+```bash
+kindling runners -u <github-user> -r <github-user>/kindling-demo -t <pat>
+```
+
+This registers a self-hosted GitHub Actions runner in your cluster, bound to your repo. Push a change to trigger a build:
+
+```bash
+git commit --allow-empty -m "trigger build" && git push
+```
+
+## Watch it deploy
+
+```bash
+kindling status
+```
+
+The runner picks up the workflow, Kaniko builds all four images, the operator provisions Postgres, Redis, and MongoDB, and ingress routes go live:
+
+```bash
+curl http://<your-user>-ui.localhost
+```
+
+### Want a public URL?
+
+```bash
+kindling expose
+```
+
+Instantly creates an HTTPS tunnel. Share the URL with anyone.
+
+## Use your own app
+
+Once you've seen the demo, point kindling at your own repo:
+
+```bash
+kindling generate -k <openai-api-key> -r /path/to/your-app
+```
+
+Scans your repo — Dockerfiles, docker-compose, Helm charts, source code — and writes a complete `.github/workflows/dev-deploy.yml` using AI. Works with OpenAI (default) or Anthropic (`--provider anthropic`). Your app needs a working Dockerfile.
+
+## What just happened?
+
+```
+brew install → kindling init → cp demo → gh repo create → git push → app running
+     ↓              ↓              ↓            ↓               ↓           ↓
+  CLI + deps    K8s cluster    Demo app    GitHub repo     Local build   localhost
+```
+
+Every subsequent `git push` rebuilds and redeploys automatically. No cloud CI minutes. No Docker Hub. No YAML by hand.
+
+---
+
+# CLI Reference
+
+The `kindling` CLI bootstraps and manages a local Kind cluster running the kindling operator. It wraps `kind`, `kubectl`, and Docker into a streamlined developer workflow.
+
+## Installation
+
+```bash
+cd kindling
+make cli
+sudo cp bin/kindling /usr/local/bin/
+```
+
+## Global flags
+
+| Flag | Short | Default | Description |
+|---|---|---|---|
+| `--cluster` | `-c` | `dev` | Kind cluster name |
+| `--project-dir` | `-p` | `.` (cwd) | Path to kindling project root |
+
+## `kindling init`
+
+Bootstrap a Kind cluster with the kindling operator.
+
+What it does (in order):
+1. Preflight checks (kind, kubectl, docker on PATH; also go, make if `--build`)
+2. `kind create cluster --name dev --config kind-config.yaml`
+3. Switch kubectl context to `kind-dev`
+4. Run `setup-ingress.sh` (installs ingress-nginx + in-cluster registry)
+5. Pull operator image from GHCR, or build from source with `--build`
+6. Tag as `controller:latest` and `kind load docker-image controller:latest --name dev`
+7. Apply CRDs
+8. Deploy operator via kustomize
+9. Wait for controller-manager rollout
+
+| Flag | Default | Description |
+|---|---|---|
+| `--skip-cluster` | `false` | Skip Kind cluster creation |
+| `--build` | `false` | Build operator from source instead of pulling |
+| `--operator-image` | `ghcr.io/kindling-sh/kindling-operator:latest` | Operator image to pull |
+| `--image` | — | Node Docker image for Kind |
+| `--expose` | `false` | Start a public HTTPS tunnel after bootstrap |
+
+## `kindling runners`
+
+Create a GitHub Actions runner pool in the cluster.
+
+| Flag | Short | Default | Description |
+|---|---|---|---|
+| `--username` | `-u` | — | GitHub username |
+| `--repo` | `-r` | — | GitHub repository (`owner/repo`) |
+| `--token` | `-t` | — | GitHub Personal Access Token |
+
+## `kindling generate`
+
+AI-generate a GitHub Actions workflow for any repository.
+
+| Flag | Short | Default | Description |
+|---|---|---|---|
+| `--api-key` | `-k` | — (required) | GenAI API key |
+| `--repo-path` | `-r` | `.` | Path to repository |
+| `--provider` | | `openai` | `openai` or `anthropic` |
+| `--model` | | auto | Model name |
+| `--output` | `-o` | `.github/workflows/dev-deploy.yml` | Output path |
+| `--dry-run` | | `false` | Print to stdout |
+| `--ingress-all` | | `false` | Wire every service with ingress |
+| `--no-helm` | | `false` | Skip Helm/Kustomize rendering |
+
+## `kindling deploy`
+
+Apply a DevStagingEnvironment from a YAML file.
+
+```bash
+kindling deploy -f dev-environment.yaml
+```
+
+## `kindling status`
+
+Show the status of the cluster, operator, runners, and environments.
+
+## `kindling logs`
+
+Tail the kindling controller logs.
+
+| Flag | Short | Default | Description |
+|---|---|---|---|
+| `--all` | — | `false` | Show all container logs |
+| `--since` | — | `5m` | Show logs since duration |
+| `--follow` | `-f` | `true` | Follow log output |
+
+## `kindling sync`
+
+Live-sync local files into a running pod with language-aware hot reload.
+
+| Flag | Short | Default | Description |
+|---|---|---|---|
+| `--deployment` | `-d` | — (required) | Target deployment name |
+| `--src` | — | `.` | Local source directory |
+| `--dest` | — | `/app` | Destination in container |
+| `--restart` | — | `false` | Restart app after sync |
+| `--once` | — | `false` | Sync once, no watching |
+| `--language` | — | auto-detect | Override runtime detection |
+| `--build-cmd` | — | auto-detect | Local build command |
+
+## `kindling secrets`
+
+Manage external credentials as Kubernetes Secrets.
+
+| Subcommand | Description |
+|---|---|
+| `set <name> <value>` | Create or update secret |
+| `list` | List managed secrets |
+| `delete <name>` | Remove secret |
+| `restore` | Restore from local backup |
+
+## `kindling expose`
+
+Create a public HTTPS tunnel for OAuth/OIDC callbacks.
+
+| Flag | Default | Description |
+|---|---|---|
+| `--provider` | auto-detect | `cloudflared` or `ngrok` |
+| `--port` | `80` | Local port to expose |
+| `--stop` | `false` | Stop tunnel |
+
+## `kindling env`
+
+Manage environment variables on running deployments.
+
+| Subcommand | Description |
+|---|---|
+| `set <deployment> KEY=VALUE` | Set env vars |
+| `list <deployment>` | List env vars |
+| `unset <deployment> KEY` | Remove env vars |
+
+## `kindling reset`
+
+Remove the runner pool so you can re-point at a new repo.
+
+## `kindling destroy`
+
+Delete the Kind cluster and all resources.
+
+## `kindling version`
+
+Print the CLI version.
+
+## `kindling dashboard`
+
+Launch a local web UI for monitoring and managing your cluster. Opens at http://localhost:9090.
+
+---
+
+# Architecture
+
+kindling is a Kubernetes operator that gives every developer an isolated staging environment on their local machine using Kind.
+
+## Components
+
+### 1. Kind cluster
+
+A local Kubernetes cluster with:
+- Single control-plane node with the `ingress-ready` label
+- Port mappings for HTTP (80) and HTTPS (443)
+- Containerd mirror pointing `registry:5000` to the in-cluster registry
+
+### 2. Operator (controller-manager)
+
+A Kubebuilder-based Go controller in `kindling-system` namespace. Watches two CRDs:
+
+| CRD | Purpose |
+|---|---|
+| `DevStagingEnvironment` | Declares an app + its backing services |
+| `GithubActionRunnerPool` | Declares a self-hosted GitHub Actions runner |
+
+Reconcile loop for DevStagingEnvironment:
+
+```
+CR applied → reconcileDeployment
+           → reconcileService
+           → reconcileIngress (if enabled)
+           → reconcileDependencies (for each dep: Secret + Deployment + Service)
+           → updateStatus
+```
+
+All child resources have `OwnerReferences` for garbage collection.
+
+### 3. GitHub Actions Runner Pod
+
+Each runner pod has:
+- **runner** container — registers with GitHub, polls for jobs
+- **build-agent** container — watches `/builds/` for build requests, launches Kaniko pods
+
+### 4. Kaniko build-agent (sidecar)
+
+Watches for signal files in `/builds/`. Kaniko executes the Dockerfile from the build context exactly as-is.
+
+Signal file protocol:
+- Runner writes: `.tar.gz`, `.dest`, `.request`
+- Build-agent writes back: `.done`, `.exitcode`, `.log`
+
+For DSE YAML apply operations:
+- Runner writes: `-dse.yaml`, `-dse.apply`
+- Build-agent writes back: `-dse.apply-done`, `-dse.apply-exitcode`
+
+### 5. In-cluster registry
+
+Docker registry (`registry:2`) at `registry:5000`.
+
+### 6. Ingress-nginx controller
+
+HTTP routing from `*.localhost` hostnames to in-cluster Services.
+
+## Namespace layout
+
+| Namespace | Contents |
+|---|---|
+| `kindling-system` | Operator Deployment, ServiceAccount, RBAC |
+| `default` | Runner pods, DSE resources, registry |
+| `ingress-nginx` | ingress-nginx controller pods |
+
+## Dependency provisioning
+
+For each dependency the operator creates:
+1. **Secret** with credentials + computed `CONNECTION_URL`
+2. **Deployment** running the service image
+3. **Service** (ClusterIP) exposing the default port
+4. **Env var injection** into the app container
+
+## AI workflow generation pipeline
+
+```
+Repo scan → docker-compose analysis → Helm/Kustomize render → .env template scan → Credential detection → OAuth detection → Prompt assembly → AI call → YAML output
+```
+
+---
+
+# Dependency Reference
+
+The kindling operator auto-provisions backing services alongside your application. You declare dependencies in the DevStagingEnvironment CR and the operator creates a Pod, Service, and credential Secret for each one, then injects connection-string environment variables into your app container automatically.
+
+## Quick reference table
+
+| Type | Env var injected | Default port |
+|---|---|---|
+| `postgres` | `DATABASE_URL` | 5432 |
+| `redis` | `REDIS_URL` | 6379 |
+| `mysql` | `DATABASE_URL` | 3306 |
+| `mongodb` | `MONGO_URL` | 27017 |
+| `rabbitmq` | `AMQP_URL` | 5672 |
+| `minio` | `S3_ENDPOINT` | 9000 |
+| `elasticsearch` | `ELASTICSEARCH_URL` | 9200 |
+| `kafka` | `KAFKA_BROKER_URL` | 9092 |
+| `nats` | `NATS_URL` | 4222 |
+| `memcached` | `MEMCACHED_URL` | 11211 |
+| `cassandra` | `CASSANDRA_URL` | 9042 |
+| `consul` | `CONSUL_HTTP_ADDR` | 8500 |
+| `vault` | `VAULT_ADDR` | 8200 |
+| `influxdb` | `INFLUXDB_URL` | 8086 |
+| `jaeger` | `JAEGER_ENDPOINT` | 16686 |
+
+## Overriding defaults
+
+Every dependency supports optional fields:
+
+```yaml
+dependencies:
+  - type: postgres
+    version: "15"
+    image: "my-registry/pg:15"
+    port: 5433
+    envVarName: "PG_URL"
+    storageSize: "5Gi"
+    env:
+      - name: POSTGRES_USER
+        value: "custom_user"
+    resources:
+      cpuRequest: "100m"
+      memoryLimit: "1Gi"
+```
+
+## Connection URL formats
+
+- **postgres**: `postgres://devuser:devpass@<name>-postgres:5432/devdb?sslmode=disable`
+- **redis**: `redis://<name>-redis:6379/0`
+- **mysql**: `mysql://devuser:devpass@<name>-mysql:3306/devdb`
+- **mongodb**: `mongodb://devuser:devpass@<name>-mongodb:27017`
+- **rabbitmq**: `amqp://devuser:devpass@<name>-rabbitmq:5672/`
+- **minio**: `http://<name>-minio:9000`
+- **elasticsearch**: `http://<name>-elasticsearch:9200`
+- **kafka**: `<name>-kafka:9092`
+- **nats**: `nats://<name>-nats:4222`
+
+---
+
+# GitHub Actions Reference
+
+kindling ships two reusable composite actions.
+
+## kindling-build
+
+Build and push a container image via the Kaniko build-agent sidecar.
+
+| Input | Required | Default | Description |
+|---|---|---|---|
+| `name` | ✅ | — | Unique build name |
+| `context` | ✅ | — | Build context directory |
+| `image` | ✅ | — | Full image reference |
+| `exclude` | ❌ | `""` | `tar --exclude` patterns |
+| `dockerfile` | ❌ | `""` | Dockerfile path relative to context |
+| `timeout` | ❌ | `300` | Max seconds to wait |
+
+## kindling-deploy
+
+Deploy a DevStagingEnvironment CR via the build-agent sidecar.
+
+| Input | Required | Default | Description |
+|---|---|---|---|
+| `name` | ✅ | — | DSE `metadata.name` |
+| `image` | ✅ | — | Container image reference |
+| `port` | ✅ | — | Container port |
+| `dependencies` | ❌ | `""` | Dependencies YAML block |
+| `ingress-host` | ❌ | `""` | Ingress hostname |
+| `health-check-path` | ❌ | `/healthz` | HTTP health check path |
+| `env` | ❌ | `""` | Extra env vars YAML block |
+| `replicas` | ❌ | `1` | Number of replicas |
+
+---
+
+# Secrets Management
+
+`kindling secrets` manages external credentials — API keys, tokens, DSNs, passwords — as Kubernetes Secrets in the Kind cluster. A local backup file ensures credentials survive cluster rebuilds.
+
+## Quick start
+
+```bash
+kindling secrets set STRIPE_KEY sk_live_abc123
+kindling secrets list
+kindling secrets delete STRIPE_KEY
+kindling secrets restore
+```
+
+## How it works
+
+Each secret is stored as a Kubernetes Secret named `kindling-secret-<lowercase-name>` in the `default` namespace with the label `app.kubernetes.io/managed-by=kindling`.
+
+Every `set` and `delete` operation also updates `.kindling/secrets.yaml` for local backup.
+
+## Integration with `kindling generate`
+
+The repo scanner looks for environment variable references matching credential patterns:
+- Suffix matches: `*_API_KEY`, `*_SECRET`, `*_TOKEN`, `*_DSN`, `*_PASSWORD`, etc.
+- Exact matches: `DATABASE_URL`, `STRIPE_KEY`, `OPENAI_API_KEY`, etc.
+
+Detected credentials are wired using `secretKeyRef` in the generated workflow.
+
+---
+
+# AI Workflow Generation
+
+`kindling generate` scans your repository and uses an LLM to produce a complete GitHub Actions workflow.
+
+## What it detects
+
+- **Services** — each directory with a Dockerfile
+- **Languages** — Go, TypeScript, Python, Java, Rust, Ruby, PHP, C#, Elixir
+- **Ports** — from Dockerfile EXPOSE, framework defaults, config files
+- **Dependencies** — from docker-compose, env vars, import analysis
+- **External credentials** — `*_API_KEY`, `*_SECRET`, `*_TOKEN` patterns
+- **OAuth/OIDC** — Auth0, Okta, Firebase Auth, NextAuth, Passport.js
+
+## Smart scanning
+
+- **docker-compose.yml** — primary source of truth for build contexts and deps
+- **Helm charts** — detects `Chart.yaml`, runs `helm template`
+- **Kustomize overlays** — detects `kustomization.yaml`, runs `kustomize build`
+- **.env template files** — scans `.env.sample`, `.env.example`, etc.
+
+## Models
+
+| Provider | Default model |
+|---|---|
+| OpenAI | `o3` |
+| Anthropic | `claude-sonnet-4-20250514` |
+
+---
+
+# OAuth & Public HTTPS Tunnels
+
+`kindling expose` creates a secure tunnel from a public HTTPS URL to your local cluster for OAuth/OIDC callbacks.
+
+```bash
+kindling expose
+# ✅ Public URL: https://random-name.trycloudflare.com
+```
+
+## Supported providers
+
+- **cloudflared** — free, no account required
+- **ngrok** — requires free account + auth token
+
+## Auto-detection in `kindling generate`
+
+Scans for 40+ OAuth/OIDC patterns: Auth0, Okta, Firebase Auth, NextAuth, Passport.js, OIDC, redirect URIs, callback routes.
+
+---
+
+# File Sync & Hot Reload
+
+`kindling sync` watches your local source files and syncs changes into a running pod in real time.
+
+```bash
+kindling sync -d my-api --restart
+```
+
+## Restart strategies (auto-detected)
+
+| Strategy | Runtimes |
+|---|---|
+| wrapper + kill | Node.js, Python, Ruby, Perl, Lua, Julia, R, Elixir, Deno, Bun |
+| signal reload | uvicorn, gunicorn, Puma, Unicorn, Nginx, Apache |
+| auto-reload | PHP, nodemon |
+| local build + binary sync | Go, Rust, Java, Kotlin, C#/.NET, C/C++, Zig |
+
+Runtime detection reads `/proc/1/cmdline` from the container and matches against 30+ known process signatures.
+
+For compiled languages, `kindling sync` queries the Kind node's architecture and auto-generates the correct cross-compilation command.
+
+---
+
+# Environment Variables
+
+`kindling env` manages environment variables on running deployments directly — no redeploy, no image rebuild. Changes take effect immediately via a rolling restart.
+
+```bash
+kindling env set myapp-dev LOG_LEVEL=debug
+kindling env list myapp-dev
+kindling env unset myapp-dev LOG_LEVEL
+```
+
+---
+
+# Dashboard
+
+`kindling dashboard` launches a local web UI for monitoring and managing your cluster.
+
+```bash
+kindling dashboard
+# Opens at http://localhost:9090
+```
+
+Features: cluster health, operator status, registry, ingress controller, runner pools, dev environments, pods, unhealthy pods with logs. Also supports creating/managing secrets, environment variables, tunnels, and bootstrapping from the browser.
+
+The dashboard is a single-binary embedded web app — React frontend compiled to static assets and embedded into the Go binary via `go:embed`.
+
+---
+
+# CRD Reference
+
+kindling defines two Custom Resource Definitions under the `apps.example.com/v1alpha1` API group.
+
+## DevStagingEnvironment
+
+Declares a complete application environment: a Deployment, Service, optional Ingress, and zero or more auto-provisioned backing services.
+
+### `spec.deployment`
+
+| Field | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `image` | string | ✅ | — | Container image reference |
+| `port` | int32 | ✅ | — | Container port |
+| `replicas` | *int32 | ❌ | `1` | Number of replicas |
+| `command` | []string | ❌ | — | Override entrypoint |
+| `args` | []string | ❌ | — | Arguments |
+| `env` | []EnvVar | ❌ | — | Environment variables |
+| `resources` | *ResourceRequirements | ❌ | — | CPU/memory |
+| `healthCheck` | *HealthCheckSpec | ❌ | — | Probe config |
+
+### `spec.service`
+
+| Field | Type | Required | Default |
+|---|---|---|---|
+| `port` | int32 | ✅ | — |
+| `targetPort` | *int32 | ❌ | deployment port |
+| `type` | string | ❌ | `"ClusterIP"` |
+
+### `spec.ingress`
+
+| Field | Type | Required | Default |
+|---|---|---|---|
+| `enabled` | bool | ✅ | `false` |
+| `host` | string | ❌ | — |
+| `ingressClassName` | *string | ❌ | — |
+
+### `spec.dependencies[]`
+
+| Field | Type | Required | Default |
+|---|---|---|---|
+| `type` | DependencyType | ✅ | — |
+| `version` | string | ❌ | latest |
+| `image` | string | ❌ | — |
+| `port` | *int32 | ❌ | type default |
+| `envVarName` | string | ❌ | type default |
+| `storageSize` | *Quantity | ❌ | `"1Gi"` |
+
+Supported dependency types: `postgres`, `redis`, `mysql`, `mongodb`, `rabbitmq`, `minio`, `elasticsearch`, `kafka`, `nats`, `memcached`, `cassandra`, `consul`, `vault`, `influxdb`, `jaeger`.
+
+## GithubActionRunnerPool
+
+Declares a pool of self-hosted GitHub Actions runners.
+
+| Field | Type | Required | Default |
+|---|---|---|---|
+| `githubUsername` | string | ✅ | — |
+| `repository` | string | ✅ | — |
+| `tokenSecretRef` | SecretKeyRef | ✅ | — |
+| `replicas` | *int32 | ❌ | `1` |
+| `runnerImage` | string | ❌ | `ghcr.io/actions/actions-runner:latest` |
+| `labels` | []string | ❌ | — |
+
+---
+
+# Walkthroughs
+
+## Stripe Integration
+
+Set up Stripe API keys so your app can process payments locally.
+
+```bash
+kindling secrets set STRIPE_KEY sk_test_xxxxx
+kindling secrets set STRIPE_WEBHOOK_SECRET whsec_xxxxx
+```
+
+Test webhooks with `kindling expose` to create a public URL, then register it in the Stripe Dashboard.
+
+After cluster rebuild, `kindling secrets restore` restores keys automatically.
+
+## Auth0 / OAuth Provider Integration
+
+OAuth providers require a publicly accessible HTTPS callback URL. Use `kindling expose` to create a tunnel, then configure your provider's callback URLs.
+
+Supports Auth0, Okta, Google OAuth, Firebase Auth, and more. `kindling generate` auto-detects OAuth patterns and suggests `kindling expose`.
+
+## Multi-Service Apps
+
+Each service gets its own DevStagingEnvironment — independent deployment, scaling, health checks, and dependencies — while sharing the same cluster.
+
+Services with dependencies declare them in the deploy step. The operator auto-provisions each dependency and injects connection strings.
+
+Live sync individual services independently with `kindling sync`.
+
+## Background Workers
+
+Run background jobs with a Redis task queue and a dedicated worker service. Two services sharing a Redis queue: API enqueues jobs, Worker processes them with BRPOP.
+
+Both services share the same Redis instance via the dependency name. kindling auto-injects `TASK_QUEUE_URL`.
+
+## WebSocket Real-Time
+
+Build a live-updating app with WebSockets backed by Redis pub/sub. Events push to every connected client instantly via a ConnectionManager class and async Redis subscriber.
+
+## Webhook Testing
+
+Receive webhooks from Stripe, GitHub, Shopify in your local kindling environment using `kindling expose`. Verify signatures, log events in Postgres, debug with the events listing endpoint.
+
+The tunnel URL remains stable across `kindling sync` — no need to re-register webhooks.
+
+## S3-Compatible File Uploads
+
+Use MinIO as a local drop-in replacement for Amazon S3. Upload, download, and manage files with boto3 — the same SDK you'd use in production. kindling auto-injects `FILE_STORE_URL` with credentials.
+
+---
+
+# Agent Development Guides
+
+## RAG Agent with LangChain
+
+Build a retrieval-augmented generation agent with Postgres pgvector for embeddings, Redis for response caching, and LangChain orchestrating. FastAPI service with `/ingest` and `/ask` endpoints.
+
+Dependencies: `- type: postgres` + `- type: redis`. Connection URLs auto-injected.
+
+## Multi-Agent System with CrewAI
+
+Deploy specialized CrewAI agents as separate microservices communicating through NATS. Three services: API gateway, researcher agent (with web search), writer agent.
+
+Each agent is a separate pod with its own logs, scaling, and crash boundary. NATS is `- type: nats`, ~15 MB overhead.
+
+## LangGraph Stateful Agents
+
+Build agents that remember state across steps using LangGraph, with Redis for checkpoint storage and Postgres for conversation history.
+
+Research agent with planner → researcher (loops) → writer graph. State survives `kindling sync` restarts.
+
+## OpenAI Agents SDK
+
+Build a tool-calling agent with the OpenAI Agents SDK. Customer support agent with function_tool decorators for order lookup, shipping status, and refunds against a Postgres database.
+
+## MongoDB Atlas Vector Search
+
+Run your agent locally while connecting to MongoDB Atlas for vector search. Over-fetch 20 candidates from Atlas `$vectorSearch`, then rerank to top 4 with Voyage AI `rerank-2` model.
+
+No `dependencies` block needed — the database is external. Only secrets injected as env vars.
+
+## NeonDB Pre-Seeded Dev Data
+
+Use Neon's branching to give every developer a pre-seeded Postgres database that resets instantly. Branches are copy-on-write and create in <1 second.
+
+Product catalog API with full-text search. Reset dev data by deleting and re-creating the Neon branch.
+
+---
+
+# Reference Guides
+
+## Manual Deploy
+
+Deploy without GitHub Actions — build locally, load into Kind, and apply a DSE manifest:
+
+```bash
+docker build -t my-app:dev .
+kind load docker-image my-app:dev --name dev
+kindling deploy -f dev-environment.yaml
+```
+
+## Writing Workflows by Hand
+
+Write a GitHub Actions workflow manually instead of using `kindling generate`. Template includes build + deploy steps using `kindling-build` and `kindling-deploy` composite actions.
+
+## Docker Desktop Resources
+
+Recommended Docker Desktop resource allocation:
+
+| Workload | CPUs | Memory | Disk |
+|---|---|---|---|
+| Small (1–3 services) | 4 | 8 GB | 30 GB |
+| Medium (4–6 services) | 6 | 12 GB | 50 GB |
+| Large (7+ services) | 8+ | 16 GB | 80 GB |
+
+Kaniko layer caching is enabled. First builds are slow, subsequent rebuilds are fast.

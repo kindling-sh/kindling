@@ -82,6 +82,33 @@ one, and record structured results to surface failure modes.
 - ≥80% success rate on repos that already have a Dockerfile
 - Top 10 failure modes identified and fixed
 
+### Few-shot examples + validation pass in `kindling generate`
+
+Make `generate` smarter by default — no flags, no modes. Two changes:
+
+1. **Few-shot example injection.** Curate 15–20 working `dev-deploy.yml`
+   workflows covering the major stack combos (Node+Postgres+Redis,
+   Go+Kafka, Python/Django+Postgres, Java/Spring multi-service, etc.).
+   Store them in an embedded index with tags (`language`, `deps[]`,
+   `framework`, `service_count`). After `scanRepo`, match the detected
+   stack against the index and inject 2–3 matching workflows into the
+   prompt as concrete examples. This is local tag matching — no LLM call
+   needed. LLMs are dramatically better at pattern-matching from examples
+   than following abstract rules alone.
+
+2. **LLM validation pass.** After the initial generation, make a second
+   (cheaper) LLM call: "Here's the workflow I generated and the repo
+   context. Does every `$(VAR)` have a matching dependency? Does every
+   build step reference a real Dockerfile? Are inter-service env vars
+   complete? Fix any issues." This catches the class of bugs surfaced by
+   fuzz testing — missing dependencies, wrong variable references, build
+   steps for non-existent Dockerfiles — at near-zero incremental cost
+   since validation is cheaper than generation.
+
+The user is already passing `--api-key` for the generation call, so the
+validation pass uses the same key. No new flags, no new configuration.
+`kindling generate` just gets more reliable.
+
 ### Interactive ingress selection in `kindling generate`
 
 During `kindling generate`, after discovering all services in a multi-service
