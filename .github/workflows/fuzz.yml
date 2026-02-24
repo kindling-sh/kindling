@@ -2,7 +2,15 @@ name: Fuzz Test
 
 on:
   push:
+    branches: [main, refactor]
+
+  pull_request:
     branches: [main]
+    paths:
+      - "cli/**"
+      - "internal/**"
+      - "api/**"
+      - "test/**"
 
   workflow_dispatch:
     inputs:
@@ -45,20 +53,100 @@ on:
 permissions:
   contents: read
 
-env:
-  FUZZ_PROVIDER: ${{ inputs.provider || 'openai' }}
-  FUZZ_API_KEY: ${{ inputs.provider == 'anthropic' && secrets.ANTHROPIC_API_KEY || secrets.OPENAI_API_KEY }}
-  FUZZ_MODEL: ${{ inputs.model || '' }}
-
 jobs:
   # ═══════════════════════════════════════════════════════════════
-  # Static fuzz — runs on workflow_dispatch only
+  # E2E — Operator + CLI + Generate (runs on every push/PR)
+  #
+  # Builds from source, creates a Kind cluster, deploys the
+  # operator, and runs the consolidated e2e_test.sh which covers:
+  #   Tier 1: Operator baseline (hardcoded DSE, dependencies, GC)
+  #   Tier 2: CLI features (secrets, env, load, runners, reset)
+  #   Tier 3: Generate pipeline (gated behind FUZZ_API_KEY)
+  # ═══════════════════════════════════════════════════════════════
+  e2e:
+    name: "E2E (operator + CLI + generate)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python deps
+        run: pip install pyyaml
+
+      - name: Install Kind
+        run: |
+          [ -f /usr/local/bin/kind ] || {
+            curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.25.0/kind-linux-amd64
+            chmod +x ./kind
+            sudo mv ./kind /usr/local/bin/kind
+          }
+          kind version
+
+      - name: Install kubectl
+        run: |
+          curl -Lo kubectl "https://dl.k8s.io/release/$(curl -sL https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          chmod +x kubectl
+          sudo mv kubectl /usr/local/bin/kubectl
+          kubectl version --client
+
+      - name: Build CLI
+        run: make cli
+
+      - name: Build operator image
+        run: make docker-build
+
+      - name: Verify CLI binary
+        run: ./bin/kindling version
+
+      - name: Run E2E tests
+        run: |
+          chmod +x test/e2e/e2e_test.sh
+          test/e2e/e2e_test.sh
+        env:
+          KINDLING: ${{ github.workspace }}/bin/kindling
+          E2E_CLUSTER_NAME: kindling-e2e
+          FUZZ_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          FUZZ_PROVIDER: openai
+
+      - name: Dump cluster state on failure
+        if: failure()
+        run: |
+          echo "=== Pods (all namespaces) ==="
+          kubectl get pods -A -o wide || true
+          echo ""
+          echo "=== Events ==="
+          kubectl get events --sort-by=.lastTimestamp -A | tail -50 || true
+          echo ""
+          echo "=== Operator logs ==="
+          kubectl logs deployment/kindling-controller-manager -n kindling-system --tail=80 || true
+          echo ""
+          echo "=== DSEs ==="
+          kubectl get dse -A -o yaml || true
+
+  # ═══════════════════════════════════════════════════════════════
+  # Fuzz — Wild-repo generate testing (workflow_dispatch only)
   # ═══════════════════════════════════════════════════════════════
   fuzz:
     if: github.event_name == 'workflow_dispatch'
+    needs: [e2e]
     name: "Fuzz (${{ inputs.mode || 'static' }})"
     runs-on: ubuntu-latest
     timeout-minutes: 120
+
+    env:
+      FUZZ_PROVIDER: ${{ inputs.provider || 'openai' }}
+      FUZZ_API_KEY: ${{ inputs.provider == 'anthropic' && secrets.ANTHROPIC_API_KEY || secrets.OPENAI_API_KEY }}
+      FUZZ_MODEL: ${{ inputs.model || '' }}
+
     steps:
       - uses: actions/checkout@v4
 
@@ -160,97 +248,3 @@ jobs:
       - name: Check pass rate
         if: always()
         run: python3 test/fuzz/summarize.py /tmp/fuzz-results --check-rate 80
-
-  # ═══════════════════════════════════════════════════════════════
-  # Full e2e — runs on every push to main
-  #
-  # Generates workflows, builds Docker images, deploys DSEs to a
-  # Kind cluster, and validates networking end-to-end.
-  # Uses repos-e2e.txt: a small set of repos selected for
-  # reliable builds and clean static analysis.
-  # ═══════════════════════════════════════════════════════════════
-  e2e:
-    if: github.event_name == 'push'
-    name: "Fuzz (e2e)"
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v4
-
-      # ── Install kindling CLI from latest release ─────────────
-      - name: Install kindling CLI
-        run: |
-          set -euo pipefail
-          RELEASE_URL=$(gh api repos/${{ github.repository }}/releases/latest \
-            --jq '.assets[] | select(.name | test("linux.*amd64.*tar.gz$")) | .browser_download_url')
-          echo "📦 Downloading $RELEASE_URL"
-          curl -sL "$RELEASE_URL" | tar xz -C /usr/local/bin kindling
-          kindling version
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      # ── Python for analyze.py / fix-dockerfile.py ────────────
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install Python deps
-        run: pip install pyyaml
-
-      # ── Create Kind cluster ─────────────────────────────────
-      - name: Create Kind cluster
-        run: |
-          [ -f /usr/local/bin/kind ] || {
-            curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64
-            chmod +x ./kind
-            sudo mv ./kind /usr/local/bin/kind
-          }
-          kind create cluster --name fuzz --config kind-config.yaml
-          kubectl cluster-info --context kind-fuzz
-
-      - name: Install kindling operator
-        run: |
-          kindling init --cluster fuzz --skip-cluster
-          echo "Waiting for operator..."
-          kubectl wait --for=condition=available deployment/kindling-controller-manager \
-            -n kindling-system --timeout=120s
-          kubectl get pods -n kindling-system
-
-      # ── Run full e2e fuzz tests ──────────────────────────────
-      - name: Run fuzz tests (full e2e)
-        working-directory: test/fuzz
-        run: |
-          export SKIP_E2E=0
-          bash run.sh repos-e2e.txt /tmp/fuzz-results kindling
-        env:
-          FUZZ_PROVIDER: openai
-          FUZZ_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          FUZZ_CLUSTER: fuzz
-
-      # ── Results ──────────────────────────────────────────────
-      - name: Print summary
-        if: always()
-        run: |
-          python3 test/fuzz/summarize.py \
-            /tmp/fuzz-results \
-            full \
-            openai \
-            >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Generate action items
-        if: always()
-        run: |
-          mkdir -p /tmp/fuzz-results
-          python3 test/fuzz/summarize.py /tmp/fuzz-results --action-items
-
-      - name: Upload results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: fuzz-e2e-results-${{ github.run_id }}
-          path: /tmp/fuzz-results/
-          retention-days: 30
-
-      - name: Check pass rate
-        if: always()
-        run: python3 test/fuzz/summarize.py /tmp/fuzz-results --check-rate 66

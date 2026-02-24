@@ -355,6 +355,48 @@ developers who aren't on GitHub Actions.
    the right CI config format per platform
 5. Keep GitHub as the default — zero breaking changes for existing users
 
+### Provider abstractions (code layer)
+
+Before adding any new platform, introduce Go interfaces that decouple
+the core logic from GitHub and Kind specifically. This is the prerequisite
+engineering work that makes P5 features possible without shotgun surgery.
+
+**CI provider interface** (`core/providers/ci.go`):
+
+```go
+type CIProvider interface {
+    Name() string                                    // "github", "gitlab", etc.
+    CreateRunnerPool(cfg RunnerPoolConfig) error      // provision runner in cluster
+    DeleteRunnerPool(name string) error
+    GenerateWorkflow(ctx GenerateContext) ([]byte, error) // emit platform-native CI config
+    DetectFromRemote(remoteURL string) bool           // "is this repo on my platform?"
+}
+```
+
+**Cluster provider interface** (`core/providers/cluster.go`):
+
+```go
+type ClusterProvider interface {
+    Name() string                                     // "kind", "k3d", "minikube"
+    Create(cfg ClusterConfig) error
+    Destroy(name string) error
+    LoadImage(image, cluster string) error             // provider-specific image loading
+    GetKubeconfig(cluster string) (string, error)
+    RegistryEndpoint() string                          // in-cluster registry address
+}
+```
+
+**Migration path:**
+1. Define the interfaces
+2. Implement `GitHubProvider` and `KindProvider` as the defaults — wrapping
+   exactly the logic that exists today in `core/` and the operator
+3. Wire them through a `ProviderRegistry` so CLI commands and the operator
+   resolve the active provider at startup
+4. Second providers (GitLab, k3d) validate the abstraction
+5. Existing behavior is unchanged — `kindling init` still means Kind,
+   `kindling runners` still means GitHub, unless `--platform` / `--cluster-provider`
+   is passed
+
 ---
 
 ## P6 — CLI: kindling export (production-ready manifests)
