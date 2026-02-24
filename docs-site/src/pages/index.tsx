@@ -1,8 +1,29 @@
+import { useState } from "react";
 import clsx from "clsx";
 import Link from "@docusaurus/Link";
 import useDocusaurusContext from "@docusaurus/useDocusaurusContext";
 import Layout from "@theme/Layout";
 import styles from "./index.module.css";
+
+const INSTALL_CMD = "brew install kindling-sh/tap/kindling";
+
+function InstallCommand() {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(INSTALL_CMD);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <div className={styles.installBanner} onClick={handleCopy} role="button" tabIndex={0}>
+      <span className={styles.installPrompt}>$</span>
+      <span className={styles.installText}>{INSTALL_CMD}</span>
+      <span className={styles.installCopy}>{copied ? "✓ Copied" : "Copy"}</span>
+    </div>
+  );
+}
 
 function HeroSection() {
   const { siteConfig } = useDocusaurusContext();
@@ -21,6 +42,7 @@ function HeroSection() {
             environment. Push to GitHub, build locally via Kaniko, deploy
             ephemeral staging environments — all on localhost, in seconds.
           </p>
+          <InstallCommand />
           <div className={styles.heroButtons}>
             <Link
               className={clsx("button button--lg", styles.heroPrimary)}

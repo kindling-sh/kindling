@@ -7,6 +7,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/jeffvincent/kindling/cli/core"
 )
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -170,8 +172,8 @@ func TestKindlingSecretName(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			if got := kindlingSecretName(tt.input); got != tt.expected {
-				t.Errorf("kindlingSecretName(%q) = %q, want %q", tt.input, got, tt.expected)
+			if got := core.KindlingSecretName(tt.input); got != tt.expected {
+				t.Errorf("KindlingSecretName(%q) = %q, want %q", tt.input, got, tt.expected)
 			}
 		})
 	}
@@ -211,17 +213,17 @@ func TestParseSecretKeys(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := parseSecretKeys(tt.input)
+			got := core.ParseSecretKeys(tt.input)
 			if len(got) == 0 && len(tt.expected) == 0 {
 				return
 			}
 			if len(got) != len(tt.expected) {
-				t.Errorf("parseSecretKeys(%q) = %v, want %v", tt.input, got, tt.expected)
+				t.Errorf("ParseSecretKeys(%q) = %v, want %v", tt.input, got, tt.expected)
 				return
 			}
 			for i, v := range tt.expected {
 				if got[i] != v {
-					t.Errorf("parseSecretKeys(%q)[%d] = %q, want %q", tt.input, i, got[i], v)
+					t.Errorf("ParseSecretKeys(%q)[%d] = %q, want %q", tt.input, i, got[i], v)
 				}
 			}
 		})

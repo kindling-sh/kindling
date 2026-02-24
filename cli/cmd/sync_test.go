@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jeffvincent/kindling/cli/core"
 )
 
 // ════════════════════════════════════════════════════════════════════
@@ -661,8 +663,8 @@ func TestGoarchToRust(t *testing.T) {
 	}{
 		{"arm64", "aarch64"},
 		{"amd64", "x86_64"},
-		{"riscv64", "riscv64"},    // passthrough
-		{"unknown", "unknown"},    // passthrough
+		{"riscv64", "riscv64"}, // passthrough
+		{"unknown", "unknown"}, // passthrough
 	}
 	for _, tt := range tests {
 		t.Run(tt.in, func(t *testing.T) {
@@ -931,21 +933,21 @@ func TestMatchRuntimeEndToEnd(t *testing.T) {
 }
 
 // ════════════════════════════════════════════════════════════════════
-// loadImageTag (from load.go)
+// LoadImageTag (from core/load.go)
 // ════════════════════════════════════════════════════════════════════
 
 func TestLoadImageTag(t *testing.T) {
-	tag := loadImageTag("orders")
+	tag := core.LoadImageTag("orders")
 
 	// Should start with "orders:"
 	if !strings.HasPrefix(tag, "orders:") {
-		t.Errorf("loadImageTag(%q) = %q, should start with 'orders:'", "orders", tag)
+		t.Errorf("LoadImageTag(%q) = %q, should start with 'orders:'", "orders", tag)
 	}
 
 	// The timestamp part should be a valid unix timestamp
 	parts := strings.SplitN(tag, ":", 2)
 	if len(parts) != 2 {
-		t.Fatalf("loadImageTag(%q) = %q, expected service:timestamp format", "orders", tag)
+		t.Fatalf("LoadImageTag(%q) = %q, expected service:timestamp format", "orders", tag)
 	}
 
 	// Parse as int — should be close to current time
@@ -963,9 +965,9 @@ func TestLoadImageTag(t *testing.T) {
 func TestLoadImageTag_DifferentServices(t *testing.T) {
 	services := []string{"orders", "gateway", "my-service", "frontend"}
 	for _, svc := range services {
-		tag := loadImageTag(svc)
+		tag := core.LoadImageTag(svc)
 		if !strings.HasPrefix(tag, svc+":") {
-			t.Errorf("loadImageTag(%q) = %q, should start with %q:", svc, tag, svc)
+			t.Errorf("LoadImageTag(%q) = %q, should start with %q:", svc, tag, svc)
 		}
 	}
 }
@@ -973,8 +975,8 @@ func TestLoadImageTag_DifferentServices(t *testing.T) {
 func TestLoadImageTag_UniqueTimestamps(t *testing.T) {
 	// Two calls in quick succession should produce the same timestamp
 	// (within the same second) but unique-ish tags for different services
-	tag1 := loadImageTag("svc-a")
-	tag2 := loadImageTag("svc-b")
+	tag1 := core.LoadImageTag("svc-a")
+	tag2 := core.LoadImageTag("svc-b")
 
 	if tag1 == tag2 {
 		t.Errorf("tags for different services should differ: %q vs %q", tag1, tag2)

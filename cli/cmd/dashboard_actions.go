@@ -1,20 +1,18 @@
 package cmd
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
+	"github.com/jeffvincent/kindling/cli/core"
 )
 
 // actionResult is the standard JSON envelope for mutation endpoints.
@@ -45,8 +43,7 @@ func requireMethod(w http.ResponseWriter, r *http.Request, method string) bool {
 
 // captureKubectl runs a kubectl command against the active cluster and returns output.
 func captureKubectl(args ...string) (string, error) {
-	full := append([]string{"--context", "kind-" + clusterName}, args...)
-	return runSilent("kubectl", full...)
+	return core.Kubectl(clusterName, args...)
 }
 
 // ── POST /api/deploy ────────────────────────────────────────────
@@ -64,14 +61,12 @@ func handleDeployAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cmd := exec.Command("kubectl", "--context", "kind-"+clusterName, "apply", "-f", "-")
-	cmd.Stdin = strings.NewReader(body.YAML)
-	out, err := cmd.CombinedOutput()
+	out, err := core.KubectlApplyStdin(clusterName, body.YAML)
 	if err != nil {
-		actionErr(w, string(out), http.StatusUnprocessableEntity)
+		actionErr(w, out, http.StatusUnprocessableEntity)
 		return
 	}
-	actionOK(w, string(out))
+	actionOK(w, out)
 }
 
 // ── DELETE /api/dses/{namespace}/{name} ─────────────────────────
@@ -86,7 +81,7 @@ func handleDeleteDSE(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ns, name := parts[0], parts[1]
-	out, err := captureKubectl("delete", "devstagingenvironment", name, "-n", ns)
+	out, err := core.DeleteDSE(clusterName, name, ns)
 	if err != nil {
 		actionErr(w, out, http.StatusInternalServerError)
 		return
@@ -118,23 +113,16 @@ func handleCreateSecret(w http.ResponseWriter, r *http.Request) {
 		body.Namespace = "default"
 	}
 
-	// Delete existing if present (ignore error)
-	captureKubectl("delete", "secret", body.Name, "-n", body.Namespace, "--ignore-not-found")
-
-	// Create
-	out, err := captureKubectl("create", "secret", "generic", body.Name,
-		"--from-literal="+body.Name+"="+body.Value,
-		"-n", body.Namespace)
+	out, err := core.CreateSecret(core.SecretConfig{
+		ClusterName: clusterName,
+		Name:        body.Name,
+		Value:       body.Value,
+		Namespace:   body.Namespace,
+	})
 	if err != nil {
 		actionErr(w, out, http.StatusInternalServerError)
 		return
 	}
-
-	// Label it as kindling-managed
-	captureKubectl("label", "secret", body.Name,
-		"-n", body.Namespace,
-		"app.kubernetes.io/managed-by=kindling", "--overwrite")
-
 	actionOK(w, out)
 }
 
@@ -150,7 +138,7 @@ func handleDeleteSecret(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ns, name := parts[0], parts[1]
-	out, err := captureKubectl("delete", "secret", name, "-n", ns)
+	out, err := core.DeleteSecretByK8sName(clusterName, name, ns)
 	if err != nil {
 		actionErr(w, out, http.StatusInternalServerError)
 		return
@@ -179,43 +167,17 @@ func handleCreateRunner(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var outputs []string
-
-	// 1. Create/update github-runner-token secret
-	captureKubectl("delete", "secret", "github-runner-token", "-n", "default", "--ignore-not-found")
-	out, err := captureKubectl("create", "secret", "generic", "github-runner-token",
-		"--from-literal=github-token="+body.Token,
-		"-n", "default")
+	outputs, err := core.CreateRunnerPool(core.RunnerPoolConfig{
+		ClusterName: clusterName,
+		Username:    body.Username,
+		Repo:        body.Repo,
+		Token:       body.Token,
+		Namespace:   "default",
+	})
 	if err != nil {
-		actionErr(w, "failed to create token secret: "+out, http.StatusInternalServerError)
+		actionErr(w, strings.Join(outputs, "\n")+"\n"+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	outputs = append(outputs, out)
-
-	// 2. Apply runner pool CR
-	yaml := fmt.Sprintf(`apiVersion: apps.example.com/v1alpha1
-kind: GithubActionRunnerPool
-metadata:
-  name: %s-runner-pool
-  namespace: default
-spec:
-  githubUsername: %s
-  repository: %s
-  tokenSecretRef:
-    name: github-runner-token
-    key: github-token
-  replicas: 1
-  labels:
-    - kindling`, body.Username, body.Username, body.Repo)
-
-	cmd := exec.Command("kubectl", "--context", "kind-"+clusterName, "apply", "-f", "-")
-	cmd.Stdin = strings.NewReader(yaml)
-	applyOut, err := cmd.CombinedOutput()
-	if err != nil {
-		actionErr(w, "failed to apply runner pool: "+string(applyOut), http.StatusInternalServerError)
-		return
-	}
-	outputs = append(outputs, string(applyOut))
 	actionOK(w, strings.Join(outputs, "\n"))
 }
 
@@ -225,14 +187,11 @@ func handleResetRunners(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
-	var outputs []string
-
-	out, err := captureKubectl("delete", "githubactionrunnerpools", "--all", "-n", "default")
-	if err == nil {
-		outputs = append(outputs, out)
+	outputs, err := core.ResetRunners(clusterName, "default")
+	if err != nil {
+		actionErr(w, strings.Join(outputs, "\n")+"\n"+err.Error(), http.StatusInternalServerError)
+		return
 	}
-	out2, _ := captureKubectl("delete", "secret", "github-runner-token", "-n", "default", "--ignore-not-found")
-	outputs = append(outputs, out2)
 	actionOK(w, strings.Join(outputs, "\n"))
 }
 
@@ -260,11 +219,11 @@ func handleEnvSet(w http.ResponseWriter, r *http.Request) {
 		body.Namespace = "default"
 	}
 
-	args := []string{"set", "env", "deployment/" + body.Deployment, "-n", body.Namespace}
+	var pairs []string
 	for k, v := range body.Env {
-		args = append(args, fmt.Sprintf("%s=%s", k, v))
+		pairs = append(pairs, fmt.Sprintf("%s=%s", k, v))
 	}
-	out, err := captureKubectl(args...)
+	out, err := core.SetEnv(clusterName, body.Deployment, body.Namespace, pairs)
 	if err != nil {
 		actionErr(w, out, http.StatusInternalServerError)
 		return
@@ -296,11 +255,7 @@ func handleEnvUnset(w http.ResponseWriter, r *http.Request) {
 		body.Namespace = "default"
 	}
 
-	args := []string{"set", "env", "deployment/" + body.Deployment, "-n", body.Namespace}
-	for _, k := range body.Keys {
-		args = append(args, k+"-")
-	}
-	out, err := captureKubectl(args...)
+	out, err := core.UnsetEnv(clusterName, body.Deployment, body.Namespace, body.Keys)
 	if err != nil {
 		actionErr(w, out, http.StatusInternalServerError)
 		return
@@ -318,47 +273,14 @@ func handleEnvList(w http.ResponseWriter, r *http.Request) {
 	}
 	ns, dep := parts[0], parts[1]
 
-	out, err := kubectlJSON("get", "deployment", dep, "-n", ns, "-o", "json")
+	envVars, err := core.ListEnv(clusterName, dep, ns)
 	if err != nil {
-		actionErr(w, "deployment not found", http.StatusNotFound)
+		actionErr(w, err.Error(), http.StatusNotFound)
 		return
-	}
-
-	// Parse and extract env vars from the first container
-	var deployment map[string]interface{}
-	if err := json.Unmarshal([]byte(out), &deployment); err != nil {
-		actionErr(w, "parse error", http.StatusInternalServerError)
-		return
-	}
-
-	type envVar struct {
-		Name  string `json:"name"`
-		Value string `json:"value"`
-	}
-	var envVars []envVar
-
-	if spec, ok := deployment["spec"].(map[string]interface{}); ok {
-		if tmpl, ok := spec["template"].(map[string]interface{}); ok {
-			if tspec, ok := tmpl["spec"].(map[string]interface{}); ok {
-				if containers, ok := tspec["containers"].([]interface{}); ok && len(containers) > 0 {
-					if c, ok := containers[0].(map[string]interface{}); ok {
-						if env, ok := c["env"].([]interface{}); ok {
-							for _, e := range env {
-								if ev, ok := e.(map[string]interface{}); ok {
-									name, _ := ev["name"].(string)
-									value, _ := ev["value"].(string)
-									envVars = append(envVars, envVar{Name: name, Value: value})
-								}
-							}
-						}
-					}
-				}
-			}
-		}
 	}
 
 	if envVars == nil {
-		envVars = []envVar{}
+		envVars = []core.EnvVar{}
 	}
 	jsonResponse(w, envVars)
 }
@@ -376,19 +298,20 @@ func handleExposeAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !commandExists("cloudflared") {
+	if !core.CommandExists("cloudflared") {
 		actionErr(w, "cloudflared is not installed. Install it with: brew install cloudflared", http.StatusUnprocessableEntity)
 		return
 	}
 
 	// Check if already running — same check the CLI uses.
-	if info, _ := readTunnelInfo(); info != nil && info.PID > 0 {
-		if processAlive(info.PID) {
+	if info, _ := core.ReadTunnelInfo(); info != nil && info.PID > 0 {
+		if core.ProcessAlive(info.PID) {
 			actionErr(w, "tunnel already running — stop it first", http.StatusConflict)
 			return
 		}
 		// Stale PID — clean up before starting fresh.
-		cleanupTunnel()
+		core.CleanupTunnel(clusterName)
+		restoreIngresses()
 	}
 
 	// Parse optional service from body.
@@ -400,83 +323,17 @@ func handleExposeAction(w http.ResponseWriter, r *http.Request) {
 	}
 	exposeService = body.Service
 
-	// Start cloudflared — same as CLI's runCloudflaredTunnel().
-	tunnelCmd := exec.Command("cloudflared", "tunnel",
-		"--url", fmt.Sprintf("http://localhost:%d", exposePort),
-	)
-
-	var stderrBuf bytes.Buffer
-	var mu sync.Mutex
-	pr, pw := io.Pipe()
-	tunnelCmd.Stdout = nil
-	tunnelCmd.Stderr = pw
-	tunnelCmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-
-	go func() {
-		buf := make([]byte, 4096)
-		for {
-			n, err := pr.Read(buf)
-			if n > 0 {
-				mu.Lock()
-				stderrBuf.Write(buf[:n])
-				mu.Unlock()
-			}
-			if err != nil {
-				return
-			}
-		}
-	}()
-
-	if err := tunnelCmd.Start(); err != nil {
-		pw.Close()
-		actionErr(w, "failed to start cloudflared: "+err.Error(), http.StatusInternalServerError)
+	// Start cloudflared — use the same core function as the CLI (15s timeout for HTTP).
+	result, err := core.StartCloudflaredTunnel(exposePort, 15, false)
+	if err != nil {
+		actionErr(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	// Poll stderr for the tunnel URL — cap at 15s so the HTTP response
-	// doesn't time out in the browser.
-	var publicURL string
-	for i := 0; i < 15; i++ {
-		time.Sleep(1 * time.Second)
-		mu.Lock()
-		data := stderrBuf.String()
-		mu.Unlock()
-		for _, line := range strings.Split(data, "\n") {
-			if strings.Contains(line, ".trycloudflare.com") {
-				for _, word := range strings.Fields(line) {
-					if strings.HasPrefix(word, "https://") && strings.Contains(word, ".trycloudflare.com") {
-						publicURL = strings.TrimRight(word, "|, ")
-						break
-					}
-				}
-			}
-		}
-		if publicURL != "" {
-			break
-		}
-	}
+	core.SaveTunnelInfo(clusterName, result.PublicURL, "cloudflared", result.PID)
+	patchIngressesForTunnel(result.PublicURL)
 
-	if publicURL == "" {
-		if tunnelCmd.Process != nil {
-			_ = tunnelCmd.Process.Kill()
-		}
-		pw.Close()
-		actionErr(w, "Tunnel started but could not detect public URL — try again or use the CLI", http.StatusInternalServerError)
-		return
-	}
-
-	// Persist immediately and respond — the frontend polls /api/expose/status
-	// for liveness, so we don't need to block on DNS propagation here.
-	saveTunnelInfo(publicURL, "cloudflared", tunnelCmd.Process.Pid)
-	patchIngressesForTunnel(publicURL)
-
-	// Release the child — runs in background.
-	go func() {
-		_ = tunnelCmd.Wait()
-		pw.Close()
-	}()
-
-	actionOK(w, "Tunnel started: "+publicURL)
+	actionOK(w, "Tunnel started: "+result.PublicURL)
 }
 
 // ── DELETE /api/expose ──────────────────────────────────────────
@@ -500,22 +357,23 @@ func handleExposeStatus(w http.ResponseWriter, r *http.Request) {
 		DNSReady bool   `json:"dns_ready"`
 	}
 
-	info, err := readTunnelInfo()
+	info, err := core.ReadTunnelInfo()
 	if err != nil || info == nil || info.PID == 0 {
 		jsonResponse(w, status{})
 		return
 	}
 
-	if !processAlive(info.PID) {
+	if !core.ProcessAlive(info.PID) {
 		// Stale — clean up.
-		cleanupTunnel()
+		core.CleanupTunnel(clusterName)
+		restoreIngresses()
 		jsonResponse(w, status{})
 		return
 	}
 
 	// Quick DNS check via public resolver so we don't tell the browser
 	// to visit a URL that will NXDOMAIN (and get cached).
-	dnsOK := checkDNSOnce(info.URL)
+	dnsOK := core.CheckDNSOnce(info.URL)
 
 	jsonResponse(w, status{Running: true, URL: info.URL, DNSReady: dnsOK})
 }
@@ -527,12 +385,12 @@ func handleDestroyCluster(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodDelete) {
 		return
 	}
-	if !clusterExists(clusterName) {
+	if !core.ClusterExists(clusterName) {
 		actionErr(w, "cluster '"+clusterName+"' does not exist", http.StatusNotFound)
 		return
 	}
 
-	out, err := runSilent("kind", "delete", "cluster", "--name", clusterName)
+	out, err := core.DestroyCluster(clusterName)
 	if err != nil {
 		actionErr(w, out, http.StatusInternalServerError)
 		return
@@ -561,13 +419,13 @@ func handleInitCluster(w http.ResponseWriter, r *http.Request) {
 
 	// Preflight
 	for _, bin := range []string{"kind", "kubectl", "docker"} {
-		if !commandExists(bin) {
+		if !core.CommandExists(bin) {
 			json.NewEncoder(w).Encode(actionResult{OK: false, Error: bin + " is not installed"})
 			return
 		}
 	}
 
-	if clusterExists(clusterName) {
+	if core.ClusterExists(clusterName) {
 		send("Cluster '" + clusterName + "' already exists — skipping creation")
 	} else {
 		send("Creating Kind cluster '" + clusterName + "'...")
@@ -638,11 +496,9 @@ func handleInitCluster(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(actionResult{OK: false, Error: "kustomize build failed"})
 		return
 	}
-	cmd := exec.Command("kubectl", "--context", "kind-"+clusterName, "apply", "-f", "-")
-	cmd.Stdin = strings.NewReader(kOut)
-	applyOut, err := cmd.CombinedOutput()
+	applyOut, err := core.KubectlApplyStdin(clusterName, kOut)
 	if err != nil {
-		json.NewEncoder(w).Encode(actionResult{OK: false, Error: "operator deploy failed: " + string(applyOut)})
+		json.NewEncoder(w).Encode(actionResult{OK: false, Error: "operator deploy failed: " + applyOut})
 		return
 	}
 	send("Operator deployed")
@@ -684,7 +540,7 @@ func handleRestartDeployment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ns, dep := parts[0], parts[1]
-	out, err := captureKubectl("rollout", "restart", "deployment/"+dep, "-n", ns)
+	out, err := core.RestartDeployment(clusterName, dep, ns)
 	if err != nil {
 		actionErr(w, out, http.StatusInternalServerError)
 		return
@@ -714,8 +570,7 @@ func handleScaleDeployment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	out, err := captureKubectl("scale", "deployment/"+dep, "-n", ns,
-		fmt.Sprintf("--replicas=%d", body.Replicas))
+	out, err := core.ScaleDeployment(clusterName, dep, ns, body.Replicas)
 	if err != nil {
 		actionErr(w, out, http.StatusInternalServerError)
 		return
@@ -735,7 +590,7 @@ func handleDeletePod(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ns, name := parts[0], parts[1]
-	out, err := captureKubectl("delete", "pod", name, "-n", ns)
+	out, err := core.DeletePod(clusterName, name, ns)
 	if err != nil {
 		actionErr(w, out, http.StatusInternalServerError)
 		return
@@ -763,14 +618,12 @@ func handleApplyYAML(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cmd := exec.Command("kubectl", "--context", "kind-"+clusterName, "apply", "-f", "-")
-	cmd.Stdin = strings.NewReader(payload.YAML)
-	out, err := cmd.CombinedOutput()
+	out, err := core.KubectlApplyStdin(clusterName, payload.YAML)
 	if err != nil {
-		actionErr(w, string(out), http.StatusUnprocessableEntity)
+		actionErr(w, out, http.StatusUnprocessableEntity)
 		return
 	}
-	actionOK(w, string(out))
+	actionOK(w, out)
 }
 
 // ── Sync state ──────────────────────────────────────────────────
@@ -1189,103 +1042,18 @@ func handleLoadAction(w http.ResponseWriter, r *http.Request) {
 		body.Namespace = "default"
 	}
 
-	ctxAbs, err := filepath.Abs(body.Context)
+	outputs, err := core.BuildAndLoad(core.LoadConfig{
+		ClusterName: clusterName,
+		Service:     body.Service,
+		Context:     body.Context,
+		Dockerfile:  body.Dockerfile,
+		Namespace:   body.Namespace,
+		NoDeploy:    body.NoDeploy,
+		Platform:    body.Platform,
+	})
 	if err != nil {
-		actionErr(w, "cannot resolve context path: "+err.Error(), http.StatusBadRequest)
+		actionErr(w, err.Error(), http.StatusInternalServerError)
 		return
-	}
-	if _, err := os.Stat(ctxAbs); os.IsNotExist(err) {
-		actionErr(w, "context directory does not exist: "+ctxAbs, http.StatusBadRequest)
-		return
-	}
-
-	// Resolve Dockerfile
-	dockerfile := body.Dockerfile
-	if dockerfile == "" {
-		dockerfile = filepath.Join(ctxAbs, "Dockerfile")
-	} else if !filepath.IsAbs(dockerfile) {
-		dockerfile = filepath.Join(ctxAbs, dockerfile)
-	}
-	if _, err := os.Stat(dockerfile); os.IsNotExist(err) {
-		actionErr(w, "Dockerfile not found: "+dockerfile, http.StatusBadRequest)
-		return
-	}
-
-	// Check cluster
-	if !clusterExists(clusterName) {
-		actionErr(w, "Kind cluster not found — run kindling init first", http.StatusUnprocessableEntity)
-		return
-	}
-
-	imageTag := loadImageTag(body.Service)
-	var outputs []string
-
-	// 1. Docker build
-	dockerArgs := []string{"build", "-t", imageTag, "-f", dockerfile}
-	if body.Platform != "" {
-		dockerArgs = append(dockerArgs, "--platform", body.Platform)
-	}
-	dockerArgs = append(dockerArgs, ctxAbs)
-
-	buildOut, err := runCapture("docker", dockerArgs...)
-	if err != nil {
-		actionErr(w, "docker build failed: "+buildOut, http.StatusInternalServerError)
-		return
-	}
-	outputs = append(outputs, "✓ Image built: "+imageTag)
-
-	// 2. Load into Kind
-	loadOut, err := runCapture("kind", "load", "docker-image", imageTag, "--name", clusterName)
-	if err != nil {
-		actionErr(w, "kind load failed: "+loadOut, http.StatusInternalServerError)
-		return
-	}
-	outputs = append(outputs, "✓ Image loaded into cluster")
-
-	// 3. Patch DSE (unless no_deploy)
-	if !body.NoDeploy {
-		// Check DSE exists
-		if _, err := runCapture("kubectl", "--context", "kind-"+clusterName,
-			"get", "dse", body.Service, "-n", body.Namespace); err != nil {
-			// Try patching deployment directly if no DSE
-			patch := fmt.Sprintf(`{"spec":{"template":{"spec":{"containers":[{"name":"%s","image":"%s"}]}}}}`,
-				body.Service, imageTag)
-			patchOut, err := runCapture("kubectl", "--context", "kind-"+clusterName,
-				"patch", "deployment", body.Service,
-				"-n", body.Namespace,
-				"--type=strategic",
-				"-p", patch)
-			if err != nil {
-				actionErr(w, "no DSE or deployment found for "+body.Service+": "+patchOut, http.StatusUnprocessableEntity)
-				return
-			}
-			outputs = append(outputs, "✓ Deployment patched: "+body.Service+" → "+imageTag)
-		} else {
-			// Patch the DSE image
-			patch := fmt.Sprintf(`{"spec":{"deployment":{"image":"%s"}}}`, imageTag)
-			patchOut, err := runCapture("kubectl", "--context", "kind-"+clusterName,
-				"patch", "dse", body.Service,
-				"-n", body.Namespace,
-				"--type=merge",
-				"-p", patch)
-			if err != nil {
-				actionErr(w, "failed to patch DSE: "+patchOut, http.StatusInternalServerError)
-				return
-			}
-			outputs = append(outputs, "✓ DSE patched: "+body.Service+" → "+imageTag)
-		}
-
-		// Wait for rollout (with timeout)
-		rollOut, _ := runCapture("kubectl", "--context", "kind-"+clusterName,
-			"rollout", "status", "deployment/"+body.Service,
-			"-n", body.Namespace, "--timeout=60s")
-		if strings.Contains(rollOut, "successfully rolled out") {
-			outputs = append(outputs, "✓ Rollout complete")
-		} else {
-			outputs = append(outputs, "⚠ Rollout may still be in progress")
-		}
-	} else {
-		outputs = append(outputs, "⏭ Skipped deploy (no_deploy=true)")
 	}
 
 	actionOK(w, strings.Join(outputs, "\n"))

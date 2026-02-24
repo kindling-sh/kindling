@@ -4,10 +4,10 @@ import (
 	"bufio"
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 	"time"
 
+	"github.com/jeffvincent/kindling/cli/core"
 	"github.com/spf13/cobra"
 )
 
@@ -53,54 +53,24 @@ func runRunners(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("all three values (username, repo, token) are required")
 	}
 
-	// ── Create secret ───────────────────────────────────────────
+	// ── Create secret + runner pool CR ──────────────────────────
 	header("Setting up GitHub Actions runner")
 
 	step("🔑", "Creating github-runner-token secret")
-
-	secretYAML, err := runCapture("kubectl", "create", "secret", "generic", "github-runner-token",
-		"--from-literal=github-token="+ghPAT,
-		"--dry-run=client", "-o", "yaml",
-	)
-	if err != nil {
-		return fmt.Errorf("failed to generate secret YAML: %w", err)
-	}
-
-	applyCmd := exec.Command("kubectl", "apply", "-f", "-")
-	applyCmd.Stdin = strings.NewReader(secretYAML)
-	applyCmd.Stdout = os.Stdout
-	applyCmd.Stderr = os.Stderr
-	if err := applyCmd.Run(); err != nil {
-		return fmt.Errorf("failed to apply secret: %w", err)
-	}
-	success("Secret github-runner-token ready")
-
-	// ── Apply GithubActionRunnerPool CR ─────────────────────────
 	step("🚀", "Applying GithubActionRunnerPool CR")
 
-	crYAML := fmt.Sprintf(`apiVersion: apps.example.com/v1alpha1
-kind: GithubActionRunnerPool
-metadata:
-  name: %s-runner-pool
-spec:
-  githubUsername: "%s"
-  repository: "%s"
-  tokenSecretRef:
-    name: github-runner-token
-    key: github-token
-  replicas: 1
-  labels:
-    - linux
-`, ghUsername, ghUsername, ghRepo)
-
-	applyCmd2 := exec.Command("kubectl", "apply", "-f", "-")
-	applyCmd2.Stdin = strings.NewReader(crYAML)
-	applyCmd2.Stdout = os.Stdout
-	applyCmd2.Stderr = os.Stderr
-	if err := applyCmd2.Run(); err != nil {
-		return fmt.Errorf("failed to apply GithubActionRunnerPool: %w", err)
+	outputs, err := core.CreateRunnerPool(core.RunnerPoolConfig{
+		ClusterName: clusterName,
+		Username:    ghUsername,
+		Repo:        ghRepo,
+		Token:       ghPAT,
+	})
+	if err != nil {
+		return err
 	}
-	success("GithubActionRunnerPool applied")
+	for _, o := range outputs {
+		success(o)
+	}
 
 	// ── Wait for deployment ─────────────────────────────────────
 	header("Waiting for runner deployment")
