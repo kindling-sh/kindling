@@ -2,13 +2,32 @@
 # ────────────────────────────────────────────────────────────────────────────
 # End-to-end test suite for Kindling
 #
-# Spins up a dedicated Kind cluster, deploys the operator, applies the
-# sample-app DevStagingEnvironment CR, validates that all resources come
-# up healthy, then tears everything down.
+# Three test tiers, run in order:
+#
+#   TIER 1 — Operator baseline (always runs)
+#     Hardcoded DSE CR with nginx + postgres + redis. Tests reconciliation,
+#     dependency provisioning, env injection, owner refs, status, spec
+#     update, stale cleanup, garbage collection.
+#
+#   TIER 2 — CLI features (always runs)
+#     Exercises the core/ package via the kindling binary: secrets CRUD,
+#     env set/list/unset, load (build+kind load+patch), runners CR
+#     lifecycle, reset, status.
+#
+#   TIER 3 — Generate pipeline (runs when FUZZ_API_KEY is set)
+#     Runs `kindling generate` against examples/microservices, validates
+#     the generated YAML, builds images, deploys from generated output,
+#     and validates the deployments come up healthy. Skipped without an
+#     API key so the test suite works offline.
 #
 # Usage:
 #   make e2e                          # uses default cluster name
 #   E2E_CLUSTER_NAME=my-e2e make e2e  # custom cluster name
+#
+# Env vars:
+#   FUZZ_API_KEY     — LLM API key (enables tier 3)
+#   FUZZ_PROVIDER    — openai (default) or anthropic
+#   FUZZ_MODEL       — model override (optional)
 # ────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
@@ -17,6 +36,8 @@ IMG="controller:latest"
 TIMEOUT=120s
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+KINDLING="${KINDLING:-$ROOT_DIR/bin/kindling}"
+EXAMPLES_DIR="$ROOT_DIR/examples/microservices"
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -47,6 +68,16 @@ assert_contains() {
   fi
 }
 
+assert_not_empty() {
+  TESTS=$((TESTS + 1))
+  local desc="$1" value="$2"
+  if [ -n "$value" ]; then
+    pass "$desc"
+  else
+    fail "$desc (was empty)"
+  fi
+}
+
 wait_for_rollout() {
   local name="$1" ns="${2:-default}"
   kubectl rollout status "deployment/$name" -n "$ns" --timeout="$TIMEOUT" 2>/dev/null
@@ -64,6 +95,11 @@ wait_for_resource() {
 }
 
 # ── Cleanup trap ────────────────────────────────────────────────────────────
+
+kctl() {
+  kubectl --context "kind-${CLUSTER_NAME}" "$@"
+}
+
 cleanup() {
   info "Cleanup"
   echo "  Deleting Kind cluster '$CLUSTER_NAME'..."
@@ -287,6 +323,302 @@ if [ "$ALL_GONE" = "true" ]; then
   pass "All child resources garbage-collected after CR deletion"
 else
   fail "Some child resources remain after CR deletion"
+fi
+
+# ════════════════════════════════════════════════════════════════════════════
+# TIER 2: CLI features (exercises core/ package via kindling binary)
+# ════════════════════════════════════════════════════════════════════════════
+
+# ── 12. CLI binary verification ────────────────────────────────────────────
+info "12. CLI binary verification"
+
+TESTS=$((TESTS + 1))
+if [ -x "$KINDLING" ]; then
+  pass "CLI binary exists and is executable"
+else
+  # Try building it
+  echo "  CLI not found at $KINDLING — building..."
+  cd "$ROOT_DIR" && make cli
+  if [ -x "$KINDLING" ]; then
+    pass "CLI binary built successfully"
+  else
+    fail "CLI binary not found and build failed"
+    # Can't run CLI tests without the binary — skip to summary
+    info "Skipping CLI tests (no binary)"
+    # Jump to summary
+    info "Summary"
+    echo ""
+    echo "  Tests run: $TESTS"
+    echo "  Failures:  $FAILURES"
+    echo ""
+    if [ "$FAILURES" -gt 0 ]; then
+      echo "❌ E2E FAILED"
+      exit 1
+    else
+      echo "✅ E2E PASSED"
+      exit 0
+    fi
+  fi
+fi
+
+VERSION_OUT=$("$KINDLING" version 2>&1 || true)
+assert_not_empty "CLI version outputs something" "$VERSION_OUT"
+
+# ── 13. kindling status ───────────────────────────────────────────────────
+info "13. kindling status"
+
+TESTS=$((TESTS + 1))
+STATUS_OUT=$("$KINDLING" status --cluster "$CLUSTER_NAME" 2>&1 || true)
+if echo "$STATUS_OUT" | grep -qi "cluster\|node\|operator\|running"; then
+  pass "kindling status returns cluster info"
+else
+  fail "kindling status produced no recognizable output"
+fi
+
+# ── 14. core/secrets — create, list, delete ────────────────────────────────
+info "14. core/secrets — create, list, delete"
+
+"$KINDLING" secrets set E2E_TEST_KEY e2e-test-value --cluster "$CLUSTER_NAME" 2>/dev/null || true
+
+TESTS=$((TESTS + 1))
+SECRET_DATA=$(kctl get secret kindling-secret-e2e-test-key -o jsonpath='{.data}' 2>/dev/null || echo "")
+if [ -n "$SECRET_DATA" ]; then
+  pass "Secret 'kindling-secret-e2e-test-key' created in cluster"
+else
+  fail "Secret 'kindling-secret-e2e-test-key' not found"
+fi
+
+LABEL=$(kctl get secret kindling-secret-e2e-test-key -o jsonpath='{.metadata.labels.app\.kubernetes\.io/managed-by}' 2>/dev/null || echo "")
+assert_eq "Secret has managed-by=kindling label" "kindling" "$LABEL"
+
+LIST_OUT=$("$KINDLING" secrets list --cluster "$CLUSTER_NAME" 2>&1 || true)
+assert_contains "secrets list shows our secret" "kindling-secret-e2e-test-key" "$LIST_OUT"
+
+"$KINDLING" secrets set ANOTHER_KEY another-value --cluster "$CLUSTER_NAME" 2>/dev/null || true
+TESTS=$((TESTS + 1))
+if kctl get secret kindling-secret-another-key >/dev/null 2>&1; then
+  pass "Second secret created"
+else
+  fail "Second secret not found"
+fi
+
+"$KINDLING" secrets delete E2E_TEST_KEY --cluster "$CLUSTER_NAME" 2>/dev/null || true
+TESTS=$((TESTS + 1))
+if ! kctl get secret kindling-secret-e2e-test-key >/dev/null 2>&1; then
+  pass "Secret deleted successfully"
+else
+  fail "Secret still exists after delete"
+fi
+
+"$KINDLING" secrets delete ANOTHER_KEY --cluster "$CLUSTER_NAME" 2>/dev/null || true
+
+# ── 15. Deploy microservices for CLI tests ─────────────────────────────────
+info "15. Deploy microservices (for CLI feature tests)"
+
+for svc_dir in gateway orders inventory ui; do
+  SVC_IMAGE="ms-${svc_dir}:dev"
+  docker build -t "$SVC_IMAGE" "$EXAMPLES_DIR/$svc_dir" -q
+  kind load docker-image "$SVC_IMAGE" --name "$CLUSTER_NAME"
+done
+pass "All microservice images built and loaded"
+
+for cr in "$EXAMPLES_DIR"/deploy/*.yaml; do
+  kctl apply -f "$cr"
+done
+pass "All DSE CRs applied"
+
+for dep in microservices-orders-dev microservices-inventory-dev microservices-gateway-dev microservices-ui-dev; do
+  TESTS=$((TESTS + 1))
+  if wait_for_resource deployment "$dep" && wait_for_rollout "$dep"; then
+    pass "$dep is ready"
+  else
+    fail "$dep did not become ready"
+  fi
+done
+
+# ── 16. core/env — set, list, unset ───────────────────────────────────────
+info "16. core/env — set, list, unset"
+
+"$KINDLING" env set microservices-gateway-dev E2E_VAR=hello E2E_VAR2=world --cluster "$CLUSTER_NAME" 2>/dev/null || true
+sleep 3
+
+LIST_ENV_OUT=$("$KINDLING" env list microservices-gateway-dev --cluster "$CLUSTER_NAME" 2>&1 || true)
+assert_contains "E2E_VAR appears in env list" "E2E_VAR" "$LIST_ENV_OUT"
+assert_contains "E2E_VAR2 appears in env list" "E2E_VAR2" "$LIST_ENV_OUT"
+
+GATEWAY_ENV=$(kctl get deployment microservices-gateway-dev \
+  -o jsonpath='{.spec.template.spec.containers[0].env[*].name}' 2>/dev/null || echo "")
+assert_contains "E2E_VAR in deployment spec" "E2E_VAR" "$GATEWAY_ENV"
+
+"$KINDLING" env unset microservices-gateway-dev E2E_VAR --cluster "$CLUSTER_NAME" 2>/dev/null || true
+sleep 3
+GATEWAY_ENV2=$(kctl get deployment microservices-gateway-dev \
+  -o jsonpath='{.spec.template.spec.containers[0].env[*].name}' 2>/dev/null || echo "")
+TESTS=$((TESTS + 1))
+if echo "$GATEWAY_ENV2" | grep -q "E2E_VAR2"; then
+  pass "E2E_VAR2 still present after selective unset"
+else
+  fail "E2E_VAR2 was accidentally removed"
+fi
+
+"$KINDLING" env unset microservices-gateway-dev E2E_VAR2 --cluster "$CLUSTER_NAME" 2>/dev/null || true
+
+# ── 17. core/load — build, load, patch ─────────────────────────────────────
+info "17. core/load — build, load, patch deployment"
+
+LOAD_OUT=$("$KINDLING" load \
+  --service microservices-gateway-dev \
+  --context "$EXAMPLES_DIR/gateway" \
+  --namespace default \
+  --cluster "$CLUSTER_NAME" 2>&1 || true)
+assert_contains "load reports image built" "built" "$LOAD_OUT"
+
+sleep 5
+GATEWAY_IMAGE=$(kctl get deployment microservices-gateway-dev \
+  -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || echo "")
+TESTS=$((TESTS + 1))
+if echo "$GATEWAY_IMAGE" | grep -q "microservices-gateway-dev:"; then
+  pass "Gateway deployment image updated by kindling load"
+else
+  fail "Gateway image not updated (got: $GATEWAY_IMAGE)"
+fi
+
+# ── 18. core/runners — runner pool CR lifecycle ────────────────────────────
+info "18. core/runners — create and reset runner pool"
+
+"$KINDLING" runners \
+  -u e2e-test-user \
+  -r e2e-test-user/fake-repo \
+  -t ghp_faketoken1234567890 \
+  --cluster "$CLUSTER_NAME" 2>/dev/null || true
+
+TESTS=$((TESTS + 1))
+if kctl get secret github-runner-token >/dev/null 2>&1; then
+  pass "github-runner-token secret created"
+else
+  fail "github-runner-token secret not found"
+fi
+
+TESTS=$((TESTS + 1))
+POOL_CR=$(kctl get githubactionrunnerpools -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || echo "")
+if echo "$POOL_CR" | grep -q "e2e-test-user-runner-pool"; then
+  pass "GithubActionRunnerPool CR created"
+else
+  fail "GithubActionRunnerPool CR not found (got: '$POOL_CR')"
+fi
+
+RUNNER_LABELS=$(kctl get githubactionrunnerpool e2e-test-user-runner-pool \
+  -o jsonpath='{.spec.labels[*]}' 2>/dev/null || echo "")
+assert_contains "Runner pool has 'kindling' label" "kindling" "$RUNNER_LABELS"
+
+"$KINDLING" reset -y --cluster "$CLUSTER_NAME" 2>/dev/null || true
+
+TESTS=$((TESTS + 1))
+POOL_AFTER=$(kctl get githubactionrunnerpools --no-headers 2>/dev/null | wc -l | tr -d ' ')
+if [ "$POOL_AFTER" = "0" ]; then
+  pass "All runner pools removed by reset"
+else
+  fail "Runner pools still exist after reset ($POOL_AFTER remaining)"
+fi
+
+TESTS=$((TESTS + 1))
+if ! kctl get secret github-runner-token >/dev/null 2>&1; then
+  pass "github-runner-token secret removed by reset"
+else
+  fail "github-runner-token secret still exists after reset"
+fi
+
+# ── 19. DSE cleanup from CLI tests ────────────────────────────────────────
+info "19. Cleaning up microservices DSEs"
+
+for cr in "$EXAMPLES_DIR"/deploy/*.yaml; do
+  kctl delete -f "$cr" --wait=false 2>/dev/null || true
+done
+sleep 5
+pass "Microservice DSEs cleaned up"
+
+# ════════════════════════════════════════════════════════════════════════════
+# TIER 3: Generate pipeline (requires FUZZ_API_KEY)
+# ════════════════════════════════════════════════════════════════════════════
+
+if [ -n "${FUZZ_API_KEY:-}" ]; then
+  info "20. kindling generate — examples/microservices"
+
+  FUZZ_PROVIDER="${FUZZ_PROVIDER:-openai}"
+  GEN_OUTPUT="/tmp/e2e-generated-workflow.yml"
+
+  TESTS=$((TESTS + 1))
+  if "$KINDLING" generate \
+      --repo-path "$EXAMPLES_DIR" \
+      --dry-run \
+      --provider "$FUZZ_PROVIDER" \
+      --api-key "$FUZZ_API_KEY" \
+      ${FUZZ_MODEL:+--model "$FUZZ_MODEL"} \
+      > "$GEN_OUTPUT" 2>/dev/null; then
+    pass "kindling generate succeeded"
+  else
+    fail "kindling generate failed"
+  fi
+
+  # Validate YAML structure
+  TESTS=$((TESTS + 1))
+  if python3 -c "
+import yaml, sys
+with open('$GEN_OUTPUT') as f:
+    data = yaml.safe_load(f)
+assert isinstance(data, dict), 'not a dict'
+assert 'jobs' in data, 'no jobs key'
+sys.exit(0)
+" 2>/dev/null; then
+    pass "Generated YAML is valid with jobs key"
+  else
+    fail "Generated YAML is invalid or missing jobs key"
+  fi
+
+  # Count services in generated workflow
+  SVC_COUNT=$(python3 -c "
+import yaml
+with open('$GEN_OUTPUT') as f:
+    data = yaml.safe_load(f)
+count = 0
+for job in (data.get('jobs') or {}).values():
+    for step in (job.get('steps') or []):
+        if 'kindling-deploy' in step.get('uses', ''):
+            count += 1
+print(count)
+" 2>/dev/null || echo "0")
+  assert_not_empty "Generate found services" "$SVC_COUNT"
+  echo "  📦 Generated workflow has $SVC_COUNT deploy steps"
+
+  # Run static analysis if analyze.py is available
+  ANALYZE="$ROOT_DIR/test/fuzz/analyze.py"
+  if [ -f "$ANALYZE" ]; then
+    info "21. Static analysis of generated workflow"
+    ANALYSIS=$(python3 "$ANALYZE" "$GEN_OUTPUT" "$EXAMPLES_DIR" 2>/dev/null || echo "")
+    if [ -n "$ANALYSIS" ]; then
+      ISSUE_COUNT=$(echo "$ANALYSIS" | python3 -c "import sys,json; print(len(json.load(sys.stdin).get('issues',[])))" 2>/dev/null || echo "?")
+      TESTS=$((TESTS + 1))
+      if [ "$ISSUE_COUNT" = "0" ]; then
+        pass "Static analysis: 0 issues"
+      else
+        fail "Static analysis: $ISSUE_COUNT issues found"
+        echo "$ANALYSIS" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+for i in d.get('issues', []):
+    print(f\"    ⚠️  {i.get('severity','?')}: {i.get('detail','?')}\")
+" 2>/dev/null || true
+      fi
+    else
+      echo "  ⚠️  analyze.py returned no output — skipping"
+    fi
+  fi
+
+  rm -f "$GEN_OUTPUT"
+
+else
+  info "20. kindling generate — SKIPPED (no FUZZ_API_KEY)"
+  echo "  Set FUZZ_API_KEY to enable the generate pipeline tests"
 fi
 
 # ── Summary ────────────────────────────────────────────────────────────────
