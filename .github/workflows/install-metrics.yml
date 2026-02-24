@@ -1,0 +1,77 @@
+name: Install Metrics
+
+on:
+  schedule:
+    - cron: "0 6 * * *" # daily at 6am UTC
+  workflow_dispatch: # manual trigger
+
+permissions:
+  contents: write
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Collect download counts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p metrics
+
+          DATE=$(date -u +%Y-%m-%d)
+          FILE=metrics/downloads.csv
+
+          # Create header if file doesn't exist
+          if [ ! -f "$FILE" ]; then
+            echo "date,version,platform,arch,downloads" > "$FILE"
+          fi
+
+          # Fetch all releases and append today's snapshot
+          gh api repos/${{ github.repository }}/releases --paginate --jq '
+            .[] | .tag_name as $tag |
+            .assets[] |
+            select(.name | endswith(".tar.gz")) |
+            select(.name | startswith("kindling_")) |
+            {
+              version: $tag,
+              name: .name,
+              downloads: .download_count
+            }
+          ' | while read -r line; do
+            NAME=$(echo "$line" | jq -r '.name')
+            VERSION=$(echo "$line" | jq -r '.version')
+            DOWNLOADS=$(echo "$line" | jq -r '.downloads')
+
+            # Parse platform and arch from filename
+            # e.g. kindling_0.5.0_darwin_arm64.tar.gz
+            PLATFORM=$(echo "$NAME" | sed 's/kindling_[^_]*_\([^_]*\)_.*/\1/')
+            ARCH=$(echo "$NAME" | sed 's/kindling_[^_]*_[^_]*_\(.*\)\.tar\.gz/\1/')
+
+            echo "${DATE},${VERSION},${PLATFORM},${ARCH},${DOWNLOADS}" >> "$FILE"
+          done
+
+          # Also write a summary JSON for quick reads
+          gh api repos/${{ github.repository }}/releases --paginate --jq '
+            [.[] | {
+              version: .tag_name,
+              published: .published_at,
+              total_downloads: ([.assets[] | select(.name | endswith(".tar.gz")) | select(.name | startswith("kindling_")) | .download_count] | add // 0),
+              by_platform: ([.assets[] | select(.name | endswith(".tar.gz")) | select(.name | startswith("kindling_")) | {name: .name, downloads: .download_count}])
+            }]
+          ' > metrics/latest.json
+
+          # Print summary
+          echo "## Download counts as of ${DATE}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          jq -r '.[] | "- **\(.version)**: \(.total_downloads) downloads"' metrics/latest.json >> $GITHUB_STEP_SUMMARY
+
+      - name: Commit metrics
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add metrics/
+          git diff --cached --quiet && echo "No changes" && exit 0
+          git commit -m "metrics: daily download snapshot $(date -u +%Y-%m-%d)"
+          git push
