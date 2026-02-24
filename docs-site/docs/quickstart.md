@@ -26,41 +26,48 @@ kindling init
 
 Creates a local Kubernetes cluster with an in-cluster container registry, ingress controller, and the kindling operator — all in one shot.
 
-## Connect a GitHub repo
+## Try the demo app
+
+`kindling init` auto-clones the project to `~/.kindling`. Copy the included microservices demo — Go, Python, Node.js, and React — into a fresh directory:
+
+```bash
+cp -r ~/.kindling/examples/microservices ~/kindling-demo
+```
+
+This gives you a working 4-service app (API gateway, orders service, inventory service, React UI) with Postgres, Redis, and MongoDB — plus a pre-built GitHub Actions workflow. No AI key needed.
+
+## Create a repo and push
+
+```bash
+cd ~/kindling-demo
+git init && git add -A && git commit -m "initial commit"
+gh repo create kindling-demo --private --source . --push
+```
+
+## Connect the runner
 
 You need a [GitHub Personal Access Token](https://github.com/settings/tokens) with the **repo** scope.
 
 ```bash
-kindling runners -u <github-user> -r <owner/repo> -t <pat>
+kindling runners -u <github-user> -r <github-user>/kindling-demo -t <pat>
 ```
 
-This registers a self-hosted GitHub Actions runner in your cluster, bound to your repo.
-
-## Generate a workflow
+This registers a self-hosted GitHub Actions runner in your cluster, bound to your repo. Push a change to trigger a build:
 
 ```bash
-kindling generate -k <openai-api-key> -r /path/to/your-app
+git commit --allow-empty -m "trigger build" && git push
 ```
 
-Scans your repo — Dockerfiles, docker-compose, Helm charts, source code — and writes a complete `.github/workflows/dev-deploy.yml` using AI.
-
-:::note
-Works with OpenAI (default) or Anthropic (`--provider anthropic`). Your app needs a working Dockerfile.
-:::
-
-## Push and deploy
+## Watch it deploy
 
 ```bash
-cd /path/to/your-app
-git add -A && git commit -m "add kindling workflow" && git push
+kindling status
 ```
 
-Your laptop builds the image, deploys it with auto-provisioned dependencies (Postgres, Redis, etc.), and wires up ingress — all locally.
-
-## Access your app
+The runner picks up the workflow, Kaniko builds all four images, the operator provisions Postgres, Redis, and MongoDB, and ingress routes go live:
 
 ```bash
-curl http://<your-user>-<your-app>.localhost
+curl http://<your-user>-ui.localhost
 ```
 
 ### Want a public URL?
@@ -73,15 +80,31 @@ Instantly creates an HTTPS tunnel. Share the URL with anyone.
 
 ---
 
+## Use your own app
+
+Once you've seen the demo, point kindling at your own repo:
+
+```bash
+kindling generate -k <openai-api-key> -r /path/to/your-app
+```
+
+Scans your repo — Dockerfiles, docker-compose, Helm charts, source code — and writes a complete `.github/workflows/dev-deploy.yml` using AI.
+
+:::note
+Works with OpenAI (default) or Anthropic (`--provider anthropic`). Your app needs a working Dockerfile.
+:::
+
+---
+
 ## What just happened?
 
 ```
-brew install → kindling init → kindling runners → kindling generate → git push → app running
-     ↓              ↓                ↓                   ↓               ↓           ↓
-  CLI + deps    K8s cluster     GH Actions runner    AI workflow    Local build   localhost + tunnel
+brew install → kindling init → cp demo → gh repo create → git push → app running
+     ↓              ↓              ↓            ↓               ↓           ↓
+  CLI + deps    K8s cluster    Demo app    GitHub repo     Local build   localhost
 ```
 
-Every subsequent `git push` rebuilds and redeploys automatically. No cloud CI minutes. No Docker Hub. No YAML to write.
+Every subsequent `git push` rebuilds and redeploys automatically. No cloud CI minutes. No Docker Hub. No YAML by hand.
 
 ---
 
