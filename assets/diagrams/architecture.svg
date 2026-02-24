@@ -118,8 +118,8 @@
   <text x="608" y="430" font-family="Arial, Helvetica, sans-serif" font-size="10" fill="#999">kubectl cp</text>
 
   <!-- Edge: GitHub → Runner (dispatches job) -->
-  <path d="M 790,73 L 790,160 L 280,160 L 280,285" fill="none" stroke="#666" stroke-width="2" marker-end="url(#arrow)"/>
-  <text x="540" y="153" font-family="Arial, Helvetica, sans-serif" font-size="10" fill="#666">dispatches job → runs-on: self-hosted</text>
+  <path d="M 880,73 L 880,275 L 265,275 L 265,285" fill="none" stroke="#666" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="620" y="268" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="10" fill="#666">dispatches job → runs-on: self-hosted</text>
 
   <!-- Edge: Staging → Developer (localhost:80) - dashed -->
   <path d="M 60,480 L 30,480 L 30,73" fill="none" stroke="#999" stroke-width="1.5" stroke-dasharray="6,4" marker-end="url(#arrow-dashed)"/>

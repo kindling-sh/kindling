@@ -14,67 +14,9 @@ environment on their local machine using [Kind](https://kind.sigs.k8s.io).
 
 ## System overview
 
-```mermaid
-%%{init: {'theme': 'dark'}}%%
-flowchart TB
-    dev(("👩‍💻 Developer"))
-
-    subgraph laptop["💻 Developer Laptop"]
-        subgraph kind["⎈ Kind Cluster"]
-
-            subgraph system["kindling-system namespace"]
-                operator["🎛️ Operator\n(controller-manager)"]
-            end
-
-            subgraph ns_default["default namespace"]
-                runner["🏃 Runner Pod"]
-                kaniko["📦 Kaniko Sidecar\n(build-agent)"]
-                registry["🗄️ Registry\n(registry:5000)"]
-
-                subgraph env1["DevStagingEnvironment: myapp"]
-                    app["🔷 App\nDeployment"]
-                    svc["🔶 Service"]
-                    ing["🌐 Ingress"]
-                    pg["🐘 Postgres"]
-                    rd["⚡ Redis"]
-                end
-            end
-
-            ingress_ctrl["🔶 ingress-nginx\ncontroller"]
-        end
-    end
-
-    dev -- "git push" --> gh["🐙 GitHub"]
-    gh -- "dispatches job" --> runner
-    runner -- "signal files\n(/builds/*)" --> kaniko
-    kaniko -- "pushes image" --> registry
-    runner -- "kubectl apply\nDSE CR" --> operator
-    operator -- "creates" --> app
-    operator -- "creates" --> svc
-    operator -- "creates" --> ing
-    operator -- "provisions" --> pg
-    operator -- "provisions" --> rd
-    dev -- "http://myapp.localhost" --> ingress_ctrl
-    ingress_ctrl --> svc
-
-    style laptop fill:#1a1a2e,stroke:#FF6B35,color:#e0e0e0,stroke-width:2px
-    style kind fill:#0f3460,stroke:#326CE5,color:#e0e0e0,stroke-width:2px
-    style system fill:#112240,stroke:#6e40c9,color:#e0e0e0
-    style ns_default fill:#112240,stroke:#2ea043,color:#e0e0e0
-    style env1 fill:#0a1628,stroke:#F7931E,color:#e0e0e0
-    style operator fill:#6e40c9,stroke:#6e40c9,color:#fff
-    style runner fill:#2ea043,stroke:#2ea043,color:#fff
-    style kaniko fill:#326CE5,stroke:#326CE5,color:#fff
-    style registry fill:#F7931E,stroke:#F7931E,color:#fff
-    style ingress_ctrl fill:#FF6B35,stroke:#FF6B35,color:#fff
-    style dev fill:#6e40c9,stroke:#6e40c9,color:#fff
-    style gh fill:#24292f,stroke:#e0e0e0,color:#fff
-    style app fill:#326CE5,stroke:#326CE5,color:#fff
-    style svc fill:#F7931E,stroke:#F7931E,color:#fff
-    style ing fill:#FF6B35,stroke:#FF6B35,color:#fff
-    style pg fill:#336791,stroke:#336791,color:#fff
-    style rd fill:#DC382D,stroke:#DC382D,color:#fff
-```
+<p align="center">
+  <img src="../../assets/diagrams/architecture.svg" alt="Kindling Architecture" width="800" />
+</p>
 
 ---
 
