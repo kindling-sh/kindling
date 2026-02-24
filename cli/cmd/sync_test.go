@@ -663,8 +663,8 @@ func TestGoarchToRust(t *testing.T) {
 	}{
 		{"arm64", "aarch64"},
 		{"amd64", "x86_64"},
-		{"riscv64", "riscv64"},    // passthrough
-		{"unknown", "unknown"},    // passthrough
+		{"riscv64", "riscv64"}, // passthrough
+		{"unknown", "unknown"}, // passthrough
 	}
 	for _, tt := range tests {
 		t.Run(tt.in, func(t *testing.T) {

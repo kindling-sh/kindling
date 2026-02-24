@@ -101,7 +101,6 @@ func runExpose(cmd *cobra.Command, args []string) error {
 	}
 }
 
-
 // ── Cloudflared ─────────────────────────────────────────────────
 
 func runCloudflaredTunnel() error {
@@ -139,7 +138,6 @@ func runNgrokTunnel() error {
 
 	return nil
 }
-
 
 // ── Shared helpers ──────────────────────────────────────────────
 
@@ -331,5 +329,3 @@ func getIngressNames() ([]string, error) {
 	}
 	return strings.Fields(out), nil
 }
-
-

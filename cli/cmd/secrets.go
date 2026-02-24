@@ -244,8 +244,6 @@ func runSecretsRestore(cmd *cobra.Command, args []string) error {
 // Helpers
 // ────────────────────────────────────────────────────────────────────────────
 
-
-
 // ── Local secrets file (plaintext, gitignored) ──────────────────
 
 func secretsFilePath() string {
@@ -360,4 +358,3 @@ func ensureGitignored(kindlingDir string) {
 	entry := "\n# kindling secrets (do not commit)\n" + pattern + "\n"
 	_, _ = f.WriteString(entry)
 }
-
