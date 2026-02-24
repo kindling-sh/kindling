@@ -1,0 +1,121 @@
+<mxfile host="app.diagrams.net" type="device">
+  <diagram id="two-loops" name="Two Loops">
+    <mxGraphModel dx="0" dy="0" grid="0" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" math="0" shadow="0" sketch="1">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+
+        <!-- OUTER LOOP container -->
+        <mxCell id="outer" value="&lt;b&gt;OUTER LOOP — CI&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#FF6B35;strokeWidth=3;fontSize=18;verticalAlign=top;align=center;spacingTop=10;container=1;collapsible=0;swimlaneLine=0;arcSize=4;sketch=1;jiggle=2;curveFitting=1;fontFamily=Architects Daughter;" vertex="1" parent="1">
+          <mxGeometry x="0" y="0" width="820" height="620" as="geometry"/>
+        </mxCell>
+
+        <!-- git push -->
+        <mxCell id="gitpush" value="git push" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;strokeWidth=2;fontSize=14;fontFamily=Architects Daughter;sketch=1;jiggle=2;" vertex="1" parent="outer">
+          <mxGeometry x="40" y="60" width="120" height="50" as="geometry"/>
+        </mxCell>
+
+        <!-- GitHub Actions -->
+        <mxCell id="github" value="GitHub Actions" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;strokeWidth=2;fontSize=14;fontFamily=Architects Daughter;sketch=1;jiggle=2;" vertex="1" parent="outer">
+          <mxGeometry x="230" y="60" width="160" height="50" as="geometry"/>
+        </mxCell>
+
+        <!-- Self-hosted Runner -->
+        <mxCell id="runner" value="Self-hosted Runner&lt;br&gt;&lt;i style=&quot;font-size:11px&quot;&gt;on your laptop&lt;/i&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;strokeWidth=2;fontSize=14;fontFamily=Architects Daughter;sketch=1;jiggle=2;" vertex="1" parent="outer">
+          <mxGeometry x="460" y="55" width="210" height="60" as="geometry"/>
+        </mxCell>
+
+        <!-- Edge: git push → GitHub -->
+        <mxCell id="e1" style="rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;sketch=1;jiggle=2;curveFitting=1;" edge="1" source="gitpush" target="github" parent="outer">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- Edge: GitHub → Runner -->
+        <mxCell id="e2" style="rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;sketch=1;jiggle=2;curveFitting=1;" edge="1" source="github" target="runner" parent="outer">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- Kaniko build -->
+        <mxCell id="kaniko" value="Kaniko build" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;strokeWidth=2;fontSize=14;fontFamily=Architects Daughter;sketch=1;jiggle=2;" vertex="1" parent="outer">
+          <mxGeometry x="340" y="175" width="150" height="50" as="geometry"/>
+        </mxCell>
+
+        <!-- Edge: Runner → Kaniko -->
+        <mxCell id="e3" style="rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;sketch=1;jiggle=2;curveFitting=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" source="runner" target="kaniko" parent="outer">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- registry:5000 -->
+        <mxCell id="registry" value="registry:5000" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;strokeWidth=2;fontSize=14;fontFamily=Architects Daughter;sketch=1;jiggle=2;" vertex="1" parent="outer">
+          <mxGeometry x="560" y="175" width="150" height="50" as="geometry"/>
+        </mxCell>
+
+        <!-- Edge: Kaniko → Registry -->
+        <mxCell id="e4" style="rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;sketch=1;jiggle=2;curveFitting=1;" edge="1" source="kaniko" target="registry" parent="outer">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- Operator deploys staging env -->
+        <mxCell id="operator" value="Operator deploys staging env&lt;br&gt;&lt;i style=&quot;font-size:11px&quot;&gt;Deployment + Service + Ingress + Dependencies&lt;/i&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;strokeWidth=2;fontSize=14;fontFamily=Architects Daughter;sketch=1;jiggle=2;" vertex="1" parent="outer">
+          <mxGeometry x="260" y="280" width="340" height="60" as="geometry"/>
+        </mxCell>
+
+        <!-- Edge: Registry → Operator -->
+        <mxCell id="e5" style="rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;sketch=1;jiggle=2;curveFitting=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" source="registry" target="operator" parent="outer">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- INNER LOOP container -->
+        <mxCell id="inner" value="&lt;b&gt;INNER LOOP — Dev&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#9673a6;strokeWidth=2;dashed=1;dashPattern=8 4;fontSize=16;verticalAlign=top;align=center;spacingTop=8;container=1;collapsible=0;swimlaneLine=0;arcSize=6;sketch=1;jiggle=2;curveFitting=1;fontFamily=Architects Daughter;" vertex="1" parent="outer">
+          <mxGeometry x="120" y="375" width="440" height="215" as="geometry"/>
+        </mxCell>
+
+        <!-- Edge: Operator → Inner Loop -->
+        <mxCell id="e6" style="rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;sketch=1;jiggle=2;curveFitting=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" source="operator" target="inner" parent="outer">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- edit file -->
+        <mxCell id="editfile" value="edit file" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;strokeWidth=2;fontSize=13;fontFamily=Architects Daughter;sketch=1;jiggle=2;" vertex="1" parent="inner">
+          <mxGeometry x="25" y="50" width="110" height="45" as="geometry"/>
+        </mxCell>
+
+        <!-- kindling sync -->
+        <mxCell id="sync" value="kindling sync" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;strokeWidth=2;fontSize=13;fontFamily=Architects Daughter;sketch=1;jiggle=2;" vertex="1" parent="inner">
+          <mxGeometry x="190" y="50" width="140" height="45" as="geometry"/>
+        </mxCell>
+
+        <!-- Edge: edit → sync -->
+        <mxCell id="e7" style="rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;sketch=1;jiggle=2;curveFitting=1;" edge="1" source="editfile" target="sync" parent="inner">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- auto-detected restart -->
+        <mxCell id="restart" value="auto-detected restart&lt;br&gt;&lt;i style=&quot;font-size:11px&quot;&gt;signal / wrapper / build&lt;/i&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;strokeWidth=2;fontSize=13;fontFamily=Architects Daughter;sketch=1;jiggle=2;" vertex="1" parent="inner">
+          <mxGeometry x="120" y="120" width="210" height="45" as="geometry"/>
+        </mxCell>
+
+        <!-- Edge: sync → restart -->
+        <mxCell id="e8" style="rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;sketch=1;jiggle=2;curveFitting=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" source="sync" target="restart" parent="inner">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- see changes text -->
+        <mxCell id="changes" value="see changes instantly · &lt;i&gt;stop sync → auto rollback&lt;/i&gt;" style="text;html=1;align=center;verticalAlign=middle;resizable=0;fontSize=12;fontFamily=Architects Daughter;fontColor=#666666;" vertex="1" parent="inner">
+          <mxGeometry x="100" y="180" width="250" height="25" as="geometry"/>
+        </mxCell>
+
+        <!-- Edge: restart → changes -->
+        <mxCell id="e9" style="rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=1;strokeColor=#999999;sketch=1;jiggle=2;curveFitting=1;" edge="1" source="restart" target="changes" parent="inner">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- Bottom tagline -->
+        <mxCell id="tagline" value="Zero cloud CI minutes · Sub-second iteration · Full Kubernetes fidelity" style="text;html=1;align=center;verticalAlign=middle;resizable=0;fontSize=13;fontFamily=Architects Daughter;fontColor=#666666;fontStyle=2;" vertex="1" parent="1">
+          <mxGeometry x="200" y="630" width="420" height="25" as="geometry"/>
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

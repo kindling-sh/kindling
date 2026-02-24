@@ -19,37 +19,9 @@
 
 `kindling` gives you a **dev-in-CI** workflow — a loop within a loop. The **outer loop** runs real GitHub Actions on your laptop via a local Kind cluster: push code, build containers, deploy staging environments. The **inner loop** skips all of that: edit a file, sync it into the running container, see the result instantly. A built-in web dashboard ties it all together.
 
-```
- ┌──────────────────────────────────────────────────────────────┐
- │                    OUTER LOOP (CI)                           │
- │                                                              │
- │   git push ──► GitHub Actions ──► Self-hosted runner         │
- │                                   on your laptop             │
- │                    │                                         │
- │                    ▼                                         │
- │              Kaniko build ──► registry:5000                  │
- │                    │                                         │
- │                    ▼                                         │
- │           Operator deploys staging env                       │
- │           (Deployment + Service + Ingress + Dependencies)    │
- │                    │                                         │
- │      ┌─────────────┴─────────────────┐                      │
- │      │       INNER LOOP (Dev)        │                      │
- │      │                               │                      │
- │      │   edit file ──► kindling sync │                      │
- │      │        │                      │                      │
- │      │        ▼                      │                      │
- │      │   auto-detected restart       │                      │
- │      │   (signal / wrapper / build)  │                      │
- │      │        │                      │                      │
- │      │        ▼                      │                      │
- │      │   see changes instantly       │                      │
- │      │        │                      │                      │
- │      │   (stop sync → auto rollback) │                      │
- │      └───────────────────────────────┘                      │
- │                                                              │
- └──────────────────────────────────────────────────────────────┘
-```
+<p align="center">
+  <img src="assets/diagrams/two-loops.svg" alt="Outer Loop (CI) and Inner Loop (Dev)" width="720" />
+</p>
 
 Zero cloud CI minutes. Sub-second iteration. Full Kubernetes fidelity.
 
@@ -136,48 +108,9 @@ kindling sync -d alice-myapp --restart
 
 ## How It Works
 
-```mermaid
-%%{init: {'theme': 'dark'}}%%
-flowchart TB
-    dev("👩‍💻 Developer")
-
-    subgraph machine["🖥️  Developer's Machine"]
-        subgraph kind["☸  Kind Cluster"]
-            controller("🔥 kindling\noperator")
-            runner("🏃 Runner Pod\n<i>runner + build-agent</i>")
-            registry("📦 registry:5000")
-            staging("⎈ DevStagingEnv\n<i>App + Deps + Ingress</i>")
-
-            runner -- "Kaniko build" --> registry
-            registry -- "image pull" --> staging
-            controller -- "reconciles" --> staging
-            runner -- "applies CR" --> controller
-        end
-
-        dashboard("🖥️ Dashboard\n<i>localhost:9090</i>")
-        sync("🔄 kindling sync\n<i>file watch + hot reload</i>")
-
-        dashboard -. "sync / load" .-> staging
-        sync -. "kubectl cp +\nrestart" .-> staging
-    end
-
-    dev -- "git push" --> gh("🐙 GitHub")
-    gh -- "runs-on: self-hosted" --> runner
-    staging -. "localhost:80" .-> dev
-    dev -- "edit files" --> sync
-    dev -- "browser" --> dashboard
-
-    style machine fill:#1a1a2e,stroke:#FF6B35,color:#e0e0e0,stroke-width:2px
-    style kind fill:#0f3460,stroke:#326CE5,color:#e0e0e0,stroke-width:2px
-    style controller fill:#FF6B35,stroke:#FF6B35,color:#fff
-    style runner fill:#2ea043,stroke:#2ea043,color:#fff
-    style registry fill:#F7931E,stroke:#F7931E,color:#fff
-    style staging fill:#326CE5,stroke:#326CE5,color:#fff
-    style dev fill:#6e40c9,stroke:#6e40c9,color:#fff
-    style gh fill:#24292f,stroke:#e0e0e0,color:#fff
-    style dashboard fill:#FFD23F,stroke:#FFD23F,color:#000
-    style sync fill:#e040fb,stroke:#e040fb,color:#fff
-```
+<p align="center">
+  <img src="assets/diagrams/architecture.svg" alt="Kindling Architecture" width="800" />
+</p>
 
 **Outer loop:** `git push` → GitHub dispatches job → self-hosted runner builds via Kaniko → operator deploys staging environment → accessible at `localhost`.
 

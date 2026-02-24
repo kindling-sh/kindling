@@ -1,0 +1,156 @@
+<mxfile host="app.diagrams.net" type="device">
+  <diagram id="architecture" name="Architecture">
+    <mxGraphModel dx="0" dy="0" grid="0" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" math="0" shadow="0" sketch="1">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+
+        <!-- Developer -->
+        <mxCell id="dev" value="👩‍💻 Developer" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;strokeWidth=2;fontSize=14;fontFamily=Architects Daughter;sketch=1;jiggle=2;arcSize=20;" vertex="1" parent="1">
+          <mxGeometry x="30" y="20" width="140" height="55" as="geometry"/>
+        </mxCell>
+
+        <!-- GitHub -->
+        <mxCell id="gh" value="🐙 GitHub" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;strokeWidth=2;fontSize=14;fontFamily=Architects Daughter;sketch=1;jiggle=2;arcSize=20;" vertex="1" parent="1">
+          <mxGeometry x="750" y="20" width="140" height="55" as="geometry"/>
+        </mxCell>
+
+        <!-- Edge: Dev → GitHub (git push) -->
+        <mxCell id="e_push" value="git push" style="rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;fontSize=11;fontFamily=Architects Daughter;sketch=1;jiggle=2;curveFitting=1;" edge="1" source="dev" target="gh" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- Developer's Machine container -->
+        <mxCell id="machine" value="&lt;b&gt;🖥️  Developer's Machine&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#333333;strokeWidth=2;fontSize=16;verticalAlign=top;align=center;spacingTop=10;container=1;collapsible=0;swimlaneLine=0;arcSize=4;sketch=1;jiggle=2;curveFitting=1;fontFamily=Architects Daughter;" vertex="1" parent="1">
+          <mxGeometry x="15" y="110" width="890" height="540" as="geometry"/>
+        </mxCell>
+
+        <!-- Kind Cluster container -->
+        <mxCell id="cluster" value="&lt;b&gt;☸  Kind Cluster&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#326CE5;strokeWidth=2;fontSize=15;verticalAlign=top;align=center;spacingTop=8;container=1;collapsible=0;swimlaneLine=0;arcSize=4;sketch=1;jiggle=2;curveFitting=1;fontFamily=Architects Daughter;" vertex="1" parent="machine">
+          <mxGeometry x="20" y="50" width="540" height="460" as="geometry"/>
+        </mxCell>
+
+        <!-- kindling operator -->
+        <mxCell id="operator" value="🔥 kindling&lt;br&gt;operator" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FF6B35;strokeColor=#FF6B35;fontColor=#ffffff;strokeWidth=2;fontSize=13;fontFamily=Architects Daughter;sketch=1;jiggle=2;" vertex="1" parent="cluster">
+          <mxGeometry x="30" y="50" width="150" height="55" as="geometry"/>
+        </mxCell>
+
+        <!-- ingress-nginx -->
+        <mxCell id="ingress" value="🔶 ingress-nginx&lt;br&gt;controller" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;strokeWidth=2;fontSize=13;fontFamily=Architects Daughter;sketch=1;jiggle=2;" vertex="1" parent="cluster">
+          <mxGeometry x="280" y="50" width="170" height="55" as="geometry"/>
+        </mxCell>
+
+        <!-- Runner Pod -->
+        <mxCell id="runner" value="🏃 Runner Pod&lt;br&gt;&lt;i style=&quot;font-size:11px&quot;&gt;runner + build-agent&lt;/i&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;strokeWidth=2;fontSize=13;fontFamily=Architects Daughter;sketch=1;jiggle=2;" vertex="1" parent="cluster">
+          <mxGeometry x="30" y="150" width="195" height="60" as="geometry"/>
+        </mxCell>
+
+        <!-- registry:5000 -->
+        <mxCell id="registry" value="📦 registry:5000" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;strokeWidth=2;fontSize=13;fontFamily=Architects Daughter;sketch=1;jiggle=2;" vertex="1" parent="cluster">
+          <mxGeometry x="300" y="155" width="160" height="50" as="geometry"/>
+        </mxCell>
+
+        <!-- Edge: Runner → Registry (Kaniko build) -->
+        <mxCell id="e_build" value="Kaniko build" style="rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;fontSize=11;fontFamily=Architects Daughter;sketch=1;jiggle=2;curveFitting=1;" edge="1" source="runner" target="registry" parent="cluster">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- DevStagingEnv container -->
+        <mxCell id="staging" value="&lt;b&gt;⎈ DevStagingEnvironment&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;strokeWidth=2;fontSize=14;verticalAlign=top;align=center;spacingTop=8;container=1;collapsible=0;swimlaneLine=0;arcSize=6;sketch=1;jiggle=2;curveFitting=1;fontFamily=Architects Daughter;" vertex="1" parent="cluster">
+          <mxGeometry x="30" y="265" width="480" height="165" as="geometry"/>
+        </mxCell>
+
+        <!-- App -->
+        <mxCell id="app" value="🔷 App&lt;br&gt;Deployment" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#326CE5;strokeColor=#326CE5;fontColor=#ffffff;strokeWidth=2;fontSize=12;fontFamily=Architects Daughter;sketch=1;jiggle=2;" vertex="1" parent="staging">
+          <mxGeometry x="15" y="40" width="100" height="50" as="geometry"/>
+        </mxCell>
+
+        <!-- Service -->
+        <mxCell id="svc" value="🔶 Service" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;strokeWidth=2;fontSize=12;fontFamily=Architects Daughter;sketch=1;jiggle=2;" vertex="1" parent="staging">
+          <mxGeometry x="130" y="40" width="100" height="50" as="geometry"/>
+        </mxCell>
+
+        <!-- Ingress route -->
+        <mxCell id="ing_route" value="🌐 Ingress" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;strokeWidth=2;fontSize=12;fontFamily=Architects Daughter;sketch=1;jiggle=2;" vertex="1" parent="staging">
+          <mxGeometry x="245" y="40" width="100" height="50" as="geometry"/>
+        </mxCell>
+
+        <!-- Postgres dep -->
+        <mxCell id="pg" value="🐘 Postgres" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;strokeWidth=1;fontSize=11;fontFamily=Architects Daughter;sketch=1;jiggle=2;" vertex="1" parent="staging">
+          <mxGeometry x="15" y="105" width="100" height="40" as="geometry"/>
+        </mxCell>
+
+        <!-- Redis dep -->
+        <mxCell id="rd" value="⚡ Redis" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;strokeWidth=1;fontSize=11;fontFamily=Architects Daughter;sketch=1;jiggle=2;" vertex="1" parent="staging">
+          <mxGeometry x="130" y="105" width="100" height="40" as="geometry"/>
+        </mxCell>
+
+        <!-- More deps indicator -->
+        <mxCell id="moredeps" value="+ 13 more dep types" style="text;html=1;align=center;verticalAlign=middle;resizable=0;fontSize=11;fontFamily=Architects Daughter;fontColor=#999999;fontStyle=2;" vertex="1" parent="staging">
+          <mxGeometry x="245" y="105" width="140" height="40" as="geometry"/>
+        </mxCell>
+
+        <!-- Edge: Registry → Staging (image pull) -->
+        <mxCell id="e_pull" value="image pull" style="rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;fontSize=11;fontFamily=Architects Daughter;sketch=1;jiggle=2;curveFitting=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.7;entryY=0;entryDx=0;entryDy=0;" edge="1" source="registry" target="staging" parent="cluster">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- Edge: Operator → Staging (reconciles) -->
+        <mxCell id="e_reconcile" value="reconciles" style="rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;fontSize=11;fontFamily=Architects Daughter;sketch=1;jiggle=2;curveFitting=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.2;entryY=0;entryDx=0;entryDy=0;" edge="1" source="operator" target="staging" parent="cluster">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- Edge: Runner → Operator (applies CR) -->
+        <mxCell id="e_cr" value="applies CR" style="rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;fontSize=11;fontFamily=Architects Daughter;sketch=1;jiggle=2;curveFitting=1;exitX=0.3;exitY=0;exitDx=0;exitDy=0;entryX=0.3;entryY=1;entryDx=0;entryDy=0;" edge="1" source="runner" target="operator" parent="cluster">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- Dashboard -->
+        <mxCell id="dashboard" value="🖥️ Dashboard&lt;br&gt;&lt;i style=&quot;font-size:11px&quot;&gt;localhost:9090&lt;/i&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFD23F;strokeColor=#d6b656;strokeWidth=2;fontSize=13;fontFamily=Architects Daughter;sketch=1;jiggle=2;" vertex="1" parent="machine">
+          <mxGeometry x="620" y="80" width="230" height="55" as="geometry"/>
+        </mxCell>
+
+        <!-- kindling sync -->
+        <mxCell id="sync" value="🔄 kindling sync&lt;br&gt;&lt;i style=&quot;font-size:11px&quot;&gt;file watch + hot reload&lt;/i&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;strokeWidth=2;fontSize=13;fontFamily=Architects Daughter;sketch=1;jiggle=2;" vertex="1" parent="machine">
+          <mxGeometry x="620" y="195" width="230" height="55" as="geometry"/>
+        </mxCell>
+
+        <!-- Edge: Dashboard → Staging (sync/load) -->
+        <mxCell id="e_dash" value="sync / load" style="rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=1;dashed=1;dashPattern=8 4;fontSize=11;fontFamily=Architects Daughter;sketch=1;jiggle=2;curveFitting=1;entryX=1;entryY=0.3;entryDx=0;entryDy=0;exitX=0;exitY=0.5;exitDx=0;exitDy=0;" edge="1" source="dashboard" target="staging" parent="machine">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- Edge: Sync → Staging (kubectl cp) -->
+        <mxCell id="e_sync" value="kubectl cp + restart" style="rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=1;dashed=1;dashPattern=8 4;fontSize=11;fontFamily=Architects Daughter;sketch=1;jiggle=2;curveFitting=1;entryX=1;entryY=0.6;entryDx=0;entryDy=0;exitX=0;exitY=0.5;exitDx=0;exitDy=0;" edge="1" source="sync" target="staging" parent="machine">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- localhost text -->
+        <mxCell id="localhost" value="localhost:80" style="text;html=1;align=center;verticalAlign=middle;resizable=0;fontSize=12;fontFamily=Architects Daughter;fontColor=#666666;fontStyle=2;" vertex="1" parent="machine">
+          <mxGeometry x="620" y="310" width="230" height="25" as="geometry"/>
+        </mxCell>
+
+        <!-- Edge: GitHub → Runner (dispatches job) -->
+        <mxCell id="e_dispatch" value="dispatches job" style="rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;fontSize=11;fontFamily=Architects Daughter;sketch=1;jiggle=2;curveFitting=1;exitX=0;exitY=1;exitDx=0;exitDy=0;entryX=0.8;entryY=0;entryDx=0;entryDy=0;" edge="1" source="gh" target="runner" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- Edge: Staging → Dev (localhost:80) -->
+        <mxCell id="e_local" value="localhost:80" style="rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=1;dashed=1;dashPattern=8 4;fontSize=11;fontFamily=Architects Daughter;fontColor=#666666;sketch=1;jiggle=2;curveFitting=1;exitX=0;exitY=0;exitDx=0;exitDy=0;entryX=0.5;entryY=1;entryDx=0;entryDy=0;" edge="1" source="staging" target="dev" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- Edge: Dev → Sync (edit files) -->
+        <mxCell id="e_edit" value="edit files" style="rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;fontSize=11;fontFamily=Architects Daughter;sketch=1;jiggle=2;curveFitting=1;exitX=1;exitY=1;exitDx=0;exitDy=0;entryX=1;entryY=0;entryDx=0;entryDy=0;" edge="1" source="dev" target="sync" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- Edge: Dev → Dashboard (browser) -->
+        <mxCell id="e_browser" value="browser" style="rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;fontSize=11;fontFamily=Architects Daughter;sketch=1;jiggle=2;curveFitting=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" source="dev" target="dashboard" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
