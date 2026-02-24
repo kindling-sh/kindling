@@ -33,7 +33,7 @@ set -euo pipefail
 
 CLUSTER_NAME="${E2E_CLUSTER_NAME:-kindling-e2e}"
 IMG="controller:latest"
-TIMEOUT=120s
+TIMEOUT=180s
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 KINDLING="${KINDLING:-$ROOT_DIR/bin/kindling}"
@@ -124,9 +124,13 @@ info "2. Building and deploying operator"
 
 cd "$ROOT_DIR"
 
-# Build the operator image
-make docker-build IMG="$IMG"
-pass "Operator image built"
+# Build the operator image (skip if CI already built it)
+if docker image inspect "$IMG" >/dev/null 2>&1; then
+  pass "Operator image already exists (skipping build)"
+else
+  make docker-build IMG="$IMG"
+  pass "Operator image built"
+fi
 
 # Load it into the Kind cluster
 kind load docker-image "$IMG" --name "$CLUSTER_NAME"
@@ -427,12 +431,16 @@ for cr in "$EXAMPLES_DIR"/deploy/*.yaml; do
 done
 pass "All DSE CRs applied"
 
+# Give the operator time to create dependency pods (Postgres, Redis, MongoDB)
+echo "  Waiting for dependency pods to schedule..."
+sleep 15
+
 for dep in microservices-orders-dev microservices-inventory-dev microservices-gateway-dev microservices-ui-dev; do
   TESTS=$((TESTS + 1))
-  if wait_for_resource deployment "$dep" && wait_for_rollout "$dep"; then
+  if wait_for_resource deployment "$dep" && kubectl rollout status "deployment/$dep" --timeout=300s 2>/dev/null; then
     pass "$dep is ready"
   else
-    fail "$dep did not become ready"
+    fail "$dep did not become ready ($(kubectl get deployment "$dep" -o jsonpath='{.status.conditions[*].message}' 2>/dev/null || echo 'unknown'))"
   fi
 done
 

@@ -2,7 +2,7 @@ name: Fuzz Test
 
 on:
   push:
-    branches: [main, refactor]
+    branches: [main, fuzz]
 
   pull_request:
     branches: [main]
@@ -33,13 +33,13 @@ on:
         required: false
         type: string
       repos:
-        description: "Repo list: 'curated' uses repos.txt, 'e2e' uses repos-e2e.txt, 'discover' runs find-repos.py first"
+        description: "Repo list: 'discover' uses freshly discovered repos.txt (default), 'curated' uses repos-seed.txt, 'e2e' uses repos-e2e.txt"
         type: choice
         options:
+          - discover
           - curated
           - e2e
-          - discover
-        default: curated
+        default: discover
       discover_limit:
         description: "Max repos when using discover mode"
         required: false
@@ -170,24 +170,23 @@ jobs:
       - name: Install Python deps
         run: pip install pyyaml
 
-      # ── Discover repos (optional) ───────────────────────────
+      # ── Discover fresh repos (always runs) ─────────────────────
       - name: Discover repos
-        if: inputs.repos == 'discover'
         run: |
           cd test/fuzz
           python3 find-repos.py \
             --token "${{ secrets.GITHUB_TOKEN }}" \
-            --out repos-discovered.txt \
+            --out repos.txt \
             --limit ${{ inputs.discover_limit || 20 }}
           echo "── Discovered repos ──"
-          grep -v '^#' repos-discovered.txt | grep -v '^$' | head -30
-          echo "REPOS_FILE=repos-discovered.txt" >> "$GITHUB_ENV"
+          grep -v '^#' repos.txt | grep -v '^$' | head -30
 
-      - name: Use curated repos
-        if: inputs.repos != 'discover'
+      - name: Set repos file
         run: |
           if [[ "${{ inputs.repos }}" == "e2e" ]]; then
             echo "REPOS_FILE=repos-e2e.txt" >> "$GITHUB_ENV"
+          elif [[ "${{ inputs.repos }}" == "curated" ]]; then
+            echo "REPOS_FILE=repos-seed.txt" >> "$GITHUB_ENV"
           else
             echo "REPOS_FILE=repos.txt" >> "$GITHUB_ENV"
           fi

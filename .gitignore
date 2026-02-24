@@ -7,7 +7,7 @@ cover.out
 .vscode/
 *.swp
 .kindling/
-test/fuzz/__pycache__/
+test/fuzz/__pycache__/\ntest/fuzz/repos.txt
 
 # Compiled binaries (root)
 manager
@@ -18,3 +18,4 @@ node_modules/
 docs-site/node_modules/
 docs-site/build/
 docs-site/.docusaurus/
+install.sh

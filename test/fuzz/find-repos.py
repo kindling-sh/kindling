@@ -23,8 +23,10 @@ Output tiers:
   - SKIPPED: monorepo, no Dockerfiles, or low score
 
 Usage:
-  python3 find-repos.py [--token GITHUB_TOKEN] [--out repos-candidates.txt] [--limit 30]
+  python3 find-repos.py [--token GITHUB_TOKEN] [--out repos.txt] [--limit 30]
 
+The script reads repos-seed.txt and repos-e2e.txt to skip repos already
+known. Output overwrites repos.txt so each fuzz run gets fresh candidates.
 Without a token you get 10 search requests/min. With a token: 30/min.
 """
 
@@ -46,7 +48,7 @@ HEADERS = {
     "X-GitHub-Api-Version": "2022-11-28",
 }
 
-# Repos to skip (already in repos.txt, or known bad fits)
+# Repos to skip (already in repos-seed.txt, or known bad fits)
 SKIP_OWNERS = {
     "kindling-sh", "jeff-vincent",  # our own repos
 }
@@ -750,8 +752,8 @@ def main():
     parser = argparse.ArgumentParser(description="Find repos for kindling fuzz testing")
     parser.add_argument("--token", default=os.environ.get("GITHUB_TOKEN", ""),
                         help="GitHub API token (or set GITHUB_TOKEN env var)")
-    parser.add_argument("--out", default="/Users/jeffvincent/dev/kindling/test/fuzz/repos-candidates.txt",
-                        help="Output file path")
+    parser.add_argument("--out", default=os.path.join(os.path.dirname(__file__), "repos.txt"),
+                        help="Output file path (default: repos.txt in same directory)")
     parser.add_argument("--limit", type=int, default=30,
                         help="Max repos to deeply validate")
     args = parser.parse_args()
@@ -763,7 +765,7 @@ def main():
 
     # ── Load existing repos to skip ────────────────────────────
     existing = set()
-    for list_file in ["repos.txt", "repos-e2e.txt"]:
+    for list_file in ["repos-seed.txt", "repos-e2e.txt"]:
         list_path = os.path.join(os.path.dirname(__file__), list_file)
         if os.path.exists(list_path):
             with open(list_path) as f:
@@ -774,7 +776,7 @@ def main():
                         url = line.split("#")[0].strip().split()[0]
                         existing.add(url)
     if existing:
-        print(f"📋 Skipping {len(existing)} repos already in lists", file=sys.stderr)
+        print(f"📋 Skipping {len(existing)} repos already in seed/e2e lists", file=sys.stderr)
 
     seen = set()
     candidates = []
