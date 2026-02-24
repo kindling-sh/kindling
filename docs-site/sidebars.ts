@@ -37,6 +37,19 @@ const sidebars: SidebarsConfig = {
     },
     {
       type: "category",
+      label: "Agent Development",
+      collapsed: false,
+      items: [
+        "guides/rag-langchain",
+        "guides/crewai-multi-agent",
+        "guides/langgraph-stateful",
+        "guides/openai-agents-sdk",
+        "guides/mongodb-atlas-vectors",
+        "guides/neondb-seeded-data",
+      ],
+    },
+    {
+      type: "category",
       label: "Reference",
       collapsed: false,
       items: [
