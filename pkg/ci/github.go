@@ -45,7 +45,8 @@ func (g *GitHubProvider) CLILabels() CLILabels {
 // ────────────────────────────────────────────────────────────────────────────
 
 // GitHubRunnerAdapter implements RunnerAdapter for GitHub Actions self-hosted runners.
-type GitHubRunnerAdapter struct{}
+// It embeds BaseRunnerAdapter for shared naming conventions.
+type GitHubRunnerAdapter struct{ BaseRunnerAdapter }
 
 func (a *GitHubRunnerAdapter) DefaultImage() string {
 	return "ghcr.io/actions/actions-runner:latest"
@@ -223,21 +224,8 @@ func (a *GitHubRunnerAdapter) RunnerLabels(username string, crName string) map[s
 	}
 }
 
-func (a *GitHubRunnerAdapter) DeploymentName(username string) string {
-	return fmt.Sprintf("%s-runner", username)
-}
-
-func (a *GitHubRunnerAdapter) ServiceAccountName(username string) string {
-	return fmt.Sprintf("%s-runner", username)
-}
-
-func (a *GitHubRunnerAdapter) ClusterRoleName(username string) string {
-	return fmt.Sprintf("%s-runner", username)
-}
-
-func (a *GitHubRunnerAdapter) ClusterRoleBindingName(username string) string {
-	return fmt.Sprintf("%s-runner", username)
-}
+// DeploymentName, ServiceAccountName, ClusterRoleName, and
+// ClusterRoleBindingName are inherited from BaseRunnerAdapter.
 
 // ────────────────────────────────────────────────────────────────────────────
 // GitHubWorkflowGenerator
@@ -248,6 +236,144 @@ type GitHubWorkflowGenerator struct{}
 
 func (g *GitHubWorkflowGenerator) DefaultOutputPath() string {
 	return ".github/workflows/dev-deploy.yml"
+}
+
+// SystemPrompt returns the full system prompt for GitHub Actions workflow
+// generation. It combines shared kindling domain knowledge (Kaniko, deps,
+// deploy philosophy) with GitHub-specific CI syntax instructions.
+func (g *GitHubWorkflowGenerator) SystemPrompt(hostArch string) string {
+	prompt := `You are an expert at generating GitHub Actions workflow files for kindling, a Kubernetes operator that provides local dev/staging environments on Kind clusters.
+
+You generate dev-deploy.yml workflow files that use two reusable composite actions:
+
+1. kindling-build — builds a container image via Kaniko sidecar
+   Uses: kindling-sh/kindling/.github/actions/kindling-build@main
+   Inputs: name (required), context (required), image (required), exclude (optional), timeout (optional)
+   IMPORTANT: kindling-build runs the Dockerfile found at <context>/Dockerfile as-is
+   using Kaniko inside the cluster. It does NOT modify or generate Dockerfiles.
+   Every service in the workflow MUST have a working Dockerfile already in the repo.
+   If the Dockerfile doesn't build locally (e.g. docker build), it won't build
+   in kindling either. The "context" input must point to the directory containing
+   the service's Dockerfile.
+
+` + PromptDockerfileExistence + `
+
+2. kindling-deploy — deploys a DevStagingEnvironment CR via sidecar
+   Uses: kindling-sh/kindling/.github/actions/kindling-deploy@main
+   ` + PromptDeployInputs + `
+
+Key conventions you MUST follow:
+- Registry: registry:5000 (in-cluster)
+- Image tag: ${{ github.actor }}-${{ github.sha }}
+- Runner: runs-on: [self-hosted, "${{ github.actor }}"]
+- Ingress host pattern: ${{ github.actor }}-<service>.localhost
+- DSE name pattern: ${{ github.actor }}-<service>
+- Always trigger on push to the default branch (specified below) + workflow_dispatch
+- Always include a "Checkout code" step with actions/checkout@v4
+- Always include a "Clean builds directory" step immediately after checkout
+- For multi-service repos, build all images first, then deploy in dependency order
+` + PromptHealthChecks + `
+- If a service (like an API gateway) depends on other services via env vars,
+  deploy it LAST so its upstreams are already running
+- Add comment separators between build and deploy sections for readability:
+  "# -- Build all images --" before the first build step
+  "# -- Deploy in dependency order --" before the first deploy step
+
+` + PromptDependencyDetection + `
+
+` + PromptDependencyAutoInjection + `
+
+` + PromptBuildTimeout + `
+
+` + PromptKanakoPatching + `
+
+Combine all Kaniko patches for a service into a SINGLE "Patch <service> Dockerfile for Kaniko"
+step BEFORE the corresponding build step. Examples:
+
+Python service with poetry:
+  - name: Patch backend Dockerfile for Kaniko
+    shell: bash
+    run: |
+      cd ${{ github.workspace }}/backend
+      sed -i 's/poetry install/poetry install --no-root/g' Dockerfile
+
+Python service where Dockerfile is NOT at context root (uses "dockerfile" input):
+  - name: Patch daily-job Dockerfile for Kaniko
+    shell: bash
+    run: |
+      cd ${{ github.workspace }}/backend
+      sed -i 's/poetry install/poetry install --no-root/g' jobs/daily/Dockerfile
+
+Go service with VCS issues:
+  - name: Patch api Dockerfile for Kaniko
+    shell: bash
+    run: |
+      cd ${{ github.workspace }}/api
+      sed -i 's/go build /go build -buildvcs=false /g' Dockerfile
+
+Node.js/npm service:
+  - name: Patch frontend Dockerfile for Kaniko
+    shell: bash
+    run: |
+      cd ${{ github.workspace }}/frontend
+      sed -i '/^FROM /a ENV npm_config_cache=/tmp/.npm' Dockerfile
+
+.NET worker with BuildKit ARGs:
+  - name: Patch worker Dockerfile for Kaniko
+    shell: bash
+    run: |
+      cd ${{ github.workspace }}/worker
+      # Remove --platform=${BUILDPLATFORM} from FROM lines
+      sed -i 's/FROM --platform=\${BUILDPLATFORM} /FROM /g' Dockerfile
+      # Remove BuildKit ARG declarations
+      sed -i '/^ARG TARGETPLATFORM$/d' Dockerfile
+      sed -i '/^ARG TARGETARCH$/d' Dockerfile
+      sed -i '/^ARG BUILDPLATFORM$/d' Dockerfile
+      sed -i '/^ARG TARGETOS$/d' Dockerfile
+      sed -i '/^ARG TARGETVARIANT$/d' Dockerfile
+      # Replace architecture variables with concrete ` + hostArch + ` values
+      sed -i 's/\$TARGETARCH/` + hostArch + `/g; s/\${TARGETARCH}/` + hostArch + `/g' Dockerfile
+      sed -i 's/\$TARGETPLATFORM/linux\/` + hostArch + `/g; s/\${TARGETPLATFORM}/linux\/` + hostArch + `/g' Dockerfile
+      sed -i 's/\$BUILDPLATFORM/linux\/` + hostArch + `/g; s/\${BUILDPLATFORM}/linux\/` + hostArch + `/g' Dockerfile
+      sed -i 's/\$TARGETOS/linux/g; s/\${TARGETOS}/linux/g' Dockerfile
+
+For multi-service repos (multiple Dockerfiles in subdirectories), generate one
+build step per service and one deploy step per service, with inter-service env
+vars wired up (e.g. API_URL pointing to the other service's cluster-internal DNS name).
+
+CRITICAL — Inter-service environment variables:
+When a service calls other services via gRPC or HTTP, it reads their addresses from
+environment variables. You MUST examine the source code snippets for EVERY service
+and find ALL env var references that look like service address variables (ending in
+_ADDR, _HOST, _URL, _SERVICE_ADDR, _ENDPOINT, etc.). For each such variable, add an
+env entry in that service's deploy step mapping it to the target service's
+cluster-internal DNS name and port. The DNS name pattern is:
+  ${{ github.actor }}-<service-name>:<port>
+Example — if checkoutservice reads PRODUCT_CATALOG_SERVICE_ADDR:
+  env: |
+    - name: PRODUCT_CATALOG_SERVICE_ADDR
+      value: "${{ github.actor }}-productcatalogservice:3550"
+Do NOT skip inter-service env vars — without them, services cannot find each other.
+
+` + PromptDockerCompose + `
+
+The kindling-build action supports a "dockerfile" input — use it whenever
+the Dockerfile is not at the root of the build context:
+  - name: Build daily job image
+    uses: kindling-sh/kindling/.github/actions/kindling-build@main
+    with:
+      name: daily-job
+      context: ${{ github.workspace }}/backend
+      dockerfile: jobs/daily/Dockerfile
+      image: "${{ env.REGISTRY }}/daily-job:${{ env.TAG }}"
+
+` + PromptDevStagingPhilosophy + `
+
+` + PromptOAuth + `
+
+` + PromptFinalValidation
+
+	return strings.ReplaceAll(prompt, "HOSTARCH", hostArch)
 }
 
 func (g *GitHubWorkflowGenerator) PromptContext() PromptContext {

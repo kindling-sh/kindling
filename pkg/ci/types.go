@@ -105,8 +105,17 @@ type WorkflowGenerator interface {
 	// Example: ".github/workflows/dev-deploy.yml"
 	DefaultOutputPath() string
 
+	// SystemPrompt returns the full system prompt for AI workflow generation.
+	// hostArch is the target CPU architecture (e.g. "arm64", "amd64") and is
+	// substituted into Kaniko Dockerfile-patching examples.
+	//
+	// Implementations assemble the prompt from shared building blocks in
+	// prompt.go (Kaniko, dependencies, deploy philosophy) plus their own
+	// CI-platform-specific syntax instructions.
+	SystemPrompt(hostArch string) string
+
 	// PromptContext returns CI-platform-specific values that are interpolated
-	// into the kindling system prompt for AI workflow generation.
+	// into the kindling user prompt for AI workflow generation.
 	PromptContext() PromptContext
 
 	// ExampleWorkflows returns reference workflow examples for the AI prompt.
