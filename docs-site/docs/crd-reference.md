@@ -204,8 +204,8 @@ spec:
 
 ## GithubActionRunnerPool
 
-Declares a pool of self-hosted GitHub Actions runners that register with
-a specific repository.
+Declares a pool of self-hosted CI runners. The current implementation
+registers GitHub Actions runners with a specific repository.
 
 **API version:** `apps.example.com/v1alpha1`  
 **Kind:** `GithubActionRunnerPool`  

@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/jeffvincent/kindling/pkg/ci"
 	"github.com/spf13/cobra"
 )
 
@@ -77,7 +78,8 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 	}
 
 	if genOutput == "" {
-		genOutput = filepath.Join(repoPath, ".github", "workflows", "dev-deploy.yml")
+		wfGen := ci.Default().Workflow()
+		genOutput = filepath.Join(repoPath, wfGen.DefaultOutputPath())
 	}
 
 	// Auto-detect default branch from git if not specified
@@ -1059,7 +1061,9 @@ no explanation text, no commentary. Just the YAML.`
 	// ── Build user prompt ───────────────────────────────────────
 	var b strings.Builder
 
-	b.WriteString(fmt.Sprintf("Generate a kindling dev-deploy.yml GitHub Actions workflow for this repository named %q.\n\n", ctx.name))
+	pctx := ci.Default().Workflow().PromptContext()
+
+	b.WriteString(fmt.Sprintf("Generate a kindling dev-deploy.yml %s %s for this repository named %q.\n\n", pctx.PlatformName, pctx.WorkflowNoun, ctx.name))
 	b.WriteString(fmt.Sprintf("Default branch: %s (use this in the 'on: push: branches:' trigger)\n\n", ctx.branch))
 	b.WriteString(fmt.Sprintf("Target architecture: %s (use this in all Kaniko Dockerfile patches)\n\n", ctx.hostArch))
 
@@ -1130,13 +1134,15 @@ no explanation text, no commentary. Just the YAML.`
 		b.WriteString("`kindling expose` should be run if OAuth callbacks need to reach the cluster.\n\n")
 	}
 
+	singleExample, multiExample := ci.Default().Workflow().ExampleWorkflows()
+
 	// Reference examples
 	b.WriteString("## Reference: single-service workflow example\n```yaml\n")
-	b.WriteString(singleServiceExample)
+	b.WriteString(singleExample)
 	b.WriteString("\n```\n\n")
 
 	b.WriteString("## Reference: multi-service workflow example\n```yaml\n")
-	b.WriteString(multiServiceExample)
+	b.WriteString(multiExample)
 	b.WriteString("\n```\n\n")
 
 	b.WriteString("Now generate the dev-deploy.yml workflow YAML for this repository. Return ONLY the YAML.\n")
@@ -1144,146 +1150,6 @@ no explanation text, no commentary. Just the YAML.`
 	user = b.String()
 	return system, user
 }
-
-// ────────────────────────────────────────────────────────────────────────────
-// Reference examples embedded in the prompt
-// ────────────────────────────────────────────────────────────────────────────
-
-const singleServiceExample = `name: Dev Deploy
-
-on:
-  push:
-    branches: [main]
-  workflow_dispatch:
-
-env:
-  REGISTRY: "registry:5000"
-  TAG: "${{ github.actor }}-${{ github.sha }}"
-
-jobs:
-  build-and-deploy:
-    runs-on: [self-hosted, "${{ github.actor }}"]
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Clean builds directory
-        shell: bash
-        run: |
-          rm -f /builds/*.done /builds/*.request /builds/*.processing \
-                /builds/*.apply /builds/*.apply-done /builds/*.apply-log \
-                /builds/*.apply-exitcode /builds/*.exitcode \
-                /builds/*.log /builds/*.dest /builds/*.tar.gz \
-                /builds/*.yaml /builds/*.sh
-
-      - name: Build image
-        uses: kindling-sh/kindling/.github/actions/kindling-build@main
-        with:
-          name: sample-app
-          context: ${{ github.workspace }}
-          image: "${{ env.REGISTRY }}/sample-app:${{ env.TAG }}"
-
-      - name: Deploy
-        uses: kindling-sh/kindling/.github/actions/kindling-deploy@main
-        with:
-          name: "${{ github.actor }}-sample-app"
-          image: "${{ env.REGISTRY }}/sample-app:${{ env.TAG }}"
-          port: "8080"
-          labels: |
-            app.kubernetes.io/part-of: sample-app
-            apps.example.com/github-username: ${{ github.actor }}
-          ingress-host: "${{ github.actor }}-sample-app.localhost"
-          dependencies: |
-            - type: postgres
-              version: "16"
-            - type: redis
-
-      - name: Summary
-        run: |
-          echo "🎉 Deploy complete!"
-          echo "🌐 http://${{ github.actor }}-sample-app.localhost"`
-
-const multiServiceExample = `name: Dev Deploy
-
-on:
-  push:
-    branches: [main]
-  workflow_dispatch:
-
-env:
-  REGISTRY: "registry:5000"
-  TAG: "${{ github.actor }}-${{ github.sha }}"
-
-jobs:
-  build-and-deploy:
-    runs-on: [self-hosted, "${{ github.actor }}"]
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Clean builds directory
-        shell: bash
-        run: |
-          rm -f /builds/*.done /builds/*.request /builds/*.processing \
-                /builds/*.apply /builds/*.apply-done /builds/*.apply-log \
-                /builds/*.apply-exitcode /builds/*.exitcode \
-                /builds/*.log /builds/*.dest /builds/*.tar.gz \
-                /builds/*.yaml /builds/*.sh
-
-      - name: Build API image
-        uses: kindling-sh/kindling/.github/actions/kindling-build@main
-        with:
-          name: api
-          context: ${{ github.workspace }}
-          image: "${{ env.REGISTRY }}/api:${{ env.TAG }}"
-          exclude: "./ui"
-
-      - name: Build UI image
-        uses: kindling-sh/kindling/.github/actions/kindling-build@main
-        with:
-          name: ui
-          context: "${{ github.workspace }}/ui"
-          image: "${{ env.REGISTRY }}/ui:${{ env.TAG }}"
-
-      - name: Deploy API
-        uses: kindling-sh/kindling/.github/actions/kindling-deploy@main
-        with:
-          name: "${{ github.actor }}-api"
-          image: "${{ env.REGISTRY }}/api:${{ env.TAG }}"
-          port: "8080"
-          labels: |
-            app.kubernetes.io/part-of: my-app
-            app.kubernetes.io/component: api
-            apps.example.com/github-username: ${{ github.actor }}
-          ingress-host: "${{ github.actor }}-api.localhost"
-          dependencies: |
-            - type: postgres
-              version: "16"
-            - type: redis
-
-      - name: Deploy UI
-        uses: kindling-sh/kindling/.github/actions/kindling-deploy@main
-        with:
-          name: "${{ github.actor }}-ui"
-          image: "${{ env.REGISTRY }}/ui:${{ env.TAG }}"
-          port: "80"
-          health-check-path: "/"
-          labels: |
-            app.kubernetes.io/part-of: my-app
-            app.kubernetes.io/component: ui
-            apps.example.com/github-username: ${{ github.actor }}
-          env: |
-            - name: API_URL
-              value: "http://${{ github.actor }}-api:8080"
-          ingress-host: "${{ github.actor }}-ui.localhost"
-
-      - name: Summary
-        run: |
-          echo "🎉 Deploy complete!"
-          echo "🌐 UI:  http://${{ github.actor }}-ui.localhost"
-          echo "🌐 API: http://${{ github.actor }}-api.localhost"`
 
 // ────────────────────────────────────────────────────────────────────────────
 // Helpers

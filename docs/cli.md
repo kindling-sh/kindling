@@ -112,18 +112,18 @@ kindling init --skip-cluster
 
 ### `kindling runners`
 
-Create a GitHub Actions runner pool in the cluster.
+Create a CI runner pool in the cluster. Currently uses GitHub Actions.
 
 ```
 kindling runners [flags]
 ```
 
 **What it does:**
-1. Prompts for any missing values (username, repo, PAT)
-2. Creates `github-runner-token` Secret from the PAT
-3. Applies a `GithubActionRunnerPool` CR
+1. Prompts for any missing values (username, repo, token)
+2. Creates the runner token Secret
+3. Applies a runner pool CR
 4. Waits for the runner pod to become ready
-5. Verifies runner registers with GitHub
+5. Verifies the runner registers with the CI platform
 
 **Flags:**
 
@@ -147,7 +147,7 @@ kindling runners -u myuser -r myorg/myrepo -t ghp_xxxxx
 
 ### `kindling generate`
 
-AI-generate a GitHub Actions workflow for any repository.
+AI-generate a CI workflow for any repository. Currently generates GitHub Actions workflows.
 
 ```
 kindling generate [flags]
@@ -157,7 +157,7 @@ kindling generate [flags]
 1. Scans the repository for Dockerfiles, dependency manifests, and source files
 2. Detects services, languages, ports, health-check endpoints, and backing dependencies
 3. Builds a detailed prompt and calls the AI provider (OpenAI or Anthropic)
-4. Writes a complete `dev-deploy.yml` workflow using `kindling-build` and `kindling-deploy` actions
+4. Writes a complete CI workflow using `kindling-build` and `kindling-deploy` actions
 
 **Supported languages:** Go, TypeScript, Python, Java, Rust, Ruby, PHP, C#, Elixir
 
@@ -254,7 +254,7 @@ kindling status
 - **Operator** — Controller-manager deployment readiness
 - **Registry** — In-cluster registry deployment status
 - **Ingress Controller** — ingress-nginx pod status
-- **Runner Pools** — GithubActionRunnerPool CRs (name, username, repo)
+- **Runner Pools** — CI runner pool CRs (name, username, repo)
 - **Dev Environments** — DevStagingEnvironment CRs (image, replicas,
   ready state)
 - **Pods** — All pods in the default namespace with status and age
@@ -277,7 +277,7 @@ kindling status
 ▸ Ingress Controller
     ingress-nginx-controller-xxxxx   Running   0
 
-▸ GitHub Actions Runner Pools
+▸ Runner Pools
     myuser-runner-pool   myuser   myorg/myrepo
 
 ▸ Dev Staging Environments
@@ -633,8 +633,8 @@ kindling reset [flags]
 ```
 
 **What it does:**
-1. Deletes all `GithubActionRunnerPool` CRs in the cluster
-2. Deletes the `github-runner-token` Secret
+1. Deletes all CI runner pool CRs in the cluster
+2. Deletes the runner token Secret
 3. Leaves the cluster, operator, and DevStagingEnvironments intact
 
 Use this when you want to switch to a different GitHub repository without

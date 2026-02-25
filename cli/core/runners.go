@@ -3,6 +3,8 @@ package core
 import (
 	"fmt"
 	"strings"
+
+	"github.com/jeffvincent/kindling/pkg/ci"
 )
 
 // RunnerPoolConfig holds the parameters for creating a GitHub Actions runner pool.
@@ -26,13 +28,14 @@ func (c *RunnerPoolConfig) namespace() string {
 func CreateRunnerPool(cfg RunnerPoolConfig) ([]string, error) {
 	ns := cfg.namespace()
 	var outputs []string
+	labels := ci.Default().CLILabels()
 
-	// 1. Create/update github-runner-token secret
-	Kubectl(cfg.ClusterName, "delete", "secret", "github-runner-token",
+	// 1. Create/update token secret
+	Kubectl(cfg.ClusterName, "delete", "secret", labels.SecretName,
 		"-n", ns, "--ignore-not-found")
 
-	secretYAML, err := RunCapture("kubectl", "create", "secret", "generic", "github-runner-token",
-		"--from-literal=github-token="+cfg.Token,
+	secretYAML, err := RunCapture("kubectl", "create", "secret", "generic", labels.SecretName,
+		"--from-literal="+ci.Default().Runner().DefaultTokenKey()+"="+cfg.Token,
 		"--dry-run=client", "-o", "yaml",
 	)
 	if err != nil {
@@ -43,24 +46,25 @@ func CreateRunnerPool(cfg RunnerPoolConfig) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to apply token secret: %s", out)
 	}
-	outputs = append(outputs, "Secret github-runner-token ready")
+	outputs = append(outputs, fmt.Sprintf("Secret %s ready", labels.SecretName))
 
 	// 2. Apply runner pool CR
 	crYAML := fmt.Sprintf(`apiVersion: apps.example.com/v1alpha1
-kind: GithubActionRunnerPool
+kind: %s
 metadata:
-  name: %s-runner-pool
-  namespace: %s
+  name: %%s-runner-pool
+  namespace: %%s
 spec:
-  githubUsername: "%s"
-  repository: "%s"
+  githubUsername: "%%s"
+  repository: "%%s"
   tokenSecretRef:
-    name: github-runner-token
-    key: github-token
+    name: %s
+    key: %s
   replicas: 1
   labels:
     - kindling
-`, cfg.Username, ns, cfg.Username, cfg.Repo)
+`, labels.CRDKind, labels.SecretName, ci.Default().Runner().DefaultTokenKey())
+	crYAML = fmt.Sprintf(crYAML, cfg.Username, ns, cfg.Username, cfg.Repo)
 
 	out, err = KubectlApplyStdin(cfg.ClusterName, crYAML)
 	if err != nil {
@@ -78,12 +82,13 @@ func ResetRunners(clusterName, namespace string) ([]string, error) {
 		namespace = "default"
 	}
 	var outputs []string
+	labels := ci.Default().CLILabels()
 
-	out, err := Kubectl(clusterName, "delete", "githubactionrunnerpools", "--all", "-n", namespace)
+	out, err := Kubectl(clusterName, "delete", labels.CRDPlural, "--all", "-n", namespace)
 	if err == nil {
 		outputs = append(outputs, out)
 	}
-	out2, _ := Kubectl(clusterName, "delete", "secret", "github-runner-token",
+	out2, _ := Kubectl(clusterName, "delete", "secret", labels.SecretName,
 		"-n", namespace, "--ignore-not-found")
 	outputs = append(outputs, out2)
 
@@ -112,7 +117,7 @@ func WaitForRunnerDeployment(clusterName, deployName string, timeoutSeconds int)
 
 // ListRunnerPools returns the output of listing runner pools.
 func ListRunnerPools(clusterName string) (string, error) {
-	return Kubectl(clusterName, "get", "githubactionrunnerpools",
+	return Kubectl(clusterName, "get", ci.Default().CLILabels().CRDPlural,
 		"-o", "custom-columns=NAME:.metadata.name,REPO:.spec.repository,USER:.spec.githubUsername",
 		"--no-headers")
 }

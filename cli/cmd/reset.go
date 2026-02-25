@@ -6,13 +6,14 @@ import (
 	"time"
 
 	"github.com/jeffvincent/kindling/cli/core"
+	"github.com/jeffvincent/kindling/pkg/ci"
 	"github.com/spf13/cobra"
 )
 
 var resetCmd = &cobra.Command{
 	Use:   "reset",
 	Short: "Remove the runner pool so you can point it at a new repo",
-	Long: `Deletes the GithubActionRunnerPool CR and its token secret, leaving
+	Long: `Deletes the runner pool CR and its token secret, leaving
 the cluster, operator, and any DevStagingEnvironments intact.
 
 After reset, run runners again to register a runner for a different repo:
@@ -65,9 +66,10 @@ func runReset(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// ── Delete all GithubActionRunnerPool CRs ───────────────────
-	step("🗑️ ", "Deleting GithubActionRunnerPool CRs")
-	step("🔑", "Removing github-runner-token secret")
+	// ── Delete all runner pool CRs ─────────────────────────────
+	labels := ci.Default().CLILabels()
+	step("🗑️ ", fmt.Sprintf("Deleting %s CRs", labels.CRDKind))
+	step("🔑", fmt.Sprintf("Removing %s secret", labels.SecretName))
 	outputs, _ := core.ResetRunners(clusterName, "default")
 	for _, o := range outputs {
 		success(o)

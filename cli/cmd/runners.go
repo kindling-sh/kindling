@@ -8,13 +8,14 @@ import (
 	"time"
 
 	"github.com/jeffvincent/kindling/cli/core"
+	"github.com/jeffvincent/kindling/pkg/ci"
 	"github.com/spf13/cobra"
 )
 
 var runnersCmd = &cobra.Command{
 	Use:   "runners",
-	Short: "Create a GitHub Actions runner pool in the cluster",
-	Long: `Creates the GitHub PAT secret and applies a GithubActionRunnerPool CR
+	Short: "Create a CI runner pool in the cluster",
+	Long: `Creates the CI token secret and applies a runner pool CR
 so a self-hosted runner registers with your repo.
 
 Flags can be provided on the command line or the CLI will prompt
@@ -29,24 +30,26 @@ var (
 )
 
 func init() {
-	runnersCmd.Flags().StringVarP(&ghUsername, "username", "u", "", "GitHub username")
-	runnersCmd.Flags().StringVarP(&ghRepo, "repo", "r", "", "GitHub repository (owner/repo)")
-	runnersCmd.Flags().StringVarP(&ghPAT, "token", "t", "", "GitHub Personal Access Token")
+	labels := ci.Default().CLILabels()
+	runnersCmd.Flags().StringVarP(&ghUsername, "username", "u", "", labels.Username)
+	runnersCmd.Flags().StringVarP(&ghRepo, "repo", "r", "", labels.Repository)
+	runnersCmd.Flags().StringVarP(&ghPAT, "token", "t", "", labels.Token)
 	rootCmd.AddCommand(runnersCmd)
 }
 
 func runRunners(cmd *cobra.Command, args []string) error {
 	reader := bufio.NewReader(os.Stdin)
+	labels := ci.Default().CLILabels()
 
 	// ── Collect missing values interactively ────────────────────
 	if ghUsername == "" {
-		ghUsername = prompt(reader, "GitHub username")
+		ghUsername = prompt(reader, labels.Username)
 	}
 	if ghRepo == "" {
-		ghRepo = prompt(reader, "GitHub repository (owner/repo)")
+		ghRepo = prompt(reader, labels.Repository)
 	}
 	if ghPAT == "" {
-		ghPAT = prompt(reader, "GitHub PAT (repo scope)")
+		ghPAT = prompt(reader, labels.Token)
 	}
 
 	if ghUsername == "" || ghRepo == "" || ghPAT == "" {
@@ -54,10 +57,10 @@ func runRunners(cmd *cobra.Command, args []string) error {
 	}
 
 	// ── Create secret + runner pool CR ──────────────────────────
-	header("Setting up GitHub Actions runner")
+	header("Setting up CI runner")
 
-	step("🔑", "Creating github-runner-token secret")
-	step("🚀", "Applying GithubActionRunnerPool CR")
+	step("🔑", fmt.Sprintf("Creating %s secret", labels.SecretName))
+	step("🚀", fmt.Sprintf("Applying %s CR", labels.CRDKind))
 
 	outputs, err := core.CreateRunnerPool(core.RunnerPoolConfig{
 		ClusterName: clusterName,
@@ -100,7 +103,7 @@ func runRunners(cmd *cobra.Command, args []string) error {
 
 	fmt.Println()
 	fmt.Printf("  %s🎉 Runner is ready!%s\n", colorGreen+colorBold, colorReset)
-	fmt.Printf("  Trigger a workflow at: %shttps://github.com/%s/actions%s\n", colorCyan, ghRepo, colorReset)
+	fmt.Printf("  Trigger a workflow at: %s%s%s\n", colorCyan, fmt.Sprintf(labels.ActionsURLFmt, ghRepo), colorReset)
 	fmt.Println()
 
 	return nil

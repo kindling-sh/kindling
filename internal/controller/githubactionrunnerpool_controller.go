@@ -30,7 +30,6 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
-	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -47,13 +46,47 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	appsv1alpha1 "github.com/jeffvincent/kindling/api/v1alpha1"
+	"github.com/jeffvincent/kindling/pkg/ci"
 )
 
 // GithubActionRunnerPoolReconciler reconciles a GithubActionRunnerPool object.
 type GithubActionRunnerPoolReconciler struct {
 	client.Client
-	Scheme   *runtime.Scheme
-	Recorder record.EventRecorder
+	Scheme     *runtime.Scheme
+	Recorder   record.EventRecorder
+	CIProvider ci.Provider
+}
+
+// provider returns the CI provider, defaulting to GitHub.
+func (r *GithubActionRunnerPoolReconciler) provider() ci.Provider {
+	if r.CIProvider != nil {
+		return r.CIProvider
+	}
+	return ci.Default()
+}
+
+// runner is a convenience accessor for the provider's RunnerAdapter.
+func (r *GithubActionRunnerPoolReconciler) runner() ci.RunnerAdapter {
+	return r.provider().Runner()
+}
+
+// toK8sEnvVars converts ci.ContainerEnvVar to Kubernetes corev1.EnvVar.
+func toK8sEnvVars(envVars []ci.ContainerEnvVar) []corev1.EnvVar {
+	result := make([]corev1.EnvVar, len(envVars))
+	for i, ev := range envVars {
+		result[i] = corev1.EnvVar{Name: ev.Name}
+		if ev.SecretRef != nil {
+			result[i].ValueFrom = &corev1.EnvVarSource{
+				SecretKeyRef: &corev1.SecretKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{Name: ev.SecretRef.Name},
+					Key:                  ev.SecretRef.Key,
+				},
+			}
+		} else {
+			result[i].Value = ev.Value
+		}
+	}
+	return result
 }
 
 const runnerPoolHashAnnotation = "apps.example.com/runner-pool-spec-hash"
@@ -169,16 +202,19 @@ func (r *GithubActionRunnerPoolReconciler) Reconcile(ctx context.Context, req ct
 func (r *GithubActionRunnerPoolReconciler) reconcileRunnerRBAC(ctx context.Context, cr *appsv1alpha1.GithubActionRunnerPool) error {
 	logger := log.FromContext(ctx)
 
-	saName := runnerServiceAccountName(cr)
-	crName := runnerClusterRoleName(cr)
-	crbName := runnerClusterRoleBindingName(cr)
+	username := cr.Spec.GitHubUsername
+	runnerAdapter := r.runner()
+	saName := runnerAdapter.ServiceAccountName(username)
+	crName := runnerAdapter.ClusterRoleName(username)
+	crbName := runnerAdapter.ClusterRoleBindingName(username)
+	labels := runnerAdapter.RunnerLabels(username, cr.Name)
 
 	// ── ServiceAccount ────────────────────────────────────────────────
 	sa := &corev1.ServiceAccount{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      saName,
 			Namespace: cr.Namespace,
-			Labels:    labelsForRunnerPool(cr),
+			Labels:    labels,
 		},
 	}
 	if err := controllerutil.SetControllerReference(cr, sa, r.Scheme); err != nil {
@@ -202,7 +238,7 @@ func (r *GithubActionRunnerPoolReconciler) reconcileRunnerRBAC(ctx context.Conte
 	clusterRole := &rbacv1.ClusterRole{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:   crName,
-			Labels: labelsForRunnerPool(cr),
+			Labels: labels,
 		},
 		Rules: []rbacv1.PolicyRule{
 			{
@@ -259,7 +295,7 @@ func (r *GithubActionRunnerPoolReconciler) reconcileRunnerRBAC(ctx context.Conte
 	crb := &rbacv1.ClusterRoleBinding{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:   crbName,
-			Labels: labelsForRunnerPool(cr),
+			Labels: labels,
 		},
 		Subjects: []rbacv1.Subject{
 			{
@@ -296,17 +332,7 @@ func (r *GithubActionRunnerPoolReconciler) reconcileRunnerRBAC(ctx context.Conte
 	return nil
 }
 
-func runnerServiceAccountName(cr *appsv1alpha1.GithubActionRunnerPool) string {
-	return fmt.Sprintf("%s-runner", cr.Spec.GitHubUsername)
-}
 
-func runnerClusterRoleName(cr *appsv1alpha1.GithubActionRunnerPool) string {
-	return fmt.Sprintf("%s-runner", cr.Spec.GitHubUsername)
-}
-
-func runnerClusterRoleBindingName(cr *appsv1alpha1.GithubActionRunnerPool) string {
-	return fmt.Sprintf("%s-runner", cr.Spec.GitHubUsername)
-}
 
 // ────────────────────────────────────────────────────────────────────────────
 // Runner Deployment
@@ -348,7 +374,8 @@ func (r *GithubActionRunnerPoolReconciler) reconcileRunnerDeployment(ctx context
 }
 
 func (r *GithubActionRunnerPoolReconciler) buildRunnerDeployment(cr *appsv1alpha1.GithubActionRunnerPool) *appsv1.Deployment {
-	labels := labelsForRunnerPool(cr)
+	runnerAdapter := r.runner()
+	labels := runnerAdapter.RunnerLabels(cr.Spec.GitHubUsername, cr.Name)
 	spec := cr.Spec
 
 	// Default replica count
@@ -368,7 +395,7 @@ func (r *GithubActionRunnerPoolReconciler) buildRunnerDeployment(cr *appsv1alpha
 	// Default service account — use the auto-created one if not specified
 	saName := spec.ServiceAccountName
 	if saName == "" {
-		saName = runnerServiceAccountName(cr)
+		saName = runnerAdapter.ServiceAccountName(spec.GitHubUsername)
 	}
 
 	githubURL := spec.GitHubURL
@@ -377,75 +404,19 @@ func (r *GithubActionRunnerPoolReconciler) buildRunnerDeployment(cr *appsv1alpha
 	}
 
 	// ── Build environment variables for the runner container ───────────
-	env := []corev1.EnvVar{
-		{
-			// The GitHub PAT (from the referenced Secret) is used at startup to
-			// obtain a short-lived runner registration token via the GitHub API.
-			// It is NOT passed directly to config.sh.
-			Name: "GITHUB_PAT",
-			ValueFrom: &corev1.EnvVarSource{
-				SecretKeyRef: &corev1.SecretKeySelector{
-					LocalObjectReference: corev1.LocalObjectReference{
-						Name: spec.TokenSecretRef.Name,
-					},
-					Key: spec.TokenSecretRef.Key,
-				},
-			},
-		},
-		{
-			// Runner name includes the username so it's identifiable in the GH UI
-			Name:  "RUNNER_NAME_PREFIX",
-			Value: fmt.Sprintf("%s-%s", spec.GitHubUsername, cr.Name),
-		},
-		{
-			Name:  "RUNNER_WORKDIR",
-			Value: workDir,
-		},
-		{
-			// Repository URL for runner registration
-			Name:  "RUNNER_REPOSITORY_URL",
-			Value: fmt.Sprintf("%s/%s", githubURL, spec.Repository),
-		},
-		{
-			// API base URL for token exchange (handles GHE vs github.com)
-			Name:  "GITHUB_API_URL",
-			Value: githubAPIURL(githubURL),
-		},
-		{
-			// Repo slug for API calls (e.g. "jeff-vincent/kindling")
-			Name:  "RUNNER_REPO_SLUG",
-			Value: spec.Repository,
-		},
-		{
-			// Expose the GitHub username to workflow steps so the job knows
-			// whose local cluster it is running on
-			Name:  "GITHUB_USERNAME",
-			Value: spec.GitHubUsername,
-		},
+	// Env vars come from the CI provider (GitHub Actions, GitLab CI, etc.)
+	envCfg := ci.RunnerEnvConfig{
+		Username:        spec.GitHubUsername,
+		Repository:      spec.Repository,
+		PlatformURL:     githubURL,
+		TokenSecretName: spec.TokenSecretRef.Name,
+		TokenSecretKey:  spec.TokenSecretRef.Key,
+		Labels:          spec.Labels,
+		RunnerGroup:     spec.RunnerGroup,
+		WorkDir:         workDir,
+		CRName:          cr.Name,
 	}
-
-	// Build runner labels: always include "self-hosted" and the username so
-	// the workflow can do `runs-on: [self-hosted, <username>]`
-	runnerLabels := []string{"self-hosted", spec.GitHubUsername}
-	runnerLabels = append(runnerLabels, spec.Labels...)
-	env = append(env, corev1.EnvVar{
-		Name:  "RUNNER_LABELS",
-		Value: strings.Join(runnerLabels, ","),
-	})
-
-	if spec.RunnerGroup != "" {
-		env = append(env, corev1.EnvVar{
-			Name:  "RUNNER_GROUP",
-			Value: spec.RunnerGroup,
-		})
-	}
-
-	// The runner stays alive between jobs (non-ephemeral) so it keeps
-	// polling GitHub for the developer's next push
-	env = append(env, corev1.EnvVar{
-		Name:  "RUNNER_EPHEMERAL",
-		Value: "false",
-	})
+	env := toK8sEnvVars(runnerAdapter.RunnerEnvVars(envCfg))
 
 	// Append user-supplied extra env vars
 	env = append(env, spec.Env...)
@@ -453,78 +424,10 @@ func (r *GithubActionRunnerPoolReconciler) buildRunnerDeployment(cr *appsv1alpha
 	// ── Build the runner container ────────────────────────────────────
 	runnerImage := spec.RunnerImage
 	if runnerImage == "" {
-		runnerImage = "ghcr.io/actions/actions-runner:latest"
+		runnerImage = runnerAdapter.DefaultImage()
 	}
 
-	// The official actions-runner image ships config.sh and run.sh but has
-	// no entrypoint that reads environment variables.  We provide a small
-	// inline startup script that:
-	//   1. Exchanges the GitHub PAT for a short-lived registration token
-	//   2. Calls config.sh to register the runner with GitHub
-	//   3. Sets up a SIGTERM trap so the runner de-registers on pod shutdown
-	//   4. Execs run.sh to start polling for jobs
-	startupScript := `#!/bin/bash
-set -uo pipefail
-
-# ── Exchange PAT for a short-lived runner registration token ──────
-echo "🔑 Exchanging PAT for runner registration token..."
-echo "   API: ${GITHUB_API_URL}/repos/${RUNNER_REPO_SLUG}/actions/runners/registration-token"
-
-HTTP_CODE=$(curl -sS -o /tmp/reg_response.json -w '%{http_code}' -X POST \
-  -H "Authorization: Bearer ${GITHUB_PAT}" \
-  -H "Accept: application/vnd.github+json" \
-  "${GITHUB_API_URL}/repos/${RUNNER_REPO_SLUG}/actions/runners/registration-token") || true
-
-echo "   HTTP status: ${HTTP_CODE}"
-
-if [ "${HTTP_CODE}" != "201" ]; then
-  echo "❌ GitHub API returned HTTP ${HTTP_CODE}:"
-  cat /tmp/reg_response.json 2>/dev/null || echo "(no response body)"
-  echo ""
-  echo "Make sure your PAT has the 'repo' scope (classic) or"
-  echo "'administration:write' permission (fine-grained)."
-  exit 1
-fi
-
-RUNNER_TOKEN=$(grep -o '"token": *"[^"]*"' /tmp/reg_response.json | head -1 | cut -d'"' -f4)
-rm -f /tmp/reg_response.json
-
-if [ -z "${RUNNER_TOKEN}" ]; then
-  echo "❌ Could not parse registration token from response"
-  exit 1
-fi
-echo "✅ Registration token obtained (expires in ~1 hour)"
-
-# De-register the runner on shutdown so it doesn't leave a ghost entry.
-# Obtain a fresh removal token since the registration token may have expired.
-cleanup() {
-  echo "🛑 Removing runner..."
-  REMOVE_TOKEN=$(curl -sS -X POST \
-    -H "Authorization: Bearer ${GITHUB_PAT}" \
-    -H "Accept: application/vnd.github+json" \
-    "${GITHUB_API_URL}/repos/${RUNNER_REPO_SLUG}/actions/runners/remove-token" 2>/dev/null \
-    | grep -o '"token": *"[^"]*"' | head -1 | cut -d'"' -f4) || true
-  ./config.sh remove --token "${REMOVE_TOKEN:-${RUNNER_TOKEN}}" || true
-}
-trap cleanup SIGTERM SIGINT
-
-# Build a runner name that fits GitHub's 64-char limit
-RUNNER_NAME="${RUNNER_NAME_PREFIX}-$(hostname | rev | cut -d- -f1,2 | rev)"
-RUNNER_NAME="${RUNNER_NAME:0:64}"
-
-# Configure the runner (non-interactive)
-./config.sh \
-  --url "${RUNNER_REPOSITORY_URL}" \
-  --token "${RUNNER_TOKEN}" \
-  --name "${RUNNER_NAME}" \
-  --labels "${RUNNER_LABELS}" \
-  --work "${RUNNER_WORKDIR}" \
-  --unattended \
-  --replace
-
-# Start the runner (exec so PID 1 gets signals)
-exec ./run.sh
-`
+	startupScript := runnerAdapter.StartupScript()
 
 	container := corev1.Container{
 		Name:    "runner",
@@ -690,7 +593,7 @@ done
 	// Name the deployment after the username so it's obvious in `kubectl get deploy`
 	return &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("%s-runner", spec.GitHubUsername),
+			Name:      runnerAdapter.DeploymentName(spec.GitHubUsername),
 			Namespace: cr.Namespace,
 			Labels:    labels,
 			Annotations: map[string]string{
@@ -718,7 +621,7 @@ done
 
 func (r *GithubActionRunnerPoolReconciler) updateRunnerPoolStatus(ctx context.Context, cr *appsv1alpha1.GithubActionRunnerPool) error {
 	deploy := &appsv1.Deployment{}
-	deployName := fmt.Sprintf("%s-runner", cr.Spec.GitHubUsername)
+	deployName := r.runner().DeploymentName(cr.Spec.GitHubUsername)
 	deployKey := types.NamespacedName{Name: deployName, Namespace: cr.Namespace}
 	if err := r.Get(ctx, deployKey, deploy); err == nil {
 		cr.Status.Replicas = *deploy.Spec.Replicas
@@ -763,15 +666,6 @@ func (r *GithubActionRunnerPoolReconciler) updateRunnerPoolStatus(ctx context.Co
 // Helpers
 // ────────────────────────────────────────────────────────────────────────────
 
-func labelsForRunnerPool(cr *appsv1alpha1.GithubActionRunnerPool) map[string]string {
-	return map[string]string{
-		"app.kubernetes.io/name":           cr.Name,
-		"app.kubernetes.io/component":      "github-actions-runner",
-		"app.kubernetes.io/managed-by":     "githubactionrunnerpool-operator",
-		"app.kubernetes.io/instance":       cr.Name,
-		"apps.example.com/github-username": cr.Spec.GitHubUsername,
-	}
-}
 
 func buildRunnerResourceRequirements(res *appsv1alpha1.RunnerResourceRequirements) corev1.ResourceRequirements {
 	reqs := corev1.ResourceRequirements{
@@ -803,17 +697,6 @@ func int64Ptr(v int64) *int64 {
 	return &v
 }
 
-// githubAPIURL returns the REST API base URL for a given GitHub instance.
-// For github.com it returns "https://api.github.com".
-// For GitHub Enterprise Server (e.g. "https://git.corp.com") it returns
-// "https://git.corp.com/api/v3".
-func githubAPIURL(githubURL string) string {
-	githubURL = strings.TrimRight(githubURL, "/")
-	if githubURL == "https://github.com" || githubURL == "" {
-		return "https://api.github.com"
-	}
-	return githubURL + "/api/v3"
-}
 
 // SetupWithManager sets up the controller with the Manager.
 // It watches GithubActionRunnerPool (primary) and Deployments that it owns.

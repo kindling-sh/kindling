@@ -30,43 +30,49 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	appsv1alpha1 "github.com/jeffvincent/kindling/api/v1alpha1"
+	"github.com/jeffvincent/kindling/pkg/ci"
 )
 
 // ────────────────────────────────────────────────────────────────────────────
 // Pure-function unit tests
 // ────────────────────────────────────────────────────────────────────────────
 
-var _ = Describe("githubAPIURL", func() {
+var _ = Describe("RunnerAdapter.APIBaseURL", func() {
+	var adapter ci.RunnerAdapter
+	BeforeEach(func() {
+		adapter = ci.Default().Runner()
+	})
+
 	It("returns api.github.com for github.com", func() {
-		Expect(githubAPIURL("https://github.com")).To(Equal("https://api.github.com"))
+		Expect(adapter.APIBaseURL("https://github.com")).To(Equal("https://api.github.com"))
 	})
 
 	It("returns api.github.com for empty string", func() {
-		Expect(githubAPIURL("")).To(Equal("https://api.github.com"))
+		Expect(adapter.APIBaseURL("")).To(Equal("https://api.github.com"))
 	})
 
 	It("returns /api/v3 for GHE", func() {
-		Expect(githubAPIURL("https://git.corp.com")).To(Equal("https://git.corp.com/api/v3"))
+		Expect(adapter.APIBaseURL("https://git.corp.com")).To(Equal("https://git.corp.com/api/v3"))
 	})
 
 	It("trims trailing slashes", func() {
-		Expect(githubAPIURL("https://github.com/")).To(Equal("https://api.github.com"))
+		Expect(adapter.APIBaseURL("https://github.com/")).To(Equal("https://api.github.com"))
 	})
 })
 
-var _ = Describe("labelsForRunnerPool", func() {
+var _ = Describe("RunnerAdapter.RunnerLabels", func() {
 	It("includes the github username", func() {
-		cr := newTestRunnerPool("test-pool", "testuser", "testuser/repo")
-		labels := labelsForRunnerPool(cr)
+		adapter := ci.Default().Runner()
+		labels := adapter.RunnerLabels("testuser", "test-pool")
 		Expect(labels).To(HaveKeyWithValue("apps.example.com/github-username", "testuser"))
 		Expect(labels).To(HaveKeyWithValue("app.kubernetes.io/component", "github-actions-runner"))
 	})
 })
 
-var _ = Describe("runnerServiceAccountName", func() {
+var _ = Describe("RunnerAdapter.ServiceAccountName", func() {
 	It("returns username-runner", func() {
-		cr := newTestRunnerPool("test-pool", "jeff", "jeff/repo")
-		Expect(runnerServiceAccountName(cr)).To(Equal("jeff-runner"))
+		adapter := ci.Default().Runner()
+		Expect(adapter.ServiceAccountName("jeff")).To(Equal("jeff-runner"))
 	})
 })
 

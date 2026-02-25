@@ -26,6 +26,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	appsv1alpha1 "github.com/jeffvincent/kindling/api/v1alpha1"
+	"github.com/jeffvincent/kindling/pkg/ci"
 )
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -356,16 +357,16 @@ func TestEnvVarsToMap_Nil(t *testing.T) {
 // ────────────────────────────────────────────────────────────────────────────
 
 func TestRunnerClusterRoleName(t *testing.T) {
-	cr := newTestRunnerPool("test-pool", "jeff", "jeff/repo")
-	if got := runnerClusterRoleName(cr); got != "jeff-runner" {
-		t.Errorf("runnerClusterRoleName = %q, want jeff-runner", got)
+	adapter := ci.Default().Runner()
+	if got := adapter.ClusterRoleName("jeff"); got != "jeff-runner" {
+		t.Errorf("ClusterRoleName = %q, want jeff-runner", got)
 	}
 }
 
 func TestRunnerClusterRoleBindingName(t *testing.T) {
-	cr := newTestRunnerPool("test-pool", "jeff", "jeff/repo")
-	if got := runnerClusterRoleBindingName(cr); got != "jeff-runner" {
-		t.Errorf("runnerClusterRoleBindingName = %q, want jeff-runner", got)
+	adapter := ci.Default().Runner()
+	if got := adapter.ClusterRoleBindingName("jeff"); got != "jeff-runner" {
+		t.Errorf("ClusterRoleBindingName = %q, want jeff-runner", got)
 	}
 }
 

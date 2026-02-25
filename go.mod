@@ -3,6 +3,7 @@ module github.com/jeffvincent/kindling
 go 1.25.0
 
 require (
+	github.com/jeffvincent/kindling/pkg/ci v0.0.0
 	github.com/onsi/ginkgo/v2 v2.27.2
 	github.com/onsi/gomega v1.38.2
 	k8s.io/api v0.35.0
@@ -10,6 +11,8 @@ require (
 	k8s.io/client-go v0.35.0
 	sigs.k8s.io/controller-runtime v0.23.1
 )
+
+replace github.com/jeffvincent/kindling/pkg/ci => ./pkg/ci
 
 require (
 	github.com/Masterminds/semver/v3 v3.4.0 // indirect
