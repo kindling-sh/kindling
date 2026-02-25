@@ -55,18 +55,25 @@ permissions:
 
 jobs:
   # ═══════════════════════════════════════════════════════════════
-  # E2E — Operator + CLI + Generate (runs on every push/PR)
+  # E2E — Operator + CLI + Generate Pipeline (runs on every push/PR)
   #
   # Builds from source, creates a Kind cluster, deploys the
-  # operator, and runs the consolidated e2e_test.sh which covers:
+  # operator, and runs:
   #   Tier 1: Operator baseline (hardcoded DSE, dependencies, GC)
   #   Tier 2: CLI features (secrets, env, load, runners, reset)
-  #   Tier 3: Generate pipeline (gated behind FUZZ_API_KEY)
+  #   Tier 3: find-repos.py discovers repos, merges with curated
+  #           repos-e2e.txt, then run.sh runs each through:
+  #           generate → YAML validate → static analysis
+  #           → Docker build → deploy → e2e networking
   # ═══════════════════════════════════════════════════════════════
   e2e:
-    name: "E2E (operator + CLI + generate)"
+    name: "E2E (operator + CLI + generate pipeline)"
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
+
+    env:
+      HAS_API_KEY: ${{ secrets.OPENAI_API_KEY != '' }}
+
     steps:
       - uses: actions/checkout@v4
 
@@ -107,15 +114,62 @@ jobs:
       - name: Verify CLI binary
         run: ./bin/kindling version
 
-      - name: Run E2E tests
+      - name: Run E2E tests (Tiers 1 + 2)
         run: |
           chmod +x test/e2e/e2e_test.sh
           test/e2e/e2e_test.sh
         env:
           KINDLING: ${{ github.workspace }}/bin/kindling
           E2E_CLUSTER_NAME: kindling-e2e
+          FUZZ_PROVIDER: openai
+
+      # ── Tier 3: Discover repos → generate → static → e2e ─────
+      - name: Discover repos
+        if: env.HAS_API_KEY == 'true'
+        working-directory: test/fuzz
+        run: |
+          python3 find-repos.py \
+            --token "${{ secrets.GITHUB_TOKEN }}" \
+            --out repos-discovered.txt \
+            --limit 5
+          echo "── Discovered repos ──"
+          cat repos-discovered.txt | grep -v '^#' | grep -v '^$' || true
+
+          # Merge curated e2e list + discovered repos (deduplicated)
+          cat repos-e2e.txt repos-discovered.txt \
+            | grep -v '^#' | grep -v '^$' \
+            | sort -u > repos-pipeline.txt
+          echo ""
+          echo "── Pipeline repos (curated + discovered) ──"
+          cat repos-pipeline.txt
+
+      - name: "Generate pipeline (curated + discovered repos)"
+        if: env.HAS_API_KEY == 'true'
+        working-directory: test/fuzz
+        run: bash run.sh repos-pipeline.txt /tmp/fuzz-results "${{ github.workspace }}/bin/kindling"
+        env:
           FUZZ_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           FUZZ_PROVIDER: openai
+          FUZZ_CLUSTER: kindling-e2e
+          FUZZ_NAMESPACE: default
+
+      - name: Generate pipeline summary
+        if: always() && env.HAS_API_KEY == 'true'
+        run: |
+          if [ -d /tmp/fuzz-results ]; then
+            python3 test/fuzz/summarize.py /tmp/fuzz-results \
+              --mode full --provider openai \
+              >> "$GITHUB_STEP_SUMMARY" || true
+          fi
+
+      - name: Upload pipeline results
+        if: always() && env.HAS_API_KEY == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-pipeline-results-${{ github.run_id }}
+          path: /tmp/fuzz-results/
+          retention-days: 14
+          if-no-files-found: ignore
 
       - name: Dump cluster state on failure
         if: failure()

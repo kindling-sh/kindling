@@ -1,0 +1,67 @@
+name: Discover Repos
+
+on:
+  schedule:
+    # 7am PT (15:00 UTC) every weekday
+    - cron: "0 15 * * 1-5"
+
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: "Max repos to discover"
+        required: false
+        type: number
+        default: 20
+
+permissions:
+  contents: write
+
+jobs:
+  discover:
+    name: "Find candidate repos"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python deps
+        run: pip install pyyaml
+
+      - name: Run find-repos.py
+        working-directory: test/fuzz
+        run: |
+          python3 find-repos.py \
+            --token "${{ secrets.GITHUB_TOKEN }}" \
+            --out repos.txt \
+            --limit ${{ inputs.limit || 20 }}
+
+          echo "── Discovered repos ──"
+          cat repos.txt | grep -v '^#' | grep -v '^$' || true
+          echo ""
+          REPO_COUNT=$(grep -v '^#' repos.txt | grep -v '^$' | wc -l | tr -d ' ')
+          echo "📦 Found $REPO_COUNT candidate repos"
+
+      - name: Commit updated repos.txt
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          cd test/fuzz
+          if git diff --quiet repos.txt 2>/dev/null; then
+            echo "No changes to repos.txt — skipping commit"
+          else
+            git add repos.txt
+            git commit -m "fuzz: refresh discovered repos.txt [skip ci]"
+            git push
+          fi
+
+      - name: Upload repos list
+        uses: actions/upload-artifact@v4
+        with:
+          name: discovered-repos-${{ github.run_id }}
+          path: test/fuzz/repos.txt
+          retention-days: 7

@@ -546,88 +546,15 @@ sleep 5
 pass "Microservice DSEs cleaned up"
 
 # ════════════════════════════════════════════════════════════════════════════
-# TIER 3: Generate pipeline (requires FUZZ_API_KEY)
+# TIER 3: Generate pipeline
 # ════════════════════════════════════════════════════════════════════════════
-
-if [ -n "${FUZZ_API_KEY:-}" ]; then
-  info "20. kindling generate — examples/microservices"
-
-  FUZZ_PROVIDER="${FUZZ_PROVIDER:-openai}"
-  GEN_OUTPUT="/tmp/e2e-generated-workflow.yml"
-
-  TESTS=$((TESTS + 1))
-  if "$KINDLING" generate \
-      --repo-path "$EXAMPLES_DIR" \
-      --dry-run \
-      --provider "$FUZZ_PROVIDER" \
-      --api-key "$FUZZ_API_KEY" \
-      ${FUZZ_MODEL:+--model "$FUZZ_MODEL"} \
-      > "$GEN_OUTPUT" 2>/dev/null; then
-    pass "kindling generate succeeded"
-  else
-    fail "kindling generate failed"
-  fi
-
-  # Validate YAML structure
-  TESTS=$((TESTS + 1))
-  if python3 -c "
-import yaml, sys
-with open('$GEN_OUTPUT') as f:
-    data = yaml.safe_load(f)
-assert isinstance(data, dict), 'not a dict'
-assert 'jobs' in data, 'no jobs key'
-sys.exit(0)
-" 2>/dev/null; then
-    pass "Generated YAML is valid with jobs key"
-  else
-    fail "Generated YAML is invalid or missing jobs key"
-  fi
-
-  # Count services in generated workflow
-  SVC_COUNT=$(python3 -c "
-import yaml
-with open('$GEN_OUTPUT') as f:
-    data = yaml.safe_load(f)
-count = 0
-for job in (data.get('jobs') or {}).values():
-    for step in (job.get('steps') or []):
-        if 'kindling-deploy' in step.get('uses', ''):
-            count += 1
-print(count)
-" 2>/dev/null || echo "0")
-  assert_not_empty "Generate found services" "$SVC_COUNT"
-  echo "  📦 Generated workflow has $SVC_COUNT deploy steps"
-
-  # Run static analysis if analyze.py is available
-  ANALYZE="$ROOT_DIR/test/fuzz/analyze.py"
-  if [ -f "$ANALYZE" ]; then
-    info "21. Static analysis of generated workflow"
-    ANALYSIS=$(python3 "$ANALYZE" "$GEN_OUTPUT" "$EXAMPLES_DIR" 2>/dev/null || echo "")
-    if [ -n "$ANALYSIS" ]; then
-      ISSUE_COUNT=$(echo "$ANALYSIS" | python3 -c "import sys,json; print(len(json.load(sys.stdin).get('issues',[])))" 2>/dev/null || echo "?")
-      TESTS=$((TESTS + 1))
-      if [ "$ISSUE_COUNT" = "0" ]; then
-        pass "Static analysis: 0 issues"
-      else
-        fail "Static analysis: $ISSUE_COUNT issues found"
-        echo "$ANALYSIS" | python3 -c "
-import sys, json
-d = json.load(sys.stdin)
-for i in d.get('issues', []):
-    print(f\"    ⚠️  {i.get('severity','?')}: {i.get('detail','?')}\")
-" 2>/dev/null || true
-      fi
-    else
-      echo "  ⚠️  analyze.py returned no output — skipping"
-    fi
-  fi
-
-  rm -f "$GEN_OUTPUT"
-
-else
-  info "20. kindling generate — SKIPPED (no FUZZ_API_KEY)"
-  echo "  Set FUZZ_API_KEY to enable the generate pipeline tests"
-fi
+# The full generate → static analysis → deploy → e2e pipeline is now
+# handled by run.sh (invoked as a separate workflow step against
+# repos-e2e.txt). See .github/workflows/fuzz.yml.
+#
+# This keeps e2e_test.sh focused on operator + CLI correctness while
+# run.sh exercises the generate pipeline across multiple real-world repos.
+# ════════════════════════════════════════════════════════════════════════════
 
 # ── Summary ────────────────────────────────────────────────────────────────
 info "Summary"
