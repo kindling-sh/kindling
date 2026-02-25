@@ -19,6 +19,10 @@ Firebase Auth, etc.) to call back into local services.
 
 The tunnel runs in the background — you get your terminal back immediately.
 
+Multiple tunnels can run simultaneously — use --name to label each one.
+This is useful when services need separate public URLs (e.g. an Auth0 SPA
+callback for the frontend + a separate API audience URL for the backend).
+
 Supported providers:
   cloudflared  — Cloudflare Tunnel (free, no account required for quick tunnels)
   ngrok        — ngrok tunnel (requires free account + auth token)
@@ -27,10 +31,17 @@ Examples:
   kindling expose                          # auto-detect provider, expose port 80
   kindling expose --provider cloudflared   # use cloudflared explicitly
   kindling expose --port 443               # expose a different port
-  kindling expose --stop                   # stop a running tunnel
+  kindling expose --stop                   # stop all running tunnels
+  kindling expose --stop --name frontend   # stop only the "frontend" tunnel
 
-The public URL is saved to .kindling/tunnel.yaml so that other commands
-(kindling generate) can reference it.`,
+  # Multiple tunnels for Auth0 SPA + API:
+  kindling expose --name frontend --service my-spa-ingress
+  kindling expose --name api --service auth-api-ingress
+
+  kindling expose --list                   # show all running tunnels
+
+The public URLs are saved to .kindling/tunnels.json so that other commands
+(kindling generate) can reference them.`,
 	RunE: runExpose,
 }
 
@@ -39,17 +50,26 @@ var (
 	exposePort     int
 	exposeStop     bool
 	exposeService  string
+	exposeName     string
+	exposeList     bool
 )
 
 func init() {
 	exposeCmd.Flags().StringVar(&exposeProvider, "provider", "", "Tunnel provider: cloudflared or ngrok (auto-detected if omitted)")
 	exposeCmd.Flags().IntVar(&exposePort, "port", 80, "Local port to expose (default: 80, the ingress controller)")
-	exposeCmd.Flags().BoolVar(&exposeStop, "stop", false, "Stop a running tunnel")
+	exposeCmd.Flags().BoolVar(&exposeStop, "stop", false, "Stop running tunnel(s)")
 	exposeCmd.Flags().StringVar(&exposeService, "service", "", "Ingress name to route tunnel traffic to (default: first ingress found)")
+	exposeCmd.Flags().StringVar(&exposeName, "name", "default", "Tunnel name (use different names for multiple simultaneous tunnels)")
+	exposeCmd.Flags().BoolVar(&exposeList, "list", false, "List all running tunnels")
 	rootCmd.AddCommand(exposeCmd)
 }
 
 func runExpose(cmd *cobra.Command, args []string) error {
+	// ── List mode ───────────────────────────────────────────────
+	if exposeList {
+		return listTunnels()
+	}
+
 	// ── Stop mode ───────────────────────────────────────────────
 	if exposeStop {
 		return stopTunnel()
@@ -57,17 +77,17 @@ func runExpose(cmd *cobra.Command, args []string) error {
 
 	header("Public HTTPS tunnel")
 
-	// ── Check for already-running tunnel ────────────────────────
-	if info, _ := core.ReadTunnelInfo(); info != nil && info.PID > 0 {
+	// ── Check for already-running tunnel with this name ─────────
+	if info, _ := core.ReadTunnelInfo(exposeName); info != nil && info.PID > 0 {
 		if core.ProcessAlive(info.PID) {
-			success(fmt.Sprintf("Tunnel already running → %s%s%s (pid %d)", colorBold, info.URL, colorReset, info.PID))
+			success(fmt.Sprintf("Tunnel %q already running → %s%s%s (pid %d)", exposeName, colorBold, info.URL, colorReset, info.PID))
 			fmt.Println()
-			fmt.Printf("  Stop with: %skindling expose --stop%s\n", colorCyan, colorReset)
+			fmt.Printf("  Stop with: %skindling expose --stop --name %s%s\n", colorCyan, exposeName, colorReset)
 			fmt.Println()
 			return nil
 		}
-		// Stale PID — clean up and start fresh
-		core.CleanupTunnel(clusterName)
+		// Stale PID — clean up this specific tunnel and start fresh
+		core.CleanupTunnel(clusterName, exposeName)
 	}
 
 	// ── Resolve provider ────────────────────────────────────────
@@ -104,16 +124,23 @@ func runExpose(cmd *cobra.Command, args []string) error {
 // ── Cloudflared ─────────────────────────────────────────────────
 
 func runCloudflaredTunnel() error {
-	step("⏳", "Starting cloudflared tunnel...")
+	step("⏳", fmt.Sprintf("Starting cloudflared tunnel %q...", exposeName))
 
 	result, err := core.StartCloudflaredTunnel(exposePort, 30, true)
 	if err != nil {
 		return err
 	}
 
-	core.SaveTunnelInfo(clusterName, result.PublicURL, "cloudflared", result.PID)
-	patchIngressesForTunnel(result.PublicURL)
-	printTunnelRunning(result.PublicURL, result.PID)
+	core.SaveTunnelInfo(clusterName, &core.TunnelInfo{
+		Name:     exposeName,
+		Provider: "cloudflared",
+		URL:      result.PublicURL,
+		PID:      result.PID,
+		Service:  exposeService,
+		Port:     exposePort,
+	})
+	patchIngressForTunnel(exposeName, result.PublicURL, exposeService)
+	printTunnelRunning(exposeName, result.PublicURL, result.PID)
 
 	if !result.DNSOK {
 		fmt.Printf("  %s⚠  DNS hasn't propagated yet — the tunnel is running but may take a moment to become reachable.%s\n\n", colorYellow, colorReset)
@@ -125,16 +152,23 @@ func runCloudflaredTunnel() error {
 // ── Ngrok ───────────────────────────────────────────────────────
 
 func runNgrokTunnel() error {
-	step("⏳", "Starting ngrok tunnel...")
+	step("⏳", fmt.Sprintf("Starting ngrok tunnel %q...", exposeName))
 
 	result, err := core.StartNgrokTunnel(exposePort)
 	if err != nil {
 		return err
 	}
 
-	core.SaveTunnelInfo(clusterName, result.PublicURL, "ngrok", result.PID)
-	patchIngressesForTunnel(result.PublicURL)
-	printTunnelRunning(result.PublicURL, result.PID)
+	core.SaveTunnelInfo(clusterName, &core.TunnelInfo{
+		Name:     exposeName,
+		Provider: "ngrok",
+		URL:      result.PublicURL,
+		PID:      result.PID,
+		Service:  exposeService,
+		Port:     exposePort,
+	})
+	patchIngressForTunnel(exposeName, result.PublicURL, exposeService)
+	printTunnelRunning(exposeName, result.PublicURL, result.PID)
 
 	return nil
 }
@@ -142,35 +176,98 @@ func runNgrokTunnel() error {
 // ── Shared helpers ──────────────────────────────────────────────
 
 // printTunnelRunning shows the success output after backgrounding.
-func printTunnelRunning(publicURL string, pid int) {
+func printTunnelRunning(name, publicURL string, pid int) {
 	fmt.Println()
-	success(fmt.Sprintf("%s%s%s", colorBold, publicURL, colorReset))
+	if name != "default" {
+		success(fmt.Sprintf("[%s] %s%s%s", name, colorBold, publicURL, colorReset))
+	} else {
+		success(fmt.Sprintf("%s%s%s", colorBold, publicURL, colorReset))
+	}
 	fmt.Println()
 	fmt.Printf("  Tunnel running in background %s(pid %d)%s\n", colorDim, pid, colorReset)
-	fmt.Printf("  Stop with: %skindling expose --stop%s\n", colorCyan, colorReset)
+	fmt.Printf("  Stop with: %skindling expose --stop", colorCyan)
+	if name != "default" {
+		fmt.Printf(" --name %s", name)
+	}
+	fmt.Printf("%s\n", colorReset)
+	fmt.Printf("  List all:  %skindling expose --list%s\n", colorCyan, colorReset)
 	fmt.Println()
 }
 
-// stopTunnel kills a running tunnel and cleans up.
+// stopTunnel kills running tunnel(s) and cleans up.
+// If --name is set, only that tunnel is stopped; otherwise all are stopped.
 func stopTunnel() error {
-	info, err := core.ReadTunnelInfo()
-	if err != nil || info == nil || info.PID == 0 {
-		fmt.Println("  No tunnel is currently running.")
+	// Determine whether to stop a specific tunnel or all.
+	stopName := ""
+	if exposeName != "default" {
+		stopName = exposeName
+	}
+
+	tunnels := core.ReadAllTunnels()
+	if len(tunnels) == 0 {
+		fmt.Println("  No tunnels are currently running.")
 		return nil
 	}
 
-	if !core.ProcessAlive(info.PID) {
+	if stopName != "" {
+		// Stop a specific tunnel.
+		info, _ := core.ReadTunnelInfo(stopName)
+		if info == nil {
+			fmt.Printf("  No tunnel named %q found.\n", stopName)
+			return nil
+		}
+		if !core.ProcessAlive(info.PID) {
+			core.CleanupTunnel(clusterName, stopName)
+			restoreIngressByService(info.Service)
+			fmt.Printf("  Tunnel %q already exited — cleaned up.\n", stopName)
+			return nil
+		}
+		step("🛑", fmt.Sprintf("Stopping %s tunnel %q (pid %d)...", info.Provider, stopName, info.PID))
+		core.StopTunnelProcess(stopName)
+		restoreIngressByService(info.Service)
+		success(fmt.Sprintf("Tunnel %q stopped", stopName))
+	} else {
+		// Stop all tunnels.
+		for _, t := range tunnels {
+			if t.PID > 0 && core.ProcessAlive(t.PID) {
+				step("🛑", fmt.Sprintf("Stopping %s tunnel %q (pid %d)...", t.Provider, t.Name, t.PID))
+			}
+		}
+		core.StopTunnelProcess()
 		core.CleanupTunnel(clusterName)
 		restoreIngresses()
-		fmt.Println("  Tunnel process already exited — cleaned up.")
+		success("All tunnels stopped")
+	}
+	return nil
+}
+
+// listTunnels prints all currently running tunnels.
+func listTunnels() error {
+	tunnels := core.ReadAllTunnels()
+	if len(tunnels) == 0 {
+		fmt.Println("  No tunnels are currently running.")
 		return nil
 	}
 
-	step("🛑", fmt.Sprintf("Stopping %s tunnel (pid %d)...", info.Provider, info.PID))
-	core.StopTunnelProcess()
-	core.CleanupTunnel(clusterName)
-	restoreIngresses()
-	success("Tunnel stopped")
+	header("Active tunnels")
+	for _, t := range tunnels {
+		alive := core.ProcessAlive(t.PID)
+		status := fmt.Sprintf("%s●%s", colorGreen, colorReset)
+		if !alive {
+			status = fmt.Sprintf("%s●%s", colorRed, colorReset)
+		}
+		svc := t.Service
+		if svc == "" {
+			svc = "(auto)"
+		}
+		fmt.Printf("  %s  %s%-12s%s  %s%s%s  → %s  pid %d\n",
+			status,
+			colorBold, t.Name, colorReset,
+			colorCyan, t.URL, colorReset,
+			svc, t.PID,
+		)
+	}
+	fmt.Println()
 	return nil
 }
 
@@ -178,14 +275,19 @@ func stopTunnel() error {
 
 const originalHostAnnotation = "kindling.dev/original-host"
 const originalTLSAnnotation = "kindling.dev/original-tls"
+const tunnelNameAnnotation = "kindling.dev/tunnel-name"
 
-// patchIngressesForTunnel replaces the host on every Ingress in the default
-// namespace with the tunnel hostname, saving the original host as an annotation
-// so it can be restored later.
-func patchIngressesForTunnel(publicURL string) {
+// patchIngressForTunnel replaces the host on the target ingress with the
+// tunnel hostname. If service is specified, only that ingress is patched;
+// otherwise the first available ingress is used.
+func patchIngressForTunnel(tunnelName, publicURL, service string) {
 	// Always restore any orphaned ingresses first — self-heals if a previous
 	// tunnel died without cleanup (e.g. machine sleep, force-kill).
-	restoreIngresses()
+	if service != "" {
+		restoreIngressByService(service)
+	} else {
+		restoreIngresses()
+	}
 
 	hostname := publicURL
 	if u, err := url.Parse(publicURL); err == nil && u.Host != "" {
@@ -197,23 +299,22 @@ func patchIngressesForTunnel(publicURL string) {
 		return
 	}
 
-	// If --service was specified, only patch that one.
-	if exposeService != "" {
+	// If service was specified, only patch that one.
+	if service != "" {
 		found := false
 		for _, n := range names {
-			if n == exposeService {
+			if n == service {
 				found = true
 				break
 			}
 		}
 		if found {
-			names = []string{exposeService}
+			names = []string{service}
 		} else {
 			return
 		}
 	}
 
-	patched := 0
 	for _, name := range names {
 		// Read current host
 		currentHost, err := runSilent("kubectl", "get", "ingress", name,
@@ -231,12 +332,14 @@ func patchIngressesForTunnel(publicURL string) {
 		// Build the JSON-patch operations:
 		// 1. Save original host as annotation
 		// 2. Replace ingress rule host with tunnel hostname
+		// 3. Save tunnel name as annotation so we know which tunnel owns it
 		ops := []map[string]interface{}{
 			{"op": "add", "path": "/metadata/annotations/" + strings.ReplaceAll(originalHostAnnotation, "/", "~1"), "value": currentHost},
+			{"op": "add", "path": "/metadata/annotations/" + strings.ReplaceAll(tunnelNameAnnotation, "/", "~1"), "value": tunnelName},
 			{"op": "replace", "path": "/spec/rules/0/host", "value": hostname},
 		}
 
-		// 3. If the ingress has a TLS block (cert-manager, etc.), save it as
+		// 4. If the ingress has a TLS block (cert-manager, etc.), save it as
 		//    an annotation and remove it — cloudflared terminates TLS at the edge.
 		tlsJSON, _ := runSilent("kubectl", "get", "ingress", name,
 			"-o", "jsonpath={.spec.tls}")
@@ -251,8 +354,7 @@ func patchIngressesForTunnel(publicURL string) {
 		patchBytes, _ := json.Marshal(ops)
 		if _, err := runSilent("kubectl", "patch", "ingress", name,
 			"--type=json", "-p="+string(patchBytes)); err == nil {
-			step("🔀", fmt.Sprintf("Routing tunnel → ingress/%s", name))
-			patched++
+			step("🔀", fmt.Sprintf("Routing tunnel %q → ingress/%s", tunnelName, name))
 			// Only one ingress can own a given host+path in nginx,
 			// so stop after the first successful patch.
 			break
@@ -260,9 +362,23 @@ func patchIngressesForTunnel(publicURL string) {
 	}
 }
 
-// restoreIngresses reverts any ingresses that were patched by patchIngressesForTunnel,
-// restoring the original host from the saved annotation.
+// restoreIngressByService restores a specific ingress that was patched for a tunnel.
+func restoreIngressByService(service string) {
+	if service == "" {
+		return
+	}
+	restoreIngressesByFilter(func(name string) bool {
+		return name == service
+	})
+}
+
+// restoreIngresses reverts all ingresses that were patched by any tunnel.
 func restoreIngresses() {
+	restoreIngressesByFilter(func(_ string) bool { return true })
+}
+
+// restoreIngressesByFilter reverts ingresses matching the filter.
+func restoreIngressesByFilter(match func(name string) bool) {
 	names, err := getIngressNames()
 	if err != nil || len(names) == 0 {
 		return
@@ -270,6 +386,10 @@ func restoreIngresses() {
 
 	restored := 0
 	for _, name := range names {
+		if !match(name) {
+			continue
+		}
+
 		originalHost, err := runSilent("kubectl", "get", "ingress", name,
 			"-o", `go-template={{index .metadata.annotations "kindling.dev/original-host"}}`,
 		)
@@ -283,10 +403,19 @@ func restoreIngresses() {
 
 		// Build restore operations:
 		// 1. Put the original host back
-		// 2. Remove the host annotation
+		// 2. Remove the host and tunnel-name annotations
 		ops := []map[string]interface{}{
 			{"op": "replace", "path": "/spec/rules/0/host", "value": originalHost},
 			{"op": "remove", "path": "/metadata/annotations/" + strings.ReplaceAll(originalHostAnnotation, "/", "~1")},
+		}
+		// Remove tunnel-name annotation if present
+		tunnelOwner, _ := runSilent("kubectl", "get", "ingress", name,
+			"-o", `go-template={{index .metadata.annotations "kindling.dev/tunnel-name"}}`,
+		)
+		if tn := strings.TrimSpace(tunnelOwner); tn != "" && !strings.Contains(tn, "no value") {
+			ops = append(ops,
+				map[string]interface{}{"op": "remove", "path": "/metadata/annotations/" + strings.ReplaceAll(tunnelNameAnnotation, "/", "~1")},
+			)
 		}
 
 		// 3. If a saved TLS block exists, restore it and remove the annotation

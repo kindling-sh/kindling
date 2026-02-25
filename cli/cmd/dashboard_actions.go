@@ -157,6 +157,7 @@ func handleCreateRunner(w http.ResponseWriter, r *http.Request) {
 		Username string `json:"username"`
 		Repo     string `json:"repo"`
 		Token    string `json:"token"`
+		Provider string `json:"provider"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		actionErr(w, "invalid JSON body", http.StatusBadRequest)
@@ -173,6 +174,7 @@ func handleCreateRunner(w http.ResponseWriter, r *http.Request) {
 		Repo:        body.Repo,
 		Token:       body.Token,
 		Namespace:   "default",
+		Provider:    body.Provider,
 	})
 	if err != nil {
 		actionErr(w, strings.Join(outputs, "\n")+"\n"+err.Error(), http.StatusInternalServerError)
@@ -187,7 +189,11 @@ func handleResetRunners(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
-	outputs, err := core.ResetRunners(clusterName, "default")
+	var body struct {
+		Provider string `json:"provider"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body) // optional body
+	outputs, err := core.ResetRunners(clusterName, "default", body.Provider)
 	if err != nil {
 		actionErr(w, strings.Join(outputs, "\n")+"\n"+err.Error(), http.StatusInternalServerError)
 		return
@@ -310,18 +316,22 @@ func handleExposeAction(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// Stale PID — clean up before starting fresh.
-		core.CleanupTunnel(clusterName)
+		core.CleanupTunnel(clusterName, info.Name)
 		restoreIngresses()
 	}
 
-	// Parse optional service from body.
+	// Parse optional service and name from body.
 	var body struct {
 		Service string `json:"service"`
+		Name    string `json:"name"`
 	}
 	if r.Body != nil {
 		json.NewDecoder(r.Body).Decode(&body)
 	}
-	exposeService = body.Service
+	tunnelName := body.Name
+	if tunnelName == "" {
+		tunnelName = "default"
+	}
 
 	// Start cloudflared — use the same core function as the CLI (15s timeout for HTTP).
 	result, err := core.StartCloudflaredTunnel(exposePort, 15, false)
@@ -330,8 +340,15 @@ func handleExposeAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	core.SaveTunnelInfo(clusterName, result.PublicURL, "cloudflared", result.PID)
-	patchIngressesForTunnel(result.PublicURL)
+	core.SaveTunnelInfo(clusterName, &core.TunnelInfo{
+		Name:     tunnelName,
+		Provider: "cloudflared",
+		URL:      result.PublicURL,
+		PID:      result.PID,
+		Service:  body.Service,
+		Port:     exposePort,
+	})
+	patchIngressForTunnel(tunnelName, result.PublicURL, body.Service)
 
 	actionOK(w, "Tunnel started: "+result.PublicURL)
 }
@@ -348,34 +365,54 @@ func handleUnexpose(w http.ResponseWriter, r *http.Request) {
 }
 
 // ── GET /api/expose/status ──────────────────────────────────────
-// Reads tunnel state from .kindling/tunnel.yaml — same source as the CLI.
+// Reads tunnel state from .kindling/tunnels.json — same source as the CLI.
 
 func handleExposeStatus(w http.ResponseWriter, r *http.Request) {
-	type status struct {
+	type tunnelStatus struct {
+		Name     string `json:"name"`
 		Running  bool   `json:"running"`
 		URL      string `json:"url,omitempty"`
+		Service  string `json:"service,omitempty"`
 		DNSReady bool   `json:"dns_ready"`
 	}
+	type status struct {
+		Running  bool           `json:"running"`
+		URL      string         `json:"url,omitempty"`
+		DNSReady bool           `json:"dns_ready"`
+		Tunnels  []tunnelStatus `json:"tunnels,omitempty"`
+	}
 
-	info, err := core.ReadTunnelInfo()
-	if err != nil || info == nil || info.PID == 0 {
+	tunnels := core.ReadAllTunnels()
+	if len(tunnels) == 0 {
 		jsonResponse(w, status{})
 		return
 	}
 
-	if !core.ProcessAlive(info.PID) {
-		// Stale — clean up.
-		core.CleanupTunnel(clusterName)
-		restoreIngresses()
-		jsonResponse(w, status{})
-		return
+	resp := status{}
+	for _, t := range tunnels {
+		alive := core.ProcessAlive(t.PID)
+		if !alive {
+			core.CleanupTunnel(clusterName, t.Name)
+			continue
+		}
+		ts := tunnelStatus{
+			Name:     t.Name,
+			Running:  true,
+			URL:      t.URL,
+			Service:  t.Service,
+			DNSReady: core.CheckDNSOnce(t.URL),
+		}
+		resp.Tunnels = append(resp.Tunnels, ts)
 	}
 
-	// Quick DNS check via public resolver so we don't tell the browser
-	// to visit a URL that will NXDOMAIN (and get cached).
-	dnsOK := core.CheckDNSOnce(info.URL)
+	// Backward compat: set top-level fields from the first active tunnel.
+	if len(resp.Tunnels) > 0 {
+		resp.Running = true
+		resp.URL = resp.Tunnels[0].URL
+		resp.DNSReady = resp.Tunnels[0].DNSReady
+	}
 
-	jsonResponse(w, status{Running: true, URL: info.URL, DNSReady: dnsOK})
+	jsonResponse(w, resp)
 }
 
 // ── DELETE /api/cluster ─────────────────────────────────────────

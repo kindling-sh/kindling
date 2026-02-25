@@ -43,10 +43,12 @@ func runDestroy(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Stop any running tunnel before tearing down the cluster.
-	if info, _ := core.ReadTunnelInfo(); info != nil && info.PID > 0 && core.ProcessAlive(info.PID) {
-		step("🛑", "Stopping tunnel...")
-		_ = stopTunnel()
+	// Stop any running tunnels before tearing down the cluster.
+	tunnels := core.ReadAllTunnels()
+	if len(tunnels) > 0 {
+		step("🛑", fmt.Sprintf("Stopping %d tunnel(s)...", len(tunnels)))
+		core.StopTunnelProcess()
+		core.CleanupTunnel(clusterName)
 	}
 
 	step("💥", fmt.Sprintf("kind delete cluster --name %s", clusterName))
