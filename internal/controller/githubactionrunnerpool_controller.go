@@ -57,17 +57,23 @@ type GithubActionRunnerPoolReconciler struct {
 	CIProvider ci.Provider
 }
 
-// provider returns the CI provider, defaulting to GitHub.
-func (r *GithubActionRunnerPoolReconciler) provider() ci.Provider {
+// providerFor returns the CI provider for a given CR, reading spec.ciProvider.
+// Falls back to the reconciler-level CIProvider, then to ci.Default() (GitHub).
+func (r *GithubActionRunnerPoolReconciler) providerFor(cr *appsv1alpha1.GithubActionRunnerPool) ci.Provider {
+	if cr.Spec.CIProvider != "" {
+		if p, err := ci.Get(cr.Spec.CIProvider); err == nil {
+			return p
+		}
+	}
 	if r.CIProvider != nil {
 		return r.CIProvider
 	}
 	return ci.Default()
 }
 
-// runner is a convenience accessor for the provider's RunnerAdapter.
-func (r *GithubActionRunnerPoolReconciler) runner() ci.RunnerAdapter {
-	return r.provider().Runner()
+// runnerFor is a convenience accessor for the provider's RunnerAdapter.
+func (r *GithubActionRunnerPoolReconciler) runnerFor(cr *appsv1alpha1.GithubActionRunnerPool) ci.RunnerAdapter {
+	return r.providerFor(cr).Runner()
 }
 
 // toK8sEnvVars converts ci.ContainerEnvVar to Kubernetes corev1.EnvVar.
@@ -203,7 +209,7 @@ func (r *GithubActionRunnerPoolReconciler) reconcileRunnerRBAC(ctx context.Conte
 	logger := log.FromContext(ctx)
 
 	username := cr.Spec.GitHubUsername
-	runnerAdapter := r.runner()
+	runnerAdapter := r.runnerFor(cr)
 	saName := runnerAdapter.ServiceAccountName(username)
 	crName := runnerAdapter.ClusterRoleName(username)
 	crbName := runnerAdapter.ClusterRoleBindingName(username)
@@ -374,7 +380,7 @@ func (r *GithubActionRunnerPoolReconciler) reconcileRunnerDeployment(ctx context
 }
 
 func (r *GithubActionRunnerPoolReconciler) buildRunnerDeployment(cr *appsv1alpha1.GithubActionRunnerPool) *appsv1.Deployment {
-	runnerAdapter := r.runner()
+	runnerAdapter := r.runnerFor(cr)
 	labels := runnerAdapter.RunnerLabels(cr.Spec.GitHubUsername, cr.Name)
 	spec := cr.Spec
 
@@ -621,7 +627,7 @@ done
 
 func (r *GithubActionRunnerPoolReconciler) updateRunnerPoolStatus(ctx context.Context, cr *appsv1alpha1.GithubActionRunnerPool) error {
 	deploy := &appsv1.Deployment{}
-	deployName := r.runner().DeploymentName(cr.Spec.GitHubUsername)
+	deployName := r.runnerFor(cr).DeploymentName(cr.Spec.GitHubUsername)
 	deployKey := types.NamespacedName{Name: deployName, Namespace: cr.Namespace}
 	if err := r.Get(ctx, deployKey, deploy); err == nil {
 		cr.Status.Replicas = *deploy.Spec.Replicas

@@ -29,7 +29,7 @@ func (g *GitLabProvider) CLILabels() CLILabels {
 	return CLILabels{
 		Username:        "GitLab username",
 		Repository:      "GitLab project (group/project)",
-		Token:           "GitLab runner registration token",
+		Token:           "GitLab PAT (api scope)",
 		SecretName:      "gitlab-runner-token",
 		CRDKind:         "GithubActionRunnerPool",
 		CRDPlural:       "githubactionrunnerpools",
@@ -76,9 +76,13 @@ func (a *GitLabRunnerAdapter) RunnerEnvVars(cfg RunnerEnvConfig) []ContainerEnvV
 	runnerTags := []string{"self-hosted", cfg.Username}
 	runnerTags = append(runnerTags, cfg.Labels...)
 
+	apiURL := a.APIBaseURL(platformURL)
+
 	envVars := []ContainerEnvVar{
 		{
-			Name: "REGISTRATION_TOKEN",
+			// The GitLab PAT (from the referenced Secret) is used at startup
+			// to create a runner authentication token via the API.
+			Name: "GITLAB_PAT",
 			SecretRef: &SecretRef{
 				Name: cfg.TokenSecretName,
 				Key:  cfg.TokenSecretKey,
@@ -89,16 +93,22 @@ func (a *GitLabRunnerAdapter) RunnerEnvVars(cfg RunnerEnvConfig) []ContainerEnvV
 			Value: platformURL,
 		},
 		{
+			// API base URL for token exchange.
+			Name:  "GITLAB_API_URL",
+			Value: apiURL,
+		},
+		{
+			// Project path for runner registration (e.g. "group/project").
+			Name:  "RUNNER_PROJECT_PATH",
+			Value: cfg.Repository,
+		},
+		{
 			Name:  "RUNNER_NAME",
 			Value: fmt.Sprintf("%s-%s", cfg.Username, cfg.CRName),
 		},
 		{
 			Name:  "RUNNER_TAG_LIST",
 			Value: strings.Join(runnerTags, ","),
-		},
-		{
-			Name:  "REGISTER_NON_INTERACTIVE",
-			Value: "true",
 		},
 		{
 			Name:  "RUNNER_EXECUTOR",
@@ -121,30 +131,101 @@ func (a *GitLabRunnerAdapter) RunnerEnvVars(cfg RunnerEnvConfig) []ContainerEnvV
 }
 
 // StartupScript returns the bash script that:
-//  1. Registers the runner with GitLab using the registration token
-//  2. Sets up a SIGTERM trap so the runner de-registers on pod shutdown
-//  3. Starts the runner process
+//  1. Exchanges the GitLab PAT for a runner authentication token via the API
+//  2. Registers the runner with gitlab-runner register using the auth token
+//  3. Sets up a SIGTERM trap so the runner de-registers on pod shutdown
+//  4. Starts the runner process
 func (a *GitLabRunnerAdapter) StartupScript() string {
 	return `#!/bin/bash
 set -uo pipefail
 
-echo "🔑 Registering GitLab runner..."
+# ── Exchange PAT for a runner authentication token ──────────────
+echo "🔑 Exchanging PAT for runner authentication token..."
+echo "   API: ${GITLAB_API_URL}/user/runners"
+
+# Encode project path for URL
+PROJECT_ID_ENC=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${RUNNER_PROJECT_PATH}', safe=''))" 2>/dev/null || echo "${RUNNER_PROJECT_PATH}")
+
+# Create a project-scoped runner via the REST API (GitLab 16.0+)
+# POST /user/runners creates a runner and returns an authentication token.
+HTTP_CODE=$(curl -sS -o /tmp/runner_response.json -w '%{http_code}' -X POST \
+  -H "PRIVATE-TOKEN: ${GITLAB_PAT}" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"runner_type\": \"project_type\",
+    \"project_id\": null,
+    \"description\": \"${RUNNER_NAME}\",
+    \"tag_list\": [$(echo \"${RUNNER_TAG_LIST}\" | sed 's/,/\",\"/g' | sed 's/^/\"/;s/$/\"/')],
+    \"run_untagged\": false
+  }" \
+  "${GITLAB_API_URL}/user/runners") || true
+
+echo "   HTTP status: ${HTTP_CODE}"
+
+if [ "${HTTP_CODE}" != "201" ]; then
+  echo "❌ GitLab API returned HTTP ${HTTP_CODE}:"
+  cat /tmp/runner_response.json 2>/dev/null || echo "(no response body)"
+  echo ""
+  echo "Falling back to project runners endpoint..."
+
+  # Fallback: look up project ID then use /projects/:id/runners
+  PROJECT_HTTP=$(curl -sS -o /tmp/project_response.json -w '%{http_code}' \
+    -H "PRIVATE-TOKEN: ${GITLAB_PAT}" \
+    "${GITLAB_API_URL}/projects/${PROJECT_ID_ENC}") || true
+
+  if [ "${PROJECT_HTTP}" = "200" ]; then
+    PROJECT_ID=$(python3 -c "import json; print(json.load(open('/tmp/project_response.json'))['id'])")
+    echo "   Project ID: ${PROJECT_ID}"
+
+    HTTP_CODE=$(curl -sS -o /tmp/runner_response.json -w '%{http_code}' -X POST \
+      -H "PRIVATE-TOKEN: ${GITLAB_PAT}" \
+      -H "Content-Type: application/json" \
+      -d "{
+        \"runner_type\": \"project_type\",
+        \"project_id\": ${PROJECT_ID},
+        \"description\": \"${RUNNER_NAME}\",
+        \"tag_list\": [$(echo \"${RUNNER_TAG_LIST}\" | sed 's/,/\",\"/g' | sed 's/^/\"/;s/$/\"/')],
+        \"run_untagged\": false
+      }" \
+      "${GITLAB_API_URL}/user/runners") || true
+
+    echo "   HTTP status: ${HTTP_CODE}"
+  fi
+
+  if [ "${HTTP_CODE}" != "201" ]; then
+    echo "❌ Failed to create runner:"
+    cat /tmp/runner_response.json 2>/dev/null || echo "(no response body)"
+    echo ""
+    echo "Make sure your PAT has the 'api' scope and you have Maintainer access."
+    exit 1
+  fi
+fi
+
+RUNNER_TOKEN=$(python3 -c "import json; print(json.load(open('/tmp/runner_response.json'))['token'])")
+RUNNER_ID=$(python3 -c "import json; print(json.load(open('/tmp/runner_response.json'))['id'])")
+echo "✅ Got runner token (runner ID: ${RUNNER_ID})"
+
+# ── Register the runner with the obtained token ──────────────────
+echo "🔧 Registering runner..."
 gitlab-runner register \
   --non-interactive \
   --url "${CI_SERVER_URL}" \
-  --registration-token "${REGISTRATION_TOKEN}" \
+  --token "${RUNNER_TOKEN}" \
   --executor "${RUNNER_EXECUTOR}" \
-  --name "${RUNNER_NAME}" \
-  --tag-list "${RUNNER_TAG_LIST}"
+  --name "${RUNNER_NAME}"
 
 # De-register on shutdown
 cleanup() {
   echo "🛑 Unregistering runner..."
   gitlab-runner unregister --name "${RUNNER_NAME}" || true
+  # Delete the runner via API so the token is invalidated
+  curl -sS -X DELETE \
+    -H "PRIVATE-TOKEN: ${GITLAB_PAT}" \
+    "${GITLAB_API_URL}/runners/${RUNNER_ID}" 2>/dev/null || true
 }
 trap cleanup SIGTERM SIGINT
 
-echo "✅ Runner registered"
+echo "✅ Runner registered and ready"
 
 # Start the runner (exec so PID 1 gets signals)
 exec gitlab-runner run

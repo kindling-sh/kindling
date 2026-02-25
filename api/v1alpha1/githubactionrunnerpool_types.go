@@ -97,6 +97,14 @@ type GithubActionRunnerPoolSpec struct {
 	// Volumes are additional volumes to attach to runner pods.
 	//+optional
 	Volumes []corev1.Volume `json:"volumes,omitempty"`
+
+	// CIProvider is the CI platform name ("github", "gitlab", "circleci").
+	// The controller uses this to select the correct runner adapter, startup
+	// script, environment variables, and token exchange logic.
+	// Defaults to "github" when empty.
+	//+kubebuilder:validation:Enum=github;gitlab;circleci;""
+	//+optional
+	CIProvider string `json:"ciProvider,omitempty"`
 }
 
 // SecretKeyRef references a key within a Secret.

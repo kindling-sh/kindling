@@ -27,19 +27,30 @@ var (
 	ghUsername string
 	ghRepo     string
 	ghPAT      string
+	ciProvider string
 )
 
 func init() {
-	labels := ci.Default().CLILabels()
-	runnersCmd.Flags().StringVarP(&ghUsername, "username", "u", "", labels.Username)
-	runnersCmd.Flags().StringVarP(&ghRepo, "repo", "r", "", labels.Repository)
-	runnersCmd.Flags().StringVarP(&ghPAT, "token", "t", "", labels.Token)
+	runnersCmd.Flags().StringVarP(&ghUsername, "username", "u", "", "CI platform username")
+	runnersCmd.Flags().StringVarP(&ghRepo, "repo", "r", "", "Repository (owner/repo or group/project)")
+	runnersCmd.Flags().StringVarP(&ghPAT, "token", "t", "", "CI platform access token")
+	runnersCmd.Flags().StringVar(&ciProvider, "provider", "", "CI provider (github, gitlab, circleci)")
 	rootCmd.AddCommand(runnersCmd)
 }
 
 func runRunners(cmd *cobra.Command, args []string) error {
 	reader := bufio.NewReader(os.Stdin)
-	labels := ci.Default().CLILabels()
+
+	// ── Resolve provider ──────────────────────────────────────────
+	provider := ci.Default()
+	if ciProvider != "" {
+		p, err := ci.Get(ciProvider)
+		if err != nil {
+			return fmt.Errorf("unknown provider %q (available: github, gitlab, circleci)", ciProvider)
+		}
+		provider = p
+	}
+	labels := provider.CLILabels()
 
 	// ── Collect missing values interactively ────────────────────
 	if ghUsername == "" {
@@ -57,16 +68,17 @@ func runRunners(cmd *cobra.Command, args []string) error {
 	}
 
 	// ── Create secret + runner pool CR ──────────────────────────
-	header("Setting up CI runner")
+	header(fmt.Sprintf("Setting up %s runner", provider.DisplayName()))
 
 	step("🔑", fmt.Sprintf("Creating %s secret", labels.SecretName))
-	step("🚀", fmt.Sprintf("Applying %s CR", labels.CRDKind))
+	step("🚀", fmt.Sprintf("Applying %s runner pool", provider.DisplayName()))
 
 	outputs, err := core.CreateRunnerPool(core.RunnerPoolConfig{
 		ClusterName: clusterName,
 		Username:    ghUsername,
 		Repo:        ghRepo,
 		Token:       ghPAT,
+		Provider:    ciProvider,
 	})
 	if err != nil {
 		return err
@@ -78,7 +90,7 @@ func runRunners(cmd *cobra.Command, args []string) error {
 	// ── Wait for deployment ─────────────────────────────────────
 	header("Waiting for runner deployment")
 
-	deployName := fmt.Sprintf("deployment/%s-runner", ghUsername)
+	deployName := "deployment/" + provider.Runner().DeploymentName(ghUsername)
 	step("⏳", fmt.Sprintf("Polling for %s to appear...", deployName))
 
 	found := false

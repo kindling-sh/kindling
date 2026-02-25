@@ -29,7 +29,7 @@ func (c *CircleCIProvider) CLILabels() CLILabels {
 	return CLILabels{
 		Username:        "CircleCI username",
 		Repository:      "CircleCI project (org/project)",
-		Token:           "CircleCI runner resource class token",
+		Token:           "CircleCI PAT (personal API token)",
 		SecretName:      "circleci-runner-token",
 		CRDKind:         "GithubActionRunnerPool",
 		CRDPlural:       "githubactionrunnerpools",
@@ -64,13 +64,29 @@ func (a *CircleCIRunnerAdapter) APIBaseURL(platformURL string) string {
 }
 
 func (a *CircleCIRunnerAdapter) RunnerEnvVars(cfg RunnerEnvConfig) []ContainerEnvVar {
+	apiURL := a.APIBaseURL(cfg.PlatformURL)
+
+	// Resource class name follows the pattern: <org>/self-hosted
+	// The org slug comes from the repository field (e.g. "myorg/myproject" → "myorg")
+	orgSlug := cfg.Repository
+	if idx := strings.Index(cfg.Repository, "/"); idx > 0 {
+		orgSlug = cfg.Repository[:idx]
+	}
+	resourceClass := fmt.Sprintf("%s/self-hosted", orgSlug)
+
 	envVars := []ContainerEnvVar{
 		{
-			Name: "CIRCLECI_RUNNER_API_AUTH_TOKEN",
+			// The CircleCI PAT (from the referenced Secret) is used at startup
+			// to create a runner resource class token via the API.
+			Name: "CIRCLECI_PAT",
 			SecretRef: &SecretRef{
 				Name: cfg.TokenSecretName,
 				Key:  cfg.TokenSecretKey,
 			},
+		},
+		{
+			Name:  "CIRCLECI_API_URL",
+			Value: apiURL,
 		},
 		{
 			Name:  "CIRCLECI_RUNNER_NAME",
@@ -79,6 +95,14 @@ func (a *CircleCIRunnerAdapter) RunnerEnvVars(cfg RunnerEnvConfig) []ContainerEn
 		{
 			Name:  "CIRCLECI_RUNNER_WORKING_DIRECTORY",
 			Value: cfg.WorkDir,
+		},
+		{
+			Name:  "CIRCLECI_RESOURCE_CLASS",
+			Value: resourceClass,
+		},
+		{
+			Name:  "CIRCLECI_ORG_SLUG",
+			Value: orgSlug,
 		},
 		{
 			Name:  "CIRCLECI_USERNAME",
@@ -90,24 +114,75 @@ func (a *CircleCIRunnerAdapter) RunnerEnvVars(cfg RunnerEnvConfig) []ContainerEn
 }
 
 // StartupScript returns the bash script that:
-//  1. Configures the CircleCI runner agent
-//  2. Sets up a SIGTERM trap for clean shutdown
-//  3. Starts the runner agent process
+//  1. Exchanges the CircleCI PAT for a runner resource class token via the API
+//  2. Configures the runner agent with the obtained token
+//  3. Sets up a SIGTERM trap for clean shutdown
+//  4. Starts the runner agent process
 func (a *CircleCIRunnerAdapter) StartupScript() string {
 	return `#!/bin/bash
 set -uo pipefail
 
-echo "🔑 Starting CircleCI runner agent..."
-echo "   Runner: ${CIRCLECI_RUNNER_NAME}"
+# ── Exchange PAT for a runner resource class token ──────────────
+echo "🔑 Exchanging PAT for runner resource class token..."
+echo "   API: ${CIRCLECI_API_URL}/runner/resource-class"
 
-# The circleci runner agent handles registration automatically
-# using the CIRCLECI_RUNNER_API_AUTH_TOKEN environment variable.
+# First, ensure the resource class exists (create if needed)
+HTTP_CODE=$(curl -sS -o /tmp/rc_response.json -w '%{http_code}' -X POST \
+  -H "Circle-Token: ${CIRCLECI_PAT}" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"resource_class\": \"${CIRCLECI_RESOURCE_CLASS}\",
+    \"description\": \"kindling self-hosted runner (${CIRCLECI_RUNNER_NAME})\"
+  }" \
+  "${CIRCLECI_API_URL}/runner/resource-class") || true
 
+echo "   Create resource class HTTP status: ${HTTP_CODE}"
+
+# 200 = already exists, 201 = created, both are fine
+if [ "${HTTP_CODE}" != "200" ] && [ "${HTTP_CODE}" != "201" ]; then
+  echo "⚠️  Could not create/verify resource class (HTTP ${HTTP_CODE})."
+  echo "   Proceeding — it may already exist."
+fi
+
+# Now create a runner token for this resource class
+HTTP_CODE=$(curl -sS -o /tmp/token_response.json -w '%{http_code}' -X POST \
+  -H "Circle-Token: ${CIRCLECI_PAT}" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"resource_class\": \"${CIRCLECI_RESOURCE_CLASS}\",
+    \"nickname\": \"${CIRCLECI_RUNNER_NAME}\"
+  }" \
+  "${CIRCLECI_API_URL}/runner/token") || true
+
+echo "   Create token HTTP status: ${HTTP_CODE}"
+
+if [ "${HTTP_CODE}" != "201" ]; then
+  echo "❌ CircleCI API returned HTTP ${HTTP_CODE}:"
+  cat /tmp/token_response.json 2>/dev/null || echo "(no response body)"
+  echo ""
+  echo "Make sure your PAT has the 'Self-Hosted Runner' scope and"
+  echo "you have admin access to the ${CIRCLECI_ORG_SLUG} organization."
+  exit 1
+fi
+
+RUNNER_TOKEN=$(python3 -c "import json; print(json.load(open('/tmp/token_response.json'))['token'])")
+TOKEN_ID=$(python3 -c "import json; print(json.load(open('/tmp/token_response.json'))['id'])")
+echo "✅ Got runner token (token ID: ${TOKEN_ID})"
+
+# Export the runner token for the agent
+export CIRCLECI_RUNNER_API_AUTH_TOKEN="${RUNNER_TOKEN}"
+
+# Clean up on shutdown
 cleanup() {
   echo "🛑 Stopping runner agent..."
-  # The agent handles de-registration on graceful shutdown
+  # Revoke the runner token
+  curl -sS -X DELETE \
+    -H "Circle-Token: ${CIRCLECI_PAT}" \
+    "${CIRCLECI_API_URL}/runner/token/${TOKEN_ID}" 2>/dev/null || true
 }
 trap cleanup SIGTERM SIGINT
+
+echo "✅ Runner configured and ready"
 
 # Start the runner agent (exec so PID 1 gets signals)
 exec circleci-runner machine --name "${CIRCLECI_RUNNER_NAME}" \

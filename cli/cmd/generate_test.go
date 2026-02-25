@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/jeffvincent/kindling/pkg/ci"
 )
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -554,7 +556,7 @@ func main() { http.ListenAndServe(":8080", nil) }`,
 		},
 	}
 
-	system, user := buildGeneratePrompt(ctx)
+	system, user := buildGeneratePrompt(ctx, ci.Default())
 
 	// System prompt should be non-empty and contain key instructions
 	if system == "" {
@@ -599,7 +601,7 @@ func TestBuildGeneratePrompt_WithSecrets(t *testing.T) {
 		sourceSnippets:  make(map[string]string),
 	}
 
-	_, user := buildGeneratePrompt(ctx)
+	_, user := buildGeneratePrompt(ctx, ci.Default())
 
 	if !strings.Contains(user, "STRIPE_API_KEY") {
 		t.Error("user prompt should list detected credentials")
@@ -621,7 +623,7 @@ func TestBuildGeneratePrompt_WithOAuth(t *testing.T) {
 		sourceSnippets:    make(map[string]string),
 	}
 
-	_, user := buildGeneratePrompt(ctx)
+	_, user := buildGeneratePrompt(ctx, ci.Default())
 
 	if !strings.Contains(user, "NextAuth.js") {
 		t.Error("user prompt should include OAuth hints")
@@ -646,7 +648,7 @@ func TestBuildGeneratePrompt_WithComposeFile(t *testing.T) {
 		sourceSnippets: make(map[string]string),
 	}
 
-	_, user := buildGeneratePrompt(ctx)
+	_, user := buildGeneratePrompt(ctx, ci.Default())
 
 	if !strings.Contains(user, "docker-compose.yml") {
 		t.Error("user prompt should contain compose file reference")
