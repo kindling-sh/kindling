@@ -74,6 +74,18 @@ spec:
               jobs triggered by the developer's pushes. Container images are built in-cluster
               using Kaniko (no Docker daemon required) and pushed to an in-cluster registry.
             properties:
+              ciProvider:
+                description: |-
+                  CIProvider is the CI platform name ("github", "gitlab", "circleci").
+                  The controller uses this to select the correct runner adapter, startup
+                  script, environment variables, and token exchange logic.
+                  Defaults to "github" when empty.
+                enum:
+                - github
+                - gitlab
+                - circleci
+                - ""
+                type: string
               env:
                 description: Env is a list of extra environment variables to set in
                   the runner container.

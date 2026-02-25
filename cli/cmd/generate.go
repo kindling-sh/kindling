@@ -16,34 +16,36 @@ import (
 
 var generateCmd = &cobra.Command{
 	Use:   "generate",
-	Short: "Generate a GitHub Actions workflow for a repo using AI",
+	Short: "Generate a CI workflow for a repo using AI",
 	Long: `Scans a local repository and uses a GenAI model (bring your own API
-key) to generate a kindling-compatible GitHub Actions workflow.
+key) to generate a kindling-compatible CI workflow.
 
 The command analyzes Dockerfiles, dependency manifests, and source code
 to detect services and backing dependencies, then produces a
-dev-deploy.yml that uses the reusable kindling-build and kindling-deploy
-composite actions.
+dev-deploy workflow that uses the reusable kindling-build and
+kindling-deploy composite actions.
 
 Supports OpenAI-compatible and Anthropic APIs.
+Supports GitHub Actions, GitLab CI, and CircleCI via --ci-provider.
 
 Examples:
   kindling generate --api-key sk-... --repo-path /path/to/my-app
   kindling generate -k sk-... -r . --provider openai --model o3
-  kindling generate -k sk-... -r . --model gpt-4o
+  kindling generate -k sk-... -r . --ci-provider gitlab
   kindling generate -k sk-ant-... -r . --provider anthropic
   kindling generate -k sk-... -r . --dry-run`,
 	RunE: runGenerate,
 }
 
 var (
-	genAPIKey   string
-	genRepoPath string
-	genProvider string
-	genModel    string
-	genOutput   string
-	genBranch   string
-	genDryRun   bool
+	genAPIKey     string
+	genRepoPath   string
+	genProvider   string
+	genModel      string
+	genOutput     string
+	genBranch     string
+	genDryRun     bool
+	genCIProvider string
 )
 
 func init() {
@@ -54,6 +56,7 @@ func init() {
 	generateCmd.Flags().StringVarP(&genOutput, "output", "o", "", "Output path (default: <repo-path>/.github/workflows/dev-deploy.yml)")
 	generateCmd.Flags().StringVarP(&genBranch, "branch", "b", "", "Branch to trigger on (default: auto-detect from git, fallback to 'main')")
 	generateCmd.Flags().BoolVar(&genDryRun, "dry-run", false, "Print the generated workflow to stdout instead of writing a file")
+	generateCmd.Flags().StringVar(&genCIProvider, "ci-provider", "", "CI platform to generate for (github, gitlab, circleci; default: github)")
 	_ = generateCmd.MarkFlagRequired("api-key")
 	rootCmd.AddCommand(generateCmd)
 }
@@ -77,8 +80,18 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// ── Resolve CI provider ──────────────────────────────────────
+	ciProv := ci.Default()
+	if genCIProvider != "" {
+		p, err := ci.Get(genCIProvider)
+		if err != nil {
+			return fmt.Errorf("unknown CI provider %q (available: github, gitlab, circleci)", genCIProvider)
+		}
+		ciProv = p
+	}
+
 	if genOutput == "" {
-		wfGen := ci.Default().Workflow()
+		wfGen := ciProv.Workflow()
 		genOutput = filepath.Join(repoPath, wfGen.DefaultOutputPath())
 	}
 
@@ -131,7 +144,7 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 	header("Generating workflow with AI")
 	step("🤖", fmt.Sprintf("Provider: %s, Model: %s", genProvider, genModel))
 
-	systemPrompt, userPrompt := buildGeneratePrompt(repoCtx)
+	systemPrompt, userPrompt := buildGeneratePrompt(repoCtx, ciProv)
 
 	step("⏳", "Calling API (this may take a moment)...")
 	workflow, err := callGenAI(genProvider, genAPIKey, genModel, systemPrompt, userPrompt)
@@ -581,8 +594,8 @@ func prioritizeSourceFiles(files []string, envVarFiles map[string]bool) []string
 // Prompt Builder
 // ────────────────────────────────────────────────────────────────────────────
 
-func buildGeneratePrompt(ctx *repoContext) (system, user string) {
-	wfGen := ci.Default().Workflow()
+func buildGeneratePrompt(ctx *repoContext, provider ci.Provider) (system, user string) {
+	wfGen := provider.Workflow()
 
 	// The system prompt is now owned by the CI provider — it assembles
 	// shared kindling domain knowledge (Kaniko, deps, deploy philosophy)
