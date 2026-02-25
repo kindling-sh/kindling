@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/jeffvincent/kindling/pkg/ci"
 	"github.com/spf13/cobra"
 )
 
@@ -93,9 +94,10 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	}
 
 	// ── Runner Pools ────────────────────────────────────────────
-	header("GitHub Actions Runner Pools")
+	labels := ci.Default().CLILabels()
+	header(labels.CRDListHeader)
 
-	rpOut, err := runCapture("kubectl", "get", "githubactionrunnerpools",
+	rpOut, err := runCapture("kubectl", "get", labels.CRDPlural,
 		"-o", "custom-columns=NAME:.metadata.name,USERNAME:.spec.githubUsername,REPO:.spec.repository",
 		"--no-headers")
 	if err != nil || rpOut == "" || strings.Contains(rpOut, "No resources") {

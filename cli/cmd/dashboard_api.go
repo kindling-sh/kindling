@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/jeffvincent/kindling/pkg/ci"
 )
 
 // ── /api/cluster — cluster overview ─────────────────────────────
@@ -134,7 +136,8 @@ func handleDSEs(w http.ResponseWriter, r *http.Request) {
 // ── /api/runners — GithubActionRunnerPools ──────────────────────
 
 func handleRunners(w http.ResponseWriter, r *http.Request) {
-	out, err := kubectlJSON("get", "githubactionrunnerpools", "-o", "json")
+	labels := ci.Default().CLILabels()
+	out, err := kubectlJSON("get", labels.CRDPlural, "-o", "json")
 	if err != nil {
 		jsonResponse(w, map[string]interface{}{"items": []interface{}{}})
 		return

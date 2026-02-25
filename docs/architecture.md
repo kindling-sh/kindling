@@ -153,7 +153,7 @@ deleting the CR garbage-collects everything.
 sub-spec and stores it as the `apps.example.com/spec-hash` annotation.
 On reconcile, if the hash hasn't changed, the update is skipped.
 
-### 3. GitHub Actions Runner Pod
+### 3. CI Runner Pod
 
 Created by the `GithubActionRunnerPool` controller. Each runner pod has:
 
@@ -491,6 +491,139 @@ all child resources automatically.
 
 ---
 
+## CI Provider Abstraction *(upcoming)*
+
+kindling is decoupling all CI/CD-platform-specific code behind a
+provider interface layer in `pkg/ci`. Today the only implementation is
+GitHub Actions, but the interfaces are designed so that a GitLab CI,
+Bitbucket Pipelines, or other provider can be added without touching
+the operator or CLI code.
+
+### Provider registry
+
+Providers register themselves at init-time via `ci.Register()`. All
+consumers call `ci.Default()` to get the active provider — today that
+returns the GitHub Actions provider.
+
+```go
+provider := ci.Default()              // → GitHubProvider
+provider.Name()                        // "github"
+provider.DisplayName()                 // "GitHub Actions"
+provider.Runner()                      // → RunnerAdapter
+provider.Workflow()                    // → WorkflowGenerator
+provider.CLILabels()                   // → CLILabels
+```
+
+### Interface: `Provider`
+
+Top-level interface that wraps all provider-specific functionality.
+
+| Method | Returns | Description |
+|---|---|---|
+| `Name()` | `string` | Short identifier (`"github"`, `"gitlab"`) |
+| `DisplayName()` | `string` | Human-readable name (`"GitHub Actions"`) |
+| `Runner()` | `RunnerAdapter` | Runner registration and lifecycle |
+| `Workflow()` | `WorkflowGenerator` | AI workflow file generation |
+| `CLILabels()` | `CLILabels` | Human-facing labels for CLI prompts |
+
+### Interface: `RunnerAdapter`
+
+Abstracts CI runner registration and lifecycle management. The operator
+controller uses this interface to build runner Deployments, RBAC
+resources, and startup scripts without knowing which CI platform is in use.
+
+| Method | Signature | Description |
+|---|---|---|
+| `DefaultImage` | `() string` | Container image for self-hosted runners |
+| `DefaultTokenKey` | `() string` | Key name within the CI token Secret |
+| `APIBaseURL` | `(platformURL string) string` | Compute platform API URL from base URL |
+| `RunnerEnvVars` | `(cfg RunnerEnvConfig) []ContainerEnvVar` | Env vars for the runner container |
+| `StartupScript` | `() string` | Shell script to register, run, and de-register the runner |
+| `RunnerLabels` | `(username, crName string) map[string]string` | Kubernetes labels for runner resources |
+| `DeploymentName` | `(username string) string` | Runner Deployment name |
+| `ServiceAccountName` | `(username string) string` | Runner ServiceAccount name |
+| `ClusterRoleName` | `(username string) string` | Runner ClusterRole name |
+| `ClusterRoleBindingName` | `(username string) string` | Runner ClusterRoleBinding name |
+
+**Supporting types:**
+
+```go
+// RunnerEnvConfig — provider-agnostic runner configuration
+type RunnerEnvConfig struct {
+    Username, Repository, PlatformURL string
+    TokenSecretName, TokenSecretKey   string
+    Labels                            []string
+    RunnerGroup, WorkDir, CRName      string
+}
+
+// ContainerEnvVar — either a plain value or a Secret reference
+type ContainerEnvVar struct {
+    Name      string
+    Value     string      // plain text
+    SecretRef *SecretRef  // mutually exclusive with Value
+}
+
+type SecretRef struct { Name, Key string }
+```
+
+### Interface: `WorkflowGenerator`
+
+Abstracts CI workflow file generation for `kindling generate`.
+
+| Method | Signature | Description |
+|---|---|---|
+| `DefaultOutputPath` | `() string` | Default workflow file path (e.g. `.github/workflows/dev-deploy.yml`) |
+| `PromptContext` | `() PromptContext` | CI-specific values interpolated into the AI system prompt |
+| `ExampleWorkflows` | `() (single, multi string)` | Reference workflow examples for the AI prompt |
+| `StripTemplateExpressions` | `(content string) string` | Remove CI-specific template expressions (for fuzz/analysis) |
+
+**`PromptContext` struct:**
+
+| Field | Type | Example (GitHub) |
+|---|---|---|
+| `PlatformName` | `string` | `"GitHub Actions"` |
+| `WorkflowNoun` | `string` | `"workflow"` |
+| `BuildActionRef` | `string` | `"kindling-sh/kindling/.github/actions/kindling-build@main"` |
+| `DeployActionRef` | `string` | `"kindling-sh/kindling/.github/actions/kindling-deploy@main"` |
+| `CheckoutAction` | `string` | `"actions/checkout@v4"` |
+| `ActorExpr` | `string` | `"${{ github.actor }}"` |
+| `SHAExpr` | `string` | `"${{ github.sha }}"` |
+| `WorkspaceExpr` | `string` | `"${{ github.workspace }}"` |
+| `RunnerSpec` | `string` | `[self-hosted, "${{ github.actor }}"]` |
+| `EnvTagExpr` | `string` | `"${{ github.actor }}-${{ github.sha }}"` |
+| `TriggerBlock` | `func(branch) string` | YAML trigger block for a given branch |
+| `WorkflowFileDescription` | `string` | `"GitHub Actions workflow"` |
+
+### Struct: `CLILabels`
+
+Human-facing labels used throughout CLI commands for prompts, output,
+and resource naming.
+
+| Field | Type | Example (GitHub) |
+|---|---|---|
+| `Username` | `string` | `"GitHub username"` |
+| `Repository` | `string` | `"GitHub repository (owner/repo)"` |
+| `Token` | `string` | `"GitHub PAT (repo scope)"` |
+| `SecretName` | `string` | `"github-runner-token"` |
+| `CRDKind` | `string` | `"GithubActionRunnerPool"` |
+| `CRDPlural` | `string` | `"githubactionrunnerpools"` |
+| `CRDListHeader` | `string` | `"GitHub Actions Runner Pools"` |
+| `RunnerComponent` | `string` | `"github-actions-runner"` |
+| `ActionsURLFmt` | `string` | `"https://github.com/%s/actions"` |
+| `CRDAPIVersion` | `string` | `"apps.example.com/v1alpha1"` |
+
+### Adding a new provider
+
+To add support for a new CI platform (e.g. GitLab CI):
+
+1. Create `pkg/ci/gitlab.go` implementing `Provider`, `RunnerAdapter`,
+   and `WorkflowGenerator`
+2. Register it in an `init()` function: `Register(&GitLabProvider{})`
+3. No changes needed in the operator controller or CLI commands — they
+   call `ci.Default()` and use the interfaces
+
+---
+
 ## Project layout
 
 ```
@@ -498,6 +631,10 @@ kindling/
 ├── api/v1alpha1/                   # CRD type definitions
 ├── internal/controller/            # Operator reconcile logic
 ├── cmd/main.go                     # Operator entrypoint
+├── pkg/ci/                         # CI provider abstraction (upcoming)
+│   ├── types.go                    # Provider, RunnerAdapter, WorkflowGenerator interfaces
+│   ├── registry.go                 # Provider registry (Register, Default, Get)
+│   └── github.go                   # GitHub Actions implementation
 ├── cli/                            # CLI tool (separate Go module)
 │   ├── cmd/
 │   │   ├── root.go

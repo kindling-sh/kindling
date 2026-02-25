@@ -1,0 +1,66 @@
+# ─────────────────────────────────────────────────────────────────
+# repos-candidates.txt — Deeply validated repos for fuzz testing
+# Generated: 2026-02-24 19:05:06
+# Validated: 5 repos
+# Recommended: 1, Stretch: 2, Maybe: 0, Skipped: 2
+# ─────────────────────────────────────────────────────────────────
+
+# ═══ RECOMMENDED (score ≥ 60, self-contained, no pipeline gaps) ═
+
+# score=68 ⭐130214 TypeScript 3df ports:3000,5001 [fixable-issues]
+#     web/Dockerfile: 🟢 multi-stage build (self-contained)
+#     web/Dockerfile: 🟢 uses COPY --from= (proper multi-stage)
+#     web/Dockerfile: 🟢 has dependency install step
+#     web/Dockerfile: 🟢 EXPOSE 3000
+#     web/Dockerfile: 🟡 npm without cache redirect (fixable via patch)
+#     docker/couchbase-server/Dockerfile: 🟡 no CMD/ENTRYPOINT
+#     docker/couchbase-server/Dockerfile: 🟡 non-standard base image: couchbase/server:latest
+#     api/Dockerfile: 🟢 multi-stage build (self-contained)
+#     api/Dockerfile: 🟢 uses COPY --from= (proper multi-stage)
+#     api/Dockerfile: 🟢 has dependency install step
+#     api/Dockerfile: 🟢 EXPOSE 5001
+https://github.com/langgenius/dify
+
+
+# ═══ STRETCH (will surface pipeline bugs with clear fix paths) ══
+# These repos are buildable but exercise features the pipeline
+# doesn't handle yet. Each 🧪 lists the gap and which file to fix.
+
+# score=95 ⭐182003 Python 4df ports:8000,3000 [2 pipeline gap(s)]
+#     classic/forge/Dockerfile: 🟢 multi-stage build (self-contained)
+#     classic/forge/Dockerfile: 🟢 has dependency install step
+#     classic/forge/Dockerfile: 🟢 EXPOSE 8000
+#     classic/forge/Dockerfile: 🟡 poetry install without --no-root (fixable via patch)
+#     classic/Dockerfile.autogpt: 🟢 multi-stage build (self-contained)
+#     classic/Dockerfile.autogpt: 🟢 has dependency install step
+#     autogpt_platform/backend/Dockerfile: 🟢 multi-stage build (self-contained)
+#     autogpt_platform/backend/Dockerfile: 🟢 uses COPY --from= (proper multi-stage)
+#     autogpt_platform/backend/Dockerfile: 🟢 has dependency install step
+#     autogpt_platform/frontend/Dockerfile: 🟢 multi-stage build (self-contained)
+#     autogpt_platform/frontend/Dockerfile: 🟢 uses COPY --from= (proper multi-stage)
+#     autogpt_platform/frontend/Dockerfile: 🟢 has dependency install step
+#     autogpt_platform/frontend/Dockerfile: 🟢 EXPOSE 3000
+#     autogpt_platform/frontend/Dockerfile: 🟡 npm without cache redirect (fixable via patch)
+#   🧪 ARG before FROM — parameterised base image
+#     fix → run.sh: resolve ARG default or pass --build-arg
+#   🧪 RUN --mount=type=cache
+#     fix → run.sh: strip --mount flags for Kaniko or emulate with build args
+https://github.com/Significant-Gravitas/AutoGPT
+
+# score=100 ⭐124821 Python compose+build 1df ports:8080 [2 pipeline gap(s)]
+#     Dockerfile: 🟢 multi-stage build (self-contained)
+#     Dockerfile: 🟢 has dependency install step
+#     Dockerfile: 🟢 EXPOSE 8080
+#     Dockerfile: 🟡 BuildKit platform ARGs (fixable via patch)
+#     Dockerfile: 🟡 npm without cache redirect (fixable via patch)
+#   🧪 ARG before FROM — parameterised base image
+#     fix → run.sh: resolve ARG default or pass --build-arg
+#   🧪 HEALTHCHECK instruction in Dockerfile
+#     fix → generate.go: map HEALTHCHECK to K8s readinessProbe
+https://github.com/open-webui/open-webui
+
+
+# ═══ SKIPPED (not suitable) ═══════════════════════════════════
+
+# avelino/awesome-go: skip:no-dockerfiles
+# louislam/uptime-kuma: skip:low-score

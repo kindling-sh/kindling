@@ -73,9 +73,9 @@ This creates a Kind cluster named `dev` with:
 
 ---
 
-## Step 4 — Register a GitHub Actions runner
+## Step 4 — Register a CI runner
 
-You need a GitHub Personal Access Token (PAT) with the `repo` scope.
+kindling currently uses GitHub Actions. You need a GitHub Personal Access Token (PAT) with the `repo` scope.
 
 ```bash
 kindling runners -u <your-github-username> -r <owner/repo> -t <your-pat>
