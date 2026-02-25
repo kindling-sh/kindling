@@ -324,9 +324,12 @@ for b in d.get('builds', []):
       fi
     else
       all_builds_ok=false
-      build_err=$(tail -5 "$repo_log.build.${build_name}.log" 2>/dev/null | tr '\n' ' ' | cut -c1-200)
+      build_err=$(tail -20 "$repo_log.build.${build_name}.log" 2>/dev/null | tr '\n' ' ' | cut -c1-500)
       emit "$repo_url" "docker_build" "fail" "${build_name} — $build_err" "$dur"
       log "FAIL" "build ${build_name}"
+      echo "  ┌─── $build_name build failure (last 30 lines) ───" >&2
+      tail -30 "$repo_log.build.${build_name}.log" 2>/dev/null | sed 's/^/  │   /' >&2 || true
+      echo "  └────────────────────────────────────────" >&2
     fi
   done <<< "$builds_json"
 
@@ -375,14 +378,89 @@ for b in d.get('builds', []):
         -n "$NAMESPACE" --timeout="${TIMEOUT_READY}s" \
         >"$repo_log.rollout.${dse_name}.log" 2>&1; then
       all_ready=false
-      emit "$repo_url" "rollout" "fail" "$dse_name did not become ready" "0"
-      log "FAIL" "rollout $dse_name"
 
-      # Capture diagnostics
+      # ── Collect diagnostics and print them inline ────────────
       kubectl get pods -n "$NAMESPACE" -l "app=$dse_name" -o wide \
         >"$repo_log.pods.${dse_name}.log" 2>&1 || true
-      kubectl logs -n "$NAMESPACE" -l "app=$dse_name" --tail=30 \
+      kubectl describe pods -n "$NAMESPACE" -l "app=$dse_name" \
+        >"$repo_log.describe.${dse_name}.log" 2>&1 || true
+      kubectl logs -n "$NAMESPACE" -l "app=$dse_name" --tail=50 --all-containers \
         >"$repo_log.podlogs.${dse_name}.log" 2>&1 || true
+      kubectl get events -n "$NAMESPACE" --sort-by=.lastTimestamp \
+        --field-selector "involvedObject.name=$dse_name" \
+        >"$repo_log.events.${dse_name}.log" 2>&1 || true
+
+      # Categorise the failure from pod status + events
+      local fail_category="unknown"
+      local fail_reason=""
+
+      # Check pod container statuses for known patterns
+      local pod_status_json
+      pod_status_json=$(kubectl get pods -n "$NAMESPACE" -l "app=$dse_name" \
+        -o jsonpath='{range .items[0].status.containerStatuses[*]}{.state}{"\n"}{end}' 2>/dev/null) || true
+
+      if echo "$pod_status_json" | grep -qi "ImagePullBackOff\|ErrImagePull"; then
+        fail_category="image_pull"
+        fail_reason="Image pull failed — image may not exist in the cluster registry"
+      elif echo "$pod_status_json" | grep -qi "CrashLoopBackOff"; then
+        fail_category="crash_loop"
+        # Extract exit code and last log line for crash reason
+        local exit_code
+        exit_code=$(kubectl get pods -n "$NAMESPACE" -l "app=$dse_name" \
+          -o jsonpath='{.items[0].status.containerStatuses[0].lastState.terminated.exitCode}' 2>/dev/null) || true
+        local last_log
+        last_log=$(tail -3 "$repo_log.podlogs.${dse_name}.log" 2>/dev/null | tr '\n' ' ' | cut -c1-300)
+        fail_reason="CrashLoopBackOff (exit $exit_code): $last_log"
+      elif echo "$pod_status_json" | grep -qi "OOMKilled"; then
+        fail_category="oom_killed"
+        fail_reason="Container was OOMKilled — needs more memory"
+      elif echo "$pod_status_json" | grep -qi "CreateContainerConfigError"; then
+        fail_category="config_error"
+        fail_reason="Container config error — missing ConfigMap, Secret, or env var"
+      fi
+
+      # If still unknown, check for common log patterns
+      if [ "$fail_category" = "unknown" ]; then
+        local log_tail
+        log_tail=$(tail -20 "$repo_log.podlogs.${dse_name}.log" 2>/dev/null || true)
+        if echo "$log_tail" | grep -qiE "connection refused|ECONNREFUSED|could not connect|no such host"; then
+          fail_category="missing_dependency"
+          fail_reason="App can't reach a dependency (DB, cache, or upstream service)"
+        elif echo "$log_tail" | grep -qiE "FATAL|panic|Traceback|Error:.*not found|MODULE_NOT_FOUND"; then
+          fail_category="app_crash"
+          fail_reason="App crashed on startup"
+        elif echo "$log_tail" | grep -qiE "database.*does not exist|relation.*does not exist|OperationalError"; then
+          fail_category="missing_database"
+          fail_reason="Database not initialised or missing"
+        elif echo "$log_tail" | grep -qiE "REDIS_URL|MONGO|AMQP|RABBITMQ|KAFKA"; then
+          fail_category="missing_dependency"
+          fail_reason="Missing backing service (Redis/Mongo/RabbitMQ/Kafka)"
+        fi
+      fi
+
+      # Fall back to last meaningful pod log line
+      if [ "$fail_category" = "unknown" ]; then
+        fail_reason=$(tail -5 "$repo_log.podlogs.${dse_name}.log" 2>/dev/null | tr '\n' ' ' | cut -c1-300)
+        [ -z "$fail_reason" ] && fail_reason="no pod logs available"
+      fi
+
+      log "FAIL" "rollout $dse_name [$fail_category]"
+
+      # ── Print diagnostics inline so they appear in GH Actions ──
+      echo "  ┌─── $dse_name rollout diagnostics [$fail_category] ───" >&2
+      echo "  │ Reason: $fail_reason" >&2
+      echo "  │" >&2
+      echo "  │ Pod status:" >&2
+      sed 's/^/  │   /' "$repo_log.pods.${dse_name}.log" 2>/dev/null >&2 || true
+      echo "  │" >&2
+      echo "  │ Container logs (last 30 lines):" >&2
+      tail -30 "$repo_log.podlogs.${dse_name}.log" 2>/dev/null | sed 's/^/  │   /' >&2 || true
+      echo "  │" >&2
+      echo "  │ Events:" >&2
+      tail -10 "$repo_log.events.${dse_name}.log" 2>/dev/null | sed 's/^/  │   /' >&2 || true
+      echo "  └────────────────────────────────────────" >&2
+
+      emit "$repo_url" "rollout" "fail" "$fail_reason" "0" "0" "[]" "$fail_category"
     else
       log "PASS" "rollout $dse_name ready"
     fi

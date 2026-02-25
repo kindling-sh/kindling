@@ -61,12 +61,23 @@ def print_summary(results_dir, mode="static", provider="openai"):
                 stage = r["stage"]
                 if repo not in results:
                     results[repo] = {}
-                results[repo][stage] = r
+                # For rollout, keep the worst status (fail > partial > pass)
+                # and accumulate categories across DSE services
+                if stage == "rollout" and stage in results[repo]:
+                    existing = results[repo][stage]
+                    priority = {"fail": 0, "partial": 1, "pass": 2, "skip": 3}
+                    if priority.get(r["status"], 9) < priority.get(existing["status"], 9):
+                        # Carry forward the category from the worse entry
+                        results[repo][stage] = r
+                    elif r.get("category") and not existing.get("category"):
+                        existing["category"] = r.get("category", "")
+                else:
+                    results[repo][stage] = r
 
         print("### Per-Repo Breakdown")
         print()
-        print("| Repo | Generate | YAML | Static | Issues |")
-        print("|------|----------|------|--------|--------|")
+        print("| Repo | Generate | YAML | Static | Build | Deploy | Category | Detail |")
+        print("|------|----------|------|--------|-------|--------|----------|--------|")
 
         for repo, stages in sorted(results.items()):
             gen = "✅" if stages.get("generate", {}).get("status") == "pass" else "❌"
@@ -78,8 +89,52 @@ def print_summary(results_dir, mode="static", provider="openai"):
                 sa_status = "⚠️"
             else:
                 sa_status = "❌"
-            issues = sa.get("detail", "")
-            print(f"| {repo} | {gen} | {yml} | {sa_status} | {issues} |")
+
+            # Build status
+            build_entries = [s for k, s in stages.items() if k == "docker_build"]
+            if build_entries:
+                b = build_entries[0]
+                build_status = "✅" if b.get("status") == "pass" else ("⏭️" if b.get("status") == "skip" else "❌")
+            else:
+                build_status = "—"
+
+            # Deploy/rollout status
+            rollout = stages.get("rollout", {})
+            if rollout.get("status") == "pass":
+                deploy_status = "✅"
+            elif rollout.get("status") == "partial":
+                deploy_status = "⚠️"
+            elif rollout.get("status") == "fail":
+                deploy_status = "❌"
+            elif rollout.get("status") == "skip":
+                deploy_status = "⏭️"
+            else:
+                deploy_status = "—"
+
+            category = rollout.get("category", "")
+            detail = rollout.get("detail", sa.get("detail", ""))
+            # Truncate detail for table readability
+            if len(detail) > 80:
+                detail = detail[:77] + "..."
+
+            print(f"| {repo} | {gen} | {yml} | {sa_status} | {build_status} | {deploy_status} | {category} | {detail} |")
+
+        # ── Failure category summary ──────────────────────────
+        categories = {}
+        for repo, stages in results.items():
+            rollout = stages.get("rollout", {})
+            cat = rollout.get("category", "")
+            if cat and rollout.get("status") in ("fail", "partial"):
+                categories.setdefault(cat, []).append(repo)
+
+        if categories:
+            print()
+            print("### Rollout Failure Categories")
+            print()
+            print("| Category | Count | Repos |")
+            print("|----------|-------|-------|")
+            for cat, repos in sorted(categories.items(), key=lambda x: -len(x[1])):
+                print(f"| `{cat}` | {len(repos)} | {', '.join(repos)} |")
 
 
 def check_rate(results_dir, threshold):
@@ -158,6 +213,43 @@ ISSUE_FILE_MAP = {
         "action": "Pods didn't become Ready. Check pod logs for crash reasons. "
                   "Verify env vars and dependency resolution in the DSE manifest.",
     },
+    "crash_loop": {
+        "files": ["cli/cmd/genai.go", "test/fuzz/fix-dockerfile.py"],
+        "action": "Container crashes on startup. Check if the entrypoint/CMD "
+                  "requires args, env vars, or a config file not present. "
+                  "Review pod logs in the diagnostics block.",
+    },
+    "missing_dependency": {
+        "files": ["cli/cmd/genai.go"],
+        "action": "App can't reach a backing service (DB, Redis, etc.). Check "
+                  "if the LLM-generated workflow includes the dependency and "
+                  "whether the DSE manifest wires env vars to the right hostname.",
+    },
+    "missing_database": {
+        "files": ["cli/cmd/genai.go"],
+        "action": "Database exists but is not initialised (missing schema/migrations). "
+                  "Consider adding an init container or startup migration step.",
+    },
+    "image_pull": {
+        "files": ["test/fuzz/run.sh", "test/fuzz/analyze.py"],
+        "action": "Image wasn't found in the cluster. Check kind load step or "
+                  "whether the DSE image tag matches what was built.",
+    },
+    "config_error": {
+        "files": ["cli/cmd/genai.go"],
+        "action": "Missing ConfigMap, Secret, or env var reference. Check the "
+                  "DSE manifest for references to objects that don't exist.",
+    },
+    "oom_killed": {
+        "files": [],
+        "action": "Container was OOMKilled. The app needs more memory than the "
+                  "default resource limits. Not a kindling bug.",
+    },
+    "app_crash": {
+        "files": ["cli/cmd/genai.go", "test/fuzz/fix-dockerfile.py"],
+        "action": "App crashed on startup (panic, uncaught exception, missing module). "
+                  "Check if the Dockerfile or entrypoint is correct for this repo.",
+    },
     "e2e": {
         "files": ["cli/cmd/genai.go"],
         "action": "Networking check failed. Verify port and service name in "
@@ -207,12 +299,14 @@ def write_action_items(results_dir, output_path=None):
 
             # Docker build / rollout failures
             elif status == "fail" and stage in ("docker_build", "rollout", "e2e"):
-                info = ISSUE_FILE_MAP.get(stage, {})
+                category = r.get("category", stage)
+                info = ISSUE_FILE_MAP.get(category, ISSUE_FILE_MAP.get(stage, {}))
                 items.append({
                     "severity": "warning",
                     "repo": repo,
                     "stage": stage,
-                    "summary": f"{stage} failed for {repo}",
+                    "category": category,
+                    "summary": f"{stage} failed for {repo} [{category}]",
                     "detail": detail,
                     "files_to_check": info.get("files", []),
                     "suggested_action": info.get("action", "Investigate the failure."),
