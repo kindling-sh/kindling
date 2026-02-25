@@ -122,6 +122,7 @@ jobs:
           KINDLING: ${{ github.workspace }}/bin/kindling
           E2E_CLUSTER_NAME: kindling-e2e
           FUZZ_PROVIDER: openai
+          KEEP_CLUSTER: "1"
 
       # ── Tier 3: Discover repos → generate → static → e2e ─────
       - name: Discover repos

@@ -101,6 +101,10 @@ kctl() {
 }
 
 cleanup() {
+  if [ "${KEEP_CLUSTER:-0}" = "1" ]; then
+    info "Cleanup: keeping cluster '$CLUSTER_NAME' (KEEP_CLUSTER=1)"
+    return
+  fi
   info "Cleanup"
   echo "  Deleting Kind cluster '$CLUSTER_NAME'..."
   kind delete cluster --name "$CLUSTER_NAME" 2>/dev/null || true
