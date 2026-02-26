@@ -332,8 +332,6 @@ func (r *GithubActionRunnerPoolReconciler) reconcileRunnerRBAC(ctx context.Conte
 	return nil
 }
 
-
-
 // ────────────────────────────────────────────────────────────────────────────
 // Runner Deployment
 // ────────────────────────────────────────────────────────────────────────────
@@ -666,7 +664,6 @@ func (r *GithubActionRunnerPoolReconciler) updateRunnerPoolStatus(ctx context.Co
 // Helpers
 // ────────────────────────────────────────────────────────────────────────────
 
-
 func buildRunnerResourceRequirements(res *appsv1alpha1.RunnerResourceRequirements) corev1.ResourceRequirements {
 	reqs := corev1.ResourceRequirements{
 		Requests: corev1.ResourceList{},
@@ -696,7 +693,6 @@ func computeRunnerPoolHash(obj interface{}) string {
 func int64Ptr(v int64) *int64 {
 	return &v
 }
-
 
 // SetupWithManager sets up the controller with the Manager.
 // It watches GithubActionRunnerPool (primary) and Deployments that it owns.

@@ -19,8 +19,8 @@ var (
 	_ WorkflowGenerator = (*GitHubWorkflowGenerator)(nil)
 )
 
-func (g *GitHubProvider) Name() string        { return "github" }
-func (g *GitHubProvider) DisplayName() string  { return "GitHub Actions" }
+func (g *GitHubProvider) Name() string          { return "github" }
+func (g *GitHubProvider) DisplayName() string   { return "GitHub Actions" }
 func (g *GitHubProvider) Runner() RunnerAdapter { return &GitHubRunnerAdapter{} }
 func (g *GitHubProvider) Workflow() WorkflowGenerator {
 	return &GitHubWorkflowGenerator{}
