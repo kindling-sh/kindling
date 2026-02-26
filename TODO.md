@@ -1,8 +1,9 @@
 # Kindling — Roadmap
 
 **Mission:** Make kindling the default way to build production-ready
-multi-agent systems. The product arc: wire up CI in minutes → keep
-building with a local development engine that grows with the project.
+multi-agent systems. The product arc: wire up CI in minutes → build
+locally with a development engine that grows with the project → export
+and deploy to production when you're ready.
 
 ---
 
@@ -139,6 +140,66 @@ Teach the scanner to recognize agent patterns:
 - [ ] Detect vector store client usage → auto-add matching dependency
 - [ ] Generate appropriate health checks for agent services
 
+### `kindling export` + `kindling deploy-prod` — local to production
+
+This is the closer. Kindling takes you from `kindling init` all the way
+to production. No manual YAML translation, no hoping your local config
+matches what prod needs.
+
+**`kindling export`** — generate production-ready manifests from the
+running cluster:
+
+```bash
+kindling export helm --output ./chart
+kindling export kustomize --output ./k8s
+```
+
+By the time a dev has iterated in kindling, the cluster contains
+battle-tested Deployments, Services, Ingresses, and dependency configs.
+`export` snapshots those into clean, portable manifests:
+
+- Helm chart with parameterized `values.yaml` (image tags, replicas,
+  hosts, resource limits, secret refs)
+- Kustomize base + production overlay with placeholder patches
+- Strips all kindling-specific and Kind-specific resources
+- Redacts secret values with `# TODO: set me` placeholders
+- Converts localhost ingress hosts to `# TODO: set production host`
+- Normalizes namespaces so they're set at deploy time
+
+**`kindling deploy-prod`** — deploy exported manifests to a real cluster
+using a user-provided kubeconfig context:
+
+```bash
+# Export then deploy in one flow
+kindling deploy-prod --context my-prod-cluster
+
+# Or deploy previously exported manifests
+kindling deploy-prod --context my-prod-cluster --from ./chart
+
+# Dry-run first to see what would be applied
+kindling deploy-prod --context my-prod-cluster --dry-run
+```
+
+- [ ] `kindling export helm` — snapshot cluster state to Helm chart
+- [ ] `kindling export kustomize` — snapshot to Kustomize base + overlay
+- [ ] `kindling deploy-prod --context <ctx>` — deploy to any K8s cluster
+- [ ] Interactive secret prompting — for each redacted secret, prompt the
+  user for the production value (or accept `--secrets-from <file>`)
+- [ ] Pre-deploy validation — check the target cluster is reachable,
+  namespaces exist, required CRDs/operators are present
+- [ ] `--dry-run` and `--diff` modes — preview what would be applied
+- [ ] Image registry translation — rewrite `registry:5000/` image refs
+  to a user-specified production registry (`--registry ghcr.io/org`)
+
+The full product story becomes:
+```
+kindling init          → local cluster
+kindling generate      → CI pipeline
+git push               → build + deploy locally
+kindling sync          → iterate fast
+kindling deploy-prod   → ship to production
+```
+
 ---
 
 ## Phase 3 — Get in front of the right people
@@ -216,17 +277,6 @@ Detects: CrashLoopBackOff, ImagePullBackOff, missing secrets/configmaps,
 service selector mismatches, ingress routing gaps, probe failures.
 `--fix` sends errors to the configured LLM for concrete fix suggestions.
 
-### `kindling export` — production-ready manifests
-
-Export the running cluster state as a Helm chart or Kustomize overlay.
-By the time a dev has iterated in kindling, the cluster contains
-battle-tested manifests — export snapshots them for production.
-
-```
-kindling export helm --output ./chart
-kindling export kustomize --output ./k8s
-```
-
 ### Stable tunnel URLs
 
 `kindling expose` gets a new URL every reconnection. Agent systems using
@@ -238,6 +288,28 @@ at `<user>.relay.kindling.dev` that auto-updates on reconnect.
 Status panel, deploy button, logs, tunnel control — native VS Code
 experience. The marketplace puts kindling in front of every developer
 browsing for K8s or AI dev tools.
+
+### Dashboard: visual agent builder (drag & drop)
+
+Evolve the dashboard from a monitoring UI into a visual builder for
+multi-agent systems. Drag agent nodes onto a canvas, connect them with
+message flows, drop in infrastructure (vector stores, queues, databases),
+and kindling generates the service code, Dockerfiles, DSE manifest, and
+CI workflow.
+
+Think n8n / Langflow, but for the full-stack architecture — not just
+prompt chains, the actual deployed services.
+
+- [ ] Canvas-based agent graph editor (React Flow / xyflow)
+- [ ] Node types: Agent, Tool, Orchestrator, RAG Pipeline, API Gateway
+- [ ] Dependency nodes: Postgres, Redis, Qdrant, Kafka, etc.
+- [ ] Edge types: HTTP, queue-based messaging, shared memory
+- [ ] "Deploy" button generates all artifacts and runs `kindling init` + `git push`
+- [ ] Round-trip: import an existing kindling project back into the canvas
+- [ ] Export the graph as a shareable project template
+
+This is the long-term play that makes kindling accessible to non-CLI
+users and turns it into a visual platform for agent system design.
 
 ### Education angle
 
