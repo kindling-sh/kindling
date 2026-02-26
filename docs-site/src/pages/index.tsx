@@ -39,9 +39,10 @@ function HeroSection() {
           <p className={styles.heroSubtitle}>{siteConfig.tagline}</p>
           <p className={styles.heroDescription}>
             Kindling sets up your CI pipeline in minutes — real builds, real
-            deploys, running locally for free. Then it stays with you: live file
-            sync, 15 auto-provisioned dependencies, secrets management, public
-            HTTPS tunnels, and a visual dashboard. Start fast, keep building.
+            deploys, all on a local Kubernetes cluster for free. Then it stays
+            with you: live file sync, 15 auto-provisioned dependencies, secrets
+            management, public HTTPS tunnels, and a visual dashboard. Start
+            fast, keep building.
           </p>
           <InstallCommand />
           <div className={styles.heroButtons}>
