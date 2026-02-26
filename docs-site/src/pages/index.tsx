@@ -38,11 +38,14 @@ function HeroSection() {
           </h1>
           <p className={styles.heroSubtitle}>{siteConfig.tagline}</p>
           <p className={styles.heroDescription}>
-            Kindling sets up your CI pipeline in minutes — real builds, real
-            deploys, all on a local Kubernetes cluster for free. Then it stays
-            with you: live file sync, 15 auto-provisioned dependencies, secrets
-            management, public HTTPS tunnels, and a visual dashboard. Start
-            fast, keep building.
+            Multi-agent systems are the next wave — orchestrators, tool-calling
+            agents, RAG services, vector stores, queues, and APIs, all talking
+            to each other. Kindling gives you the infrastructure to build them
+            from day one: a local Kubernetes cluster, a CI pipeline generated in
+            minutes, and every service deployed with its dependencies in one
+            push. Then it stays with you — live sync across agents, a visual
+            dashboard for your entire system, secrets, and public tunnels for
+            webhooks. Start with CI. Keep building.
           </p>
           <InstallCommand />
           <div className={styles.heroButtons}>
@@ -87,7 +90,7 @@ function HeroSection() {
               sk-... -r .{"\n"}
               <span className={styles.termDim}>
                 ▸ Analyzing repository{"\n"}
-                {"  "}✅ Found 3 Dockerfiles, 4 manifests{"\n"}
+                {"  "}✅ Found orchestrator, 3 agents, RAG service{"\n"}
                 ▸ Generating workflow with AI{"\n"}
                 {"  "}🤖 Provider: openai, Model: o3{"\n"}
                 {"  "}✅ Workflow written to dev-deploy.yml
@@ -95,10 +98,10 @@ function HeroSection() {
               {"\n\n"}
               <span className={styles.termPrompt}>$</span> git push{"\n"}
               <span className={styles.termDim}>
-                {"  "}🏗️ Building → registry:5000/app:abc123{"\n"}
-                {"  "}✅ Built & pushed{"\n"}
-                {"  "}📦 Deploying with postgres + redis{"\n"}
-                {"  "}✅ http://you-app.localhost
+                {"  "}🏗️ Building 5 services...{"\n"}
+                {"  "}✅ All images built & pushed{"\n"}
+                {"  "}📦 Deploying with postgres + redis + qdrant{"\n"}
+                {"  "}✅ http://agent-orchestrator.localhost
               </span>
             </code>
           </div>
@@ -116,40 +119,40 @@ type FeatureItem = {
 
 const features: FeatureItem[] = [
   {
+    emoji: "�",
+    title: "Built for Agent Architectures",
+    description:
+      "Orchestrators, tool-calling agents, RAG pipelines, memory services — deploy your entire agent system with Postgres, Redis, message queues, and vector stores, all wired together locally.",
+  },
+  {
     emoji: "⚡",
-    title: "Zero Cloud CI Minutes",
+    title: "CI Pipeline in Minutes",
     description:
-      "Your laptop is the runner. No queuing behind other jobs, no paying for compute you already own. Builds happen locally in seconds.",
+      "Kindling scans your repo and generates a complete CI workflow. Every agent and service builds and deploys on your laptop — no cloud runners, no queuing, no billing.",
   },
   {
-    emoji: "🤖",
-    title: "AI-Generated Workflows",
+    emoji: "🔄",
+    title: "Live Sync Across Agents",
     description:
-      "Point kindling generate at any repo. It scans Dockerfiles, docker-compose, Helm charts, and source code, then produces a complete GitHub Actions workflow.",
+      "Iterating on a prompt, a tool, or agent logic? Edit the code and see it running instantly. Kindling detects 30+ runtimes and picks the right restart strategy for each service.",
   },
   {
-    emoji: "📦",
-    title: "15 Auto-Provisioned Dependencies",
+    emoji: "🧩",
+    title: "15 Infrastructure Dependencies",
     description:
-      "Declare postgres, redis, rabbitmq, kafka, elasticsearch, and 10 more in your workflow. The operator provisions them and injects connection URLs automatically.",
+      "Declare postgres, redis, kafka, elasticsearch, and 11 more in your workflow. The operator provisions them and injects connection URLs — the plumbing agents need to talk to each other.",
   },
   {
-    emoji: "🔨",
-    title: "Kaniko Builds — No Docker Daemon",
+    emoji: "🖥️",
+    title: "Visual Dashboard",
     description:
-      "Images are built inside the cluster using Kaniko. No Docker-in-Docker, no privileged containers. Layer caching makes rebuilds fast.",
-  },
-  {
-    emoji: "🌐",
-    title: "Instant localhost Staging",
-    description:
-      "Every push deploys a full staging environment with Deployment, Service, and Ingress — accessible at http://you-app.localhost immediately.",
+      "See every agent, service, and dependency in one UI. Tail logs from your orchestrator while syncing code to a tool agent. One-click rebuilds, scaling, and environment management.",
   },
   {
     emoji: "🔐",
-    title: "Secrets & OAuth Built In",
+    title: "Secrets & Webhooks",
     description:
-      "Manage API keys with kindling secrets. Need OAuth callbacks? kindling expose creates a public HTTPS tunnel with one command.",
+      "Manage LLM API keys, database credentials, and third-party tokens across agents. Need webhook callbacks? One command creates a public HTTPS tunnel.",
   },
 ];
 
@@ -168,10 +171,10 @@ function FeaturesSection() {
     <section className={styles.features}>
       <div className="container">
         <h2 className={styles.sectionTitle}>
-          Start with CI. Stay for everything else.
+          Everything your agent system needs
         </h2>
         <p className={styles.sectionSubtitle}>
-          One CLI. Pipeline in minutes. Dev environment that grows with you.
+          CI gets you running. The engine keeps you building.
         </p>
         <div className={styles.featureGrid}>
           {features.map((f, idx) => (
@@ -193,36 +196,38 @@ function HowItWorksSection() {
             <div className={styles.stepNumber}>1</div>
             <h3>Bootstrap</h3>
             <p>
-              <code>kindling init</code> creates a Kind cluster with an
-              in-cluster registry, ingress controller, and the kindling
-              operator.
+              <code>kindling init</code> spins up a Kubernetes cluster with a
+              container registry, ingress, and operator — ready for your
+              agent system.
             </p>
           </div>
           <div className={styles.stepArrow}>→</div>
           <div className={styles.step}>
             <div className={styles.stepNumber}>2</div>
-            <h3>Connect</h3>
+            <h3>Generate & Push</h3>
             <p>
-              <code>kindling runners</code> registers a self-hosted GitHub
-              Actions runner bound to your repo and username.
+              <code>kindling generate</code> scans your repo — agents,
+              services, infrastructure — and writes a CI workflow. Push
+              once and everything deploys.
             </p>
           </div>
           <div className={styles.stepArrow}>→</div>
           <div className={styles.step}>
             <div className={styles.stepNumber}>3</div>
-            <h3>Generate</h3>
+            <h3>Iterate</h3>
             <p>
-              <code>kindling generate</code> scans your repo and uses AI to
-              produce a complete workflow with builds, deploys, and dependencies.
+              <code>kindling sync</code> live-syncs any agent or service.
+              Tweak a prompt, update tool logic, change orchestration —
+              see it running instantly.
             </p>
           </div>
           <div className={styles.stepArrow}>→</div>
           <div className={styles.step}>
             <div className={styles.stepNumber}>4</div>
-            <h3>Push & Deploy</h3>
+            <h3>Keep Building</h3>
             <p>
-              <code>git push</code> triggers the workflow. Your laptop builds
-              the image and deploys a full staging environment on localhost.
+              Add agents, swap models, wire up new tools. Manage secrets
+              for every LLM provider. The engine grows with your system.
             </p>
           </div>
         </div>
