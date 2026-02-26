@@ -38,9 +38,10 @@ function HeroSection() {
           </h1>
           <p className={styles.heroSubtitle}>{siteConfig.tagline}</p>
           <p className={styles.heroDescription}>
-            A Kubernetes operator that turns your laptop into a personal CI/CD
-            environment. Push to GitHub, build locally via Kaniko, deploy
-            ephemeral staging environments — all on localhost, in seconds.
+            Kindling sets up your CI pipeline in minutes — real builds, real
+            deploys, running locally for free. Then it stays with you: live file
+            sync, 15 auto-provisioned dependencies, secrets management, public
+            HTTPS tunnels, and a visual dashboard. Start fast, keep building.
           </p>
           <InstallCommand />
           <div className={styles.heroButtons}>
@@ -166,10 +167,10 @@ function FeaturesSection() {
     <section className={styles.features}>
       <div className="container">
         <h2 className={styles.sectionTitle}>
-          Everything you need for local dev staging
+          Start with CI. Stay for everything else.
         </h2>
         <p className={styles.sectionSubtitle}>
-          One operator. One CLI. From git push to running app on localhost.
+          One CLI. Pipeline in minutes. Dev environment that grows with you.
         </p>
         <div className={styles.featureGrid}>
           {features.map((f, idx) => (

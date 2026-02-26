@@ -6,7 +6,7 @@ description: Go from zero to a deployed app on the public internet in 5 minutes.
 
 # Quickstart
 
-Zero to a running app — publicly accessible on the internet — in 5 minutes.
+Set up CI for a new project in 5 minutes. Then keep building with live sync, secrets, tunnels, and a visual dashboard.
 
 ## Install
 

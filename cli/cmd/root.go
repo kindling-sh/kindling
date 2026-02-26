@@ -16,10 +16,12 @@ var (
 
 var rootCmd = &cobra.Command{
 	Use:   "kindling",
-	Short: "kindling — local Kubernetes dev environments powered by Kind",
-	Long: `kindling is a CLI that bootstraps and manages a local Kind cluster
-running the kindling operator, in-cluster image registry, and
-self-hosted GitHub Actions runners.
+	Short: "kindling — set up CI in minutes, stay for everything else",
+	Long: `kindling is a development engine that wires up your CI pipeline
+in minutes — then keeps working for you. It bootstraps a local Kind
+cluster with an operator, in-cluster registry, and CI runners, then
+gives you live sync, a visual dashboard, and everything you need to
+keep building.
 
 Common workflow:
 

@@ -9,7 +9,7 @@
 
 # <img src="assets/logo.svg" width="42" height="42" alt="kindling" style="vertical-align: middle;" /> kindling
 
-**Your laptop is the CI server. Your editor is the deploy button.**
+**Set up CI in minutes. Stay for everything else.**
 
 [![Docs](https://img.shields.io/badge/📖_Documentation-kindling--sh.github.io-FF6B35?style=for-the-badge)](https://kindling-sh.github.io/kindling/)
 [![GitHub Release](https://img.shields.io/github/v/release/kindling-sh/kindling?style=for-the-badge&logo=github&label=Latest)](https://github.com/kindling-sh/kindling/releases/latest)
@@ -17,13 +17,13 @@
 
 </div>
 
-`kindling` gives you a **dev-in-CI** workflow — a loop within a loop. The **outer loop** runs real GitHub Actions on your laptop via a local Kind cluster: push code, build containers, deploy staging environments. The **inner loop** skips all of that: edit a file, sync it into the running container, see the result instantly. A built-in web dashboard ties it all together.
+`kindling` is a **development engine** that starts by wiring up your CI pipeline — fast, free, and local — then keeps working for you long after the first deploy. The **outer loop** runs real CI on your laptop via a local Kind cluster: push code, build containers, deploy staging environments. The **inner loop** skips all of that: edit a file, sync it into the running container, see the result instantly. A built-in web dashboard ties it all together.
 
 <p align="center">
   <img src="assets/diagrams/two-loops.svg" alt="Outer Loop (CI) and Inner Loop (Dev)" width="720" />
 </p>
 
-Zero cloud CI minutes. Sub-second iteration. Full Kubernetes fidelity.
+Start a project with kindling and get CI that works in minutes. Stay for live sync, auto-provisioned dependencies, secrets management, public tunnels, and a visual dashboard — the dev environment that grows with you.
 
 ---
 

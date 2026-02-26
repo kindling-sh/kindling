@@ -4,7 +4,7 @@ import type * as Preset from "@docusaurus/preset-classic";
 
 const config: Config = {
   title: "kindling",
-  tagline: "Push code. Your laptop builds it. Your laptop runs it.",
+  tagline: "Set up CI in minutes. Stay for everything else.",
   favicon: "img/favicon.svg",
 
   url: "https://kindling.sh",
@@ -37,7 +37,7 @@ const config: Config = {
         "@type": "SoftwareApplication",
         name: "kindling",
         description:
-          "Local staging environments for every developer. Push code, your laptop builds it, your laptop runs it.",
+          "A development engine that wires up your CI pipeline in minutes — then keeps working for you with live sync, auto-provisioned dependencies, and a visual dashboard.",
         url: "https://kindling.sh",
         applicationCategory: "DeveloperApplication",
         operatingSystem: "macOS, Linux",
