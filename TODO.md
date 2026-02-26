@@ -1,25 +1,33 @@
 # Kindling — Roadmap
 
 **Mission:** Make kindling the default way to build production-ready
-multi-agent systems. The product arc: wire up CI in minutes → build
-locally with a development engine that grows with the project → export
-and deploy to production when you're ready.
+multi-agent systems — as reflexive as `git init`.
+
+**Product arc:** Wire up CI in minutes → build locally with an engine
+that grows with the project → export and deploy to production.
+
+**Guiding principle:** Adoption is the entire job for the next 6–12
+months. Revenue, sponsorship, and partnerships follow from being the
+standard. The patterns and tooling defaults for multi-agent systems are
+still up for grabs — win by being present and useful before the niche
+solidifies. As a solo builder, ruthless prioritization is essential. The
+product must stay ahead of the marketing — bringing people in before the
+experience is solid burns the community before it forms.
 
 ---
 
-## Phase 1 — Three CI providers, generate parity, rock-solid reliability
+## Phase 1 — Stabilize & define the v1.0 story
 
-Ship CircleCI support, achieve full `kindling generate` parity across
-GitHub Actions, GitLab CI, and CircleCI, then fuzz test all three until
-they're bulletproof. This is the foundation — every adoption effort
-depends on generate working reliably for any repo on any CI platform.
+**Trigger:** CircleCI support complete. Three CI providers is the
+credible, press-ready milestone — the difference between "interesting
+project" and "this is real." Don't invest heavily in outreach before
+this is done.
+
+**Exit criteria:** A stranger can clone a repo, run `kindling init`, and
+have a working multi-agent system deployed locally in under 15 minutes
+without asking anyone anything.
 
 ### CircleCI generate + runners
-
-Wire `kindling generate` to emit `.circleci/config.yml` using the same
-AI-powered repo scanning pipeline as GitHub/GitLab. The provider
-abstraction on `provider-abstraction` already has the interfaces — this
-is implementation.
 
 - [ ] CircleCI `WorkflowGenerator` — system prompt, example configs, YAML output
 - [ ] CircleCI runner registration in Kind cluster (self-hosted runner)
@@ -64,20 +72,25 @@ each with every provider, record structured results.
 - Python ML/AI repos (the primary agent audience)
 - Standard web stacks (Go, Node, Rails, Spring) for baseline coverage
 
-**Quality gates (must hit before public launch):**
+**Quality gates (must hit before going public):**
 - Zero panics across the entire corpus
 - ≥80% success rate on repos with a Dockerfile
 - ≥90% valid YAML output when generation succeeds
 - Top 10 failure modes identified and fixed per provider
 
+### New-user walkthrough
+
+Run through the full `kindling init` → `kindling generate` → first deploy
+flow yourself as a brand-new user. Fix every rough edge. Write a clean,
+honest CHANGELOG entry that frames this as v1.0.
+
 ---
 
-## Phase 2 — Multi-agent adoption (the main event)
+## Phase 2 — Build the flagship example + agent infrastructure
 
-With CI solid across three providers, everything shifts to making kindling
-*the* way to build multi-agent systems. Framework-agnostic infrastructure —
-kindling doesn't compete with LangGraph or CrewAI, it handles the part
-they ignore.
+**One great example beats ten mediocre ones.** Build the flagship *before*
+doing outreach. It becomes the demo, the hackathon template, the first
+blog post, and the thing you link in every community interaction.
 
 ### Agent-native dependency types
 
@@ -93,12 +106,24 @@ Add first-class operator support for infrastructure agents actually need:
 Same pattern as postgres/redis/kafka: declare in DSE YAML, operator provisions
 it, connection URL injected automatically.
 
-### Template repos (the adoption flywheel)
+### Flagship: LangGraph template
 
-Each template is `git clone → kindling init → git push → running system`.
-New devs start building immediately. Every tutorial links to a template.
+Pick LangGraph first — largest community, most active, most likely to hit
+production pain. Build a real multi-agent app, not a toy:
 
-- [ ] `kindling-sh/template-langgraph` — orchestrator + tool agents + Postgres + Redis + Qdrant
+- [ ] Orchestrator + at least 2 tool-calling agents + real infra
+  (Postgres + Redis or Qdrant)
+- [ ] Good candidates: research agent system, customer support pipeline,
+  code review agent with memory
+- [ ] Fully deployable with `kindling init → git push`
+- [ ] Step-by-step documentation
+- [ ] Pre-built CI workflows for all 3 providers (no API key needed)
+
+This becomes the flagship demo, the hackathon starter, and the basis
+for the first blog post.
+
+### Then build (spaced so each gets its own moment):
+
 - [ ] `kindling-sh/template-crewai` — crew of agents + RAG service + vector store
 - [ ] `kindling-sh/template-autogen` — AutoGen agents + shared memory service
 - [ ] `kindling-sh/template-mcp` — MCP servers + agent orchestrator
@@ -106,7 +131,7 @@ New devs start building immediately. Every tutorial links to a template.
 
 Each template includes:
 1. Working Dockerfiles for every service
-2. Pre-built CI workflow for all 3 providers (no API key needed)
+2. Pre-built CI workflow for all 3 providers
 3. README with 3-command getting started
 4. Real agent logic — tool use, RAG retrieval, inter-agent messaging
 
@@ -132,8 +157,6 @@ kindling new
 
 ### `kindling generate` agent awareness
 
-Teach the scanner to recognize agent patterns:
-
 - [ ] Detect `CrewAgent`, `@tool`, `StateGraph`, `AssistantAgent`, `autogen`,
   `langchain`, `llama_index` imports → tag as agent service
 - [ ] Auto-detect LLM provider usage → suggest `kindling secrets set`
@@ -143,8 +166,7 @@ Teach the scanner to recognize agent patterns:
 ### `kindling export` + `kindling deploy-prod` — local to production
 
 This is the closer. Kindling takes you from `kindling init` all the way
-to production. No manual YAML translation, no hoping your local config
-matches what prod needs.
+to production.
 
 **`kindling export`** — generate production-ready manifests from the
 running cluster:
@@ -154,44 +176,30 @@ kindling export helm --output ./chart
 kindling export kustomize --output ./k8s
 ```
 
-By the time a dev has iterated in kindling, the cluster contains
-battle-tested Deployments, Services, Ingresses, and dependency configs.
-`export` snapshots those into clean, portable manifests:
-
 - Helm chart with parameterized `values.yaml` (image tags, replicas,
   hosts, resource limits, secret refs)
 - Kustomize base + production overlay with placeholder patches
 - Strips all kindling-specific and Kind-specific resources
 - Redacts secret values with `# TODO: set me` placeholders
-- Converts localhost ingress hosts to `# TODO: set production host`
-- Normalizes namespaces so they're set at deploy time
+- Normalizes namespaces, converts localhost hosts to placeholders
 
-**`kindling deploy-prod`** — deploy exported manifests to a real cluster
-using a user-provided kubeconfig context:
+**`kindling deploy-prod`** — deploy to a real cluster:
 
 ```bash
-# Export then deploy in one flow
 kindling deploy-prod --context my-prod-cluster
-
-# Or deploy previously exported manifests
 kindling deploy-prod --context my-prod-cluster --from ./chart
-
-# Dry-run first to see what would be applied
 kindling deploy-prod --context my-prod-cluster --dry-run
 ```
 
 - [ ] `kindling export helm` — snapshot cluster state to Helm chart
 - [ ] `kindling export kustomize` — snapshot to Kustomize base + overlay
 - [ ] `kindling deploy-prod --context <ctx>` — deploy to any K8s cluster
-- [ ] Interactive secret prompting — for each redacted secret, prompt the
-  user for the production value (or accept `--secrets-from <file>`)
-- [ ] Pre-deploy validation — check the target cluster is reachable,
-  namespaces exist, required CRDs/operators are present
-- [ ] `--dry-run` and `--diff` modes — preview what would be applied
-- [ ] Image registry translation — rewrite `registry:5000/` image refs
-  to a user-specified production registry (`--registry ghcr.io/org`)
+- [ ] Interactive secret prompting (or `--secrets-from <file>`)
+- [ ] Pre-deploy validation — cluster reachable, namespaces exist
+- [ ] `--dry-run` and `--diff` modes
+- [ ] Image registry translation (`--registry ghcr.io/org`)
 
-The full product story becomes:
+The full product story:
 ```
 kindling init          → local cluster
 kindling generate      → CI pipeline
@@ -202,64 +210,140 @@ kindling deploy-prod   → ship to production
 
 ---
 
-## Phase 3 — Get in front of the right people
+## Phase 3 — First community outreach (careful, manual seeding)
 
-### Content: agent framework tutorials
+**Trigger:** v1.0 stable + LangGraph flagship example live.
 
-Tutorials that start with a popular framework and end with kindling:
+Don't blast. Seed carefully and manually. The goal from this phase:
+**10–20 people who have genuinely used kindling** and can answer "has
+anyone tried Kindling?" positively.
 
-- [ ] "Build a Multi-Agent RAG System with LangGraph + Kindling"
-- [ ] "CrewAI → Production-Ready on Your Laptop in 15 Minutes"
-- [ ] "AutoGen Agents with Shared Memory: Local Dev with Kindling"
-- [ ] "Build an MCP Server + Agent Orchestrator with Kindling"
-- [ ] "Your First Multi-Agent System: Zero to Running in 5 Minutes"
-  (targets less experienced devs, no framework, raw agents + kindling)
+### Target communities & channels
 
-Each tutorial has a companion template repo. Cross-post to Dev.to,
-Hashnode, and the framework's community channels.
+**LangChain Community Slack** — [langchain.com/join-community](https://www.langchain.com/join-community)
+- Classified as a **vendor** (OSS maintainer counts)
+- Post only in: `#vendor-content`, `#events`, or `#vendor-specific`
+- No unsolicited DMs, no posting in help threads
+- Frame around the problem, not the product
+
+**CrewAI Community**
+- Discord: [discord.com/invite/X4JWnZnxPb](https://discord.com/invite/X4JWnZnxPb)
+- Forum: [community.crewai.com](https://community.crewai.com) — better for
+  detailed intro posts since it's searchable and indexed (someone Googling
+  "deploy CrewAI production" may find it later)
+- Culture is more permissive — builder-sharing is welcomed
+
+**Latent Space Discord** — [discord.gg/xJJMRaWCRt](https://discord.gg/xJJMRaWCRt)
+- High signal, practitioner-heavy (~9k members)
+- The swyx/Alessio podcast community — exactly the right audience
+- Builder-friendly culture, look for `#show-and-tell` or `#tools`
+
+**Reddit**
+- r/LocalLLaMA, r/LangChain, r/MachineLearning
+- Help with infra questions first, mention kindling when genuinely relevant
+
+### How to post
+
+Lead with the problem, not the product. Target message:
+
+> *"I've been frustrated by how hard it is to run a full multi-agent
+> system locally with Postgres, Redis, and vector stores all wired
+> together — so I built [Kindling](https://kindling.sh). It's open
+> source, and I'm looking for 5–10 people to try the LangGraph example
+> and tell me where it breaks."*
+
+The small number ("5–10 people") converts better than a general call to
+action. It signals you want feedback, not users.
 
 ### Framework ecosystem integration
 
-Get into the canonical flow for each framework:
-
 - [ ] PR deployment guides to LangGraph / CrewAI / AutoGen docs
 - [ ] Get listed on `awesome-langchain`, `awesome-llm`, `awesome-agents`
-- [ ] Active presence in framework Discords — be helpful, mention kindling
-  when it genuinely solves someone's problem
-- [ ] MCP server support — deploy MCP servers as a dependency type,
-  plugging into the Anthropic ecosystem
+- [ ] MCP server support — deploy MCP servers as a dependency type
 
-### Show HN + launch content
+---
 
-- [ ] Show HN post — position as "the local dev engine for multi-agent apps"
-- [ ] README hero demo — screen recording GIF showing `kindling init` →
-  `git push` → multi-agent system running on localhost
-- [ ] YouTube walkthrough — full multi-agent build, 5 minutes
-- [ ] Short-form clips for Twitter/LinkedIn from the video
+## Phase 4 — Content that compounds
 
-### Community targeting
+**Trigger:** Real user feedback in hand, know where people struggle.
 
-Go where agent builders are, not where K8s people are:
+These are not thought leadership pieces — they're search-optimized,
+community-shareable, genuinely useful content. One framework example
+per month, one blog post per example.
 
-- [ ] r/LocalLLaMA, r/LangChain, r/MachineLearning — help with infra questions
-- [ ] LangChain Discord, CrewAI Discord, AutoGen Discord
-- [ ] AI/ML Twitter — engage with agent framework discussions
-- [ ] AI hackathon sponsorship — kindling as scaffolding for every team
-- [ ] University AI club hack days
+### Priority posts
 
-### Hackathon strategy
+1. **"Why multi-agent systems fail in production (and how to fix it
+   before you start)"** — anchor content, no mention of kindling, just
+   owns the problem space. Ranks and gets shared independently.
 
-AI hackathons are the best distribution channel. Every team needs to deploy
-a multi-agent system in 24–48 hours. Kindling eliminates the infra setup.
+2. **"Running a full LangGraph system locally with Postgres, Redis, and
+   Qdrant"** — step-by-step, tied to the flagship example. Targets the
+   search query people actually have.
+
+3. **"Kindling + CrewAI: from prototype to locally deployable in 10
+   minutes"** — framework-specific, targets CrewAI community searches.
+
+4. One post per additional framework example as they're built.
+
+### Distribution for each post
+
+- Post to the relevant community channel (LangChain Slack, CrewAI forum,
+  Latent Space Discord)
+- Cross-post to Hacker News (Show HN for launch, Ask HN for problem piece)
+- Twitter/X thread with terminal output — the `kindling init` visual
+  proof of value travels well
+- Cross-post to Dev.to, Hashnode
+
+---
+
+## Phase 5 — The launch moment
+
+**Trigger:** CircleCI shipped + 2–3 polished examples + 20+ genuine
+GitHub stars.
+
+This is the coordinated push:
+
+- [ ] **Show HN** — "Show HN: Kindling – local Kubernetes CI for
+  multi-agent systems, auto-generated from your repo." Technical,
+  specific, novel — exactly what HN responds to.
+- [ ] **Product Hunt** — schedule same week as Show HN
+- [ ] **README hero demo** — screen recording GIF showing `kindling init`
+  → `git push` → multi-agent system running on localhost
+- [ ] **YouTube walkthrough** — full multi-agent build, 5 minutes
+- [ ] **Short-form clips** for Twitter/LinkedIn from the video
+- [ ] Simultaneous cross-posts to all community channels
+- [ ] GitHub star push — ask early users explicitly
+
+The "full CI support across GitHub Actions, GitLab CI, and CircleCI"
+story is the hook — cleanest single-sentence pitch, signals maturity.
+
+---
+
+## Phase 6 — Hackathon
+
+**Don't run a hackathon cold.** The sequencing:
+
+1. 20–50 genuine users exist
+2. A few have built real projects with kindling
+3. You can feature their work as examples
+4. *Then* run the hackathon — seed with those examples, have real mentors
+
+**Format:** Virtual first, in-person later. Focused challenge: *"Build
+the best production-ready multi-agent system with Kindling."*
+
+**Strategic move:** Partner with LangChain or LlamaIndex to co-host.
+Instantly inherit their community's attention, they get a showcase event.
+Reach out to DevRel teams — mutually beneficial ask.
 
 - [ ] Sponsor 2–3 online AI hackathons
-- [ ] Provide `kindling new` templates pre-configured for common hackathon stacks
+- [ ] Provide `kindling new` templates pre-configured for hackathon stacks
 - [ ] Offer mentorship/support during events
 - [ ] Write up winning projects that used kindling
 
 ---
 
-## Phase 4 — Deepen the product
+## Phase 7 — Deepen the product
 
 Features that make kindling stickier once people are using it.
 
@@ -308,9 +392,6 @@ prompt chains, the actual deployed services.
 - [ ] Round-trip: import an existing kindling project back into the canvas
 - [ ] Export the graph as a shareable project template
 
-This is the long-term play that makes kindling accessible to non-CLI
-users and turns it into a visual platform for agent system design.
-
 ### Education angle
 
 - [ ] University CS / AI programs — kindling for coursework
@@ -319,7 +400,7 @@ users and turns it into a visual platform for agent system design.
 
 ---
 
-## Phase 5 — OSS infrastructure (when there's community)
+## Phase 8 — OSS infrastructure (when there's community)
 
 - [ ] `CONTRIBUTING.md` with dev setup, test instructions, PR expectations
 - [ ] `good-first-issue` labels for approachable tasks
@@ -327,6 +408,33 @@ users and turns it into a visual platform for agent system design.
 - [ ] `CODE_OF_CONDUCT.md`
 - [ ] Dynamic README badges (CI status, coverage, release)
 - [ ] Contributor shout-outs in release notes
+
+---
+
+## Solo builder timeline
+
+| When | Focus |
+|---|---|
+| **Now** | Finish CircleCI, stabilize the core experience |
+| **Next** | Build the LangGraph flagship example |
+| **After that** | v1.0 announcement + first community seeding |
+| **Ongoing** | One framework example/month, one blog post/example |
+| **3–6 months** | Show HN / Product Hunt launch moment |
+| **6–12 months** | Hackathon, partnerships |
+
+The test at every stage: *does this make it more likely that the next
+person who starts a multi-agent project reaches for kindling?*
+If yes, do it. If not, skip it.
+
+---
+
+## Key reference links
+
+- LangChain Community Slack: [langchain.com/join-community](https://www.langchain.com/join-community)
+- CrewAI Discord: [discord.com/invite/X4JWnZnxPb](https://discord.com/invite/X4JWnZnxPb)
+- CrewAI Forum: [community.crewai.com](https://community.crewai.com)
+- Latent Space Discord: [discord.gg/xJJMRaWCRt](https://discord.gg/xJJMRaWCRt)
+- Kindling GitHub: [github.com/kindling-sh/kindling](https://github.com/kindling-sh/kindling)
 
 ---
 
