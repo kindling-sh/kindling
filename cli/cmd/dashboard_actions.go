@@ -187,7 +187,7 @@ func handleResetRunners(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
-	outputs, err := core.ResetRunners(clusterName, "default")
+	outputs, err := core.ResetRunners(clusterName, "default", "")
 	if err != nil {
 		actionErr(w, strings.Join(outputs, "\n")+"\n"+err.Error(), http.StatusInternalServerError)
 		return

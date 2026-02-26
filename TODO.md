@@ -297,6 +297,64 @@ Anthropic / local). Keep the LLM call optional — `kindling diagnose` without
 
 ---
 
+## P3.5 — File sync: integration tests & in-cluster debugging
+
+`kindling sync` gets code into the cluster fast, but the inner loop is
+incomplete without a way to **run tests against the synced code** and
+**attach a debugger** to a running pod.
+
+### Integration test runner (`kindling test`)
+
+Provide a clean way to run integration tests inside the cluster where the
+code is actually running — with access to real databases, services, and
+external providers (Auth0, Stripe, etc.) rather than mocks.
+
+```
+kindling test --service orders
+kindling test --service orders --command "npm test"
+kindling test --service spa --command "pytest tests/integration"
+```
+
+- Exec into the running pod (or spin up an ephemeral test container in the
+  same namespace) and run the test command
+- Inherit the pod's environment variables (DATABASE_URL, AUTH0_DOMAIN, etc.)
+  so tests hit real dependencies without extra configuration
+- Stream test output back to the terminal in real time
+- Return the exit code so CI scripts and `&&` chains work
+- `--watch` — re-run tests automatically when `kindling sync` pushes new
+  files
+
+### In-cluster debugger (`kindling debug`)
+
+Attach a language-aware debugger to a running pod so developers can set
+breakpoints and step through code that's talking to real cluster services.
+
+```
+kindling debug --service orders --port 9229        # Node.js inspect
+kindling debug --service api --port 5678           # Python debugpy
+kindling debug --service gateway --port 2345       # Go Delve
+```
+
+- Patch the target deployment to start the process with the debug agent
+  enabled (e.g. `--inspect=0.0.0.0:9229` for Node, `debugpy --listen`
+  for Python, `dlv exec --headless` for Go)
+- Port-forward the debug port to localhost automatically
+- Print the connection string for VS Code `launch.json` / JetBrains
+  remote debug config
+- `--restore` — remove debug patching and restart the pod normally
+- Works with `kindling sync` — sync a fix, debugger stays attached
+
+### Why this matters
+
+The Auth0 SPA + API use case is the motivating example: you can't unit-test
+an OAuth callback flow — you need the real Auth0 tenant, a real redirect
+URI (via `kindling expose`), and a running API server that validates tokens
+against a real JWKS endpoint. Being able to run integration tests and attach
+a debugger inside that environment closes the last gap in the local-first
+development story.
+
+---
+
 ## P4 — Strategic integrations (meet developers where they are)
 
 ### VS Code extension

@@ -61,6 +61,18 @@ func CreateRunnerPool(cfg RunnerPoolConfig) ([]string, error) {
 	if cfg.Provider != "" {
 		ciProviderField = fmt.Sprintf("  ciProvider: %q\n", cfg.Provider)
 	}
+
+	// Determine platform URL and runner image from the provider so CRD
+	// defaults (which are GitHub-specific) don't override them.
+	platformURL := "https://github.com"
+	runnerImage := provider.Runner().DefaultImage()
+	switch provider.Name() {
+	case "gitlab":
+		platformURL = "https://gitlab.com"
+	case "circleci":
+		platformURL = "https://circleci.com"
+	}
+
 	crYAML := fmt.Sprintf(`apiVersion: apps.example.com/v1alpha1
 kind: %s
 metadata:
@@ -69,13 +81,15 @@ metadata:
 spec:
   githubUsername: "%%s"
   repository: "%%s"
+  githubURL: "%s"
+  runnerImage: "%s"
   tokenSecretRef:
     name: %s
     key: %s
   replicas: 1
 %s  labels:
     - kindling
-`, labels.CRDKind, labels.SecretName, provider.Runner().DefaultTokenKey(), ciProviderField)
+`, labels.CRDKind, platformURL, runnerImage, labels.SecretName, provider.Runner().DefaultTokenKey(), ciProviderField)
 	crYAML = fmt.Sprintf(crYAML, cfg.Username, ns, cfg.Username, cfg.Repo)
 
 	out, err = KubectlApplyStdin(cfg.ClusterName, crYAML)

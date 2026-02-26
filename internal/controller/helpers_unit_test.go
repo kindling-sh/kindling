@@ -485,3 +485,486 @@ func TestDependencyRegistry_Validity(t *testing.T) {
 		}
 	}
 }
+
+// ────────────────────────────────────────────────────────────────────────────
+// dependencyName
+// ────────────────────────────────────────────────────────────────────────────
+
+func TestDependencyName(t *testing.T) {
+	tests := []struct {
+		crName  string
+		depType appsv1alpha1.DependencyType
+		want    string
+	}{
+		{"myapp", appsv1alpha1.DependencyPostgres, "myapp-postgres"},
+		{"myapp", appsv1alpha1.DependencyRedis, "myapp-redis"},
+		{"orders-svc", appsv1alpha1.DependencyMySQL, "orders-svc-mysql"},
+		{"api", appsv1alpha1.DependencyKafka, "api-kafka"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.want, func(t *testing.T) {
+			if got := dependencyName(tt.crName, tt.depType); got != tt.want {
+				t.Errorf("dependencyName(%q, %q) = %q, want %q", tt.crName, tt.depType, got, tt.want)
+			}
+		})
+	}
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// labelsForDependency
+// ────────────────────────────────────────────────────────────────────────────
+
+func TestLabelsForDependency(t *testing.T) {
+	cr := &appsv1alpha1.DevStagingEnvironment{
+		ObjectMeta: metav1.ObjectMeta{Name: "myapp"},
+	}
+	labels := labelsForDependency(cr, appsv1alpha1.DependencyRedis)
+
+	if labels["app.kubernetes.io/name"] != "myapp-redis" {
+		t.Errorf("name label = %q", labels["app.kubernetes.io/name"])
+	}
+	if labels["app.kubernetes.io/component"] != "redis" {
+		t.Errorf("component label = %q", labels["app.kubernetes.io/component"])
+	}
+	if labels["app.kubernetes.io/part-of"] != "myapp" {
+		t.Errorf("part-of label = %q", labels["app.kubernetes.io/part-of"])
+	}
+	if labels["app.kubernetes.io/managed-by"] != "devstagingenvironment-operator" {
+		t.Errorf("managed-by label = %q", labels["app.kubernetes.io/managed-by"])
+	}
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// buildConnectionURL — all 15 dependency types
+// ────────────────────────────────────────────────────────────────────────────
+
+func TestBuildConnectionURL_Postgres(t *testing.T) {
+	dep := appsv1alpha1.DependencySpec{Type: appsv1alpha1.DependencyPostgres}
+	defaults := dependencyRegistry[appsv1alpha1.DependencyPostgres]
+	url := buildConnectionURL("myapp", dep, defaults)
+	if !strings.HasPrefix(url, "postgres://") {
+		t.Errorf("postgres URL should start with postgres://, got %q", url)
+	}
+	if !strings.Contains(url, "myapp-postgres") {
+		t.Errorf("postgres URL should contain service name, got %q", url)
+	}
+	if !strings.Contains(url, "sslmode=disable") {
+		t.Errorf("postgres URL should contain sslmode=disable, got %q", url)
+	}
+}
+
+func TestBuildConnectionURL_Redis(t *testing.T) {
+	dep := appsv1alpha1.DependencySpec{Type: appsv1alpha1.DependencyRedis}
+	defaults := dependencyRegistry[appsv1alpha1.DependencyRedis]
+	url := buildConnectionURL("myapp", dep, defaults)
+	if !strings.HasPrefix(url, "redis://myapp-redis:") {
+		t.Errorf("redis URL = %q", url)
+	}
+}
+
+func TestBuildConnectionURL_MySQL(t *testing.T) {
+	dep := appsv1alpha1.DependencySpec{Type: appsv1alpha1.DependencyMySQL}
+	defaults := dependencyRegistry[appsv1alpha1.DependencyMySQL]
+	url := buildConnectionURL("myapp", dep, defaults)
+	if !strings.HasPrefix(url, "mysql://") {
+		t.Errorf("mysql URL = %q", url)
+	}
+	if !strings.Contains(url, "myapp-mysql") {
+		t.Errorf("mysql URL missing service name: %q", url)
+	}
+}
+
+func TestBuildConnectionURL_MongoDB(t *testing.T) {
+	dep := appsv1alpha1.DependencySpec{Type: appsv1alpha1.DependencyMongoDB}
+	defaults := dependencyRegistry[appsv1alpha1.DependencyMongoDB]
+	url := buildConnectionURL("myapp", dep, defaults)
+	if !strings.HasPrefix(url, "mongodb://") {
+		t.Errorf("mongodb URL = %q", url)
+	}
+}
+
+func TestBuildConnectionURL_RabbitMQ(t *testing.T) {
+	dep := appsv1alpha1.DependencySpec{Type: appsv1alpha1.DependencyRabbitMQ}
+	defaults := dependencyRegistry[appsv1alpha1.DependencyRabbitMQ]
+	url := buildConnectionURL("myapp", dep, defaults)
+	if !strings.HasPrefix(url, "amqp://") {
+		t.Errorf("rabbitmq URL = %q", url)
+	}
+}
+
+func TestBuildConnectionURL_MinIO(t *testing.T) {
+	dep := appsv1alpha1.DependencySpec{Type: appsv1alpha1.DependencyMinIO}
+	defaults := dependencyRegistry[appsv1alpha1.DependencyMinIO]
+	url := buildConnectionURL("myapp", dep, defaults)
+	if !strings.HasPrefix(url, "http://myapp-minio:") {
+		t.Errorf("minio URL = %q", url)
+	}
+}
+
+func TestBuildConnectionURL_Elasticsearch(t *testing.T) {
+	dep := appsv1alpha1.DependencySpec{Type: appsv1alpha1.DependencyElasticsearch}
+	defaults := dependencyRegistry[appsv1alpha1.DependencyElasticsearch]
+	url := buildConnectionURL("myapp", dep, defaults)
+	if !strings.HasPrefix(url, "http://myapp-elasticsearch:") {
+		t.Errorf("elasticsearch URL = %q", url)
+	}
+}
+
+func TestBuildConnectionURL_Kafka(t *testing.T) {
+	dep := appsv1alpha1.DependencySpec{Type: appsv1alpha1.DependencyKafka}
+	defaults := dependencyRegistry[appsv1alpha1.DependencyKafka]
+	url := buildConnectionURL("myapp", dep, defaults)
+	if !strings.Contains(url, "myapp-kafka:") {
+		t.Errorf("kafka URL = %q", url)
+	}
+}
+
+func TestBuildConnectionURL_NATS(t *testing.T) {
+	dep := appsv1alpha1.DependencySpec{Type: appsv1alpha1.DependencyNATS}
+	defaults := dependencyRegistry[appsv1alpha1.DependencyNATS]
+	url := buildConnectionURL("myapp", dep, defaults)
+	if !strings.HasPrefix(url, "nats://myapp-nats:") {
+		t.Errorf("nats URL = %q", url)
+	}
+}
+
+func TestBuildConnectionURL_Memcached(t *testing.T) {
+	dep := appsv1alpha1.DependencySpec{Type: appsv1alpha1.DependencyMemcached}
+	defaults := dependencyRegistry[appsv1alpha1.DependencyMemcached]
+	url := buildConnectionURL("myapp", dep, defaults)
+	if !strings.Contains(url, "myapp-memcached:") {
+		t.Errorf("memcached URL = %q", url)
+	}
+}
+
+func TestBuildConnectionURL_Consul(t *testing.T) {
+	dep := appsv1alpha1.DependencySpec{Type: appsv1alpha1.DependencyConsul}
+	defaults := dependencyRegistry[appsv1alpha1.DependencyConsul]
+	url := buildConnectionURL("myapp", dep, defaults)
+	if !strings.HasPrefix(url, "http://myapp-consul:") {
+		t.Errorf("consul URL = %q", url)
+	}
+}
+
+func TestBuildConnectionURL_Vault(t *testing.T) {
+	dep := appsv1alpha1.DependencySpec{Type: appsv1alpha1.DependencyVault}
+	defaults := dependencyRegistry[appsv1alpha1.DependencyVault]
+	url := buildConnectionURL("myapp", dep, defaults)
+	if !strings.HasPrefix(url, "http://myapp-vault:") {
+		t.Errorf("vault URL = %q", url)
+	}
+}
+
+func TestBuildConnectionURL_InfluxDB(t *testing.T) {
+	dep := appsv1alpha1.DependencySpec{Type: appsv1alpha1.DependencyInfluxDB}
+	defaults := dependencyRegistry[appsv1alpha1.DependencyInfluxDB]
+	url := buildConnectionURL("myapp", dep, defaults)
+	if !strings.HasPrefix(url, "http://") {
+		t.Errorf("influxdb URL = %q", url)
+	}
+	if !strings.Contains(url, "myapp-influxdb") {
+		t.Errorf("influxdb URL missing service name: %q", url)
+	}
+}
+
+func TestBuildConnectionURL_Jaeger(t *testing.T) {
+	dep := appsv1alpha1.DependencySpec{Type: appsv1alpha1.DependencyJaeger}
+	defaults := dependencyRegistry[appsv1alpha1.DependencyJaeger]
+	url := buildConnectionURL("myapp", dep, defaults)
+	if !strings.HasPrefix(url, "http://myapp-jaeger:") {
+		t.Errorf("jaeger URL = %q", url)
+	}
+}
+
+func TestBuildConnectionURL_CustomPort(t *testing.T) {
+	customPort := int32(9999)
+	dep := appsv1alpha1.DependencySpec{
+		Type: appsv1alpha1.DependencyRedis,
+		Port: &customPort,
+	}
+	defaults := dependencyRegistry[appsv1alpha1.DependencyRedis]
+	url := buildConnectionURL("myapp", dep, defaults)
+	if !strings.Contains(url, ":9999") {
+		t.Errorf("custom port not reflected in URL: %q", url)
+	}
+}
+
+func TestBuildConnectionURL_CustomEnvOverrides(t *testing.T) {
+	dep := appsv1alpha1.DependencySpec{
+		Type: appsv1alpha1.DependencyPostgres,
+		Env: []corev1.EnvVar{
+			{Name: "POSTGRES_USER", Value: "custom_user"},
+			{Name: "POSTGRES_PASSWORD", Value: "custom_pass"},
+			{Name: "POSTGRES_DB", Value: "custom_db"},
+		},
+	}
+	defaults := dependencyRegistry[appsv1alpha1.DependencyPostgres]
+	url := buildConnectionURL("myapp", dep, defaults)
+	if !strings.Contains(url, "custom_user") {
+		t.Errorf("custom user not in URL: %q", url)
+	}
+	if !strings.Contains(url, "custom_pass") {
+		t.Errorf("custom password not in URL: %q", url)
+	}
+	if !strings.Contains(url, "custom_db") {
+		t.Errorf("custom db not in URL: %q", url)
+	}
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// buildDependencyConnectionEnvVars
+// ────────────────────────────────────────────────────────────────────────────
+
+func TestBuildDependencyConnectionEnvVars_Postgres(t *testing.T) {
+	dep := appsv1alpha1.DependencySpec{Type: appsv1alpha1.DependencyPostgres}
+	envs := buildDependencyConnectionEnvVars("myapp", dep)
+	if len(envs) == 0 {
+		t.Fatal("expected at least one env var")
+	}
+	if envs[0].Name != "DATABASE_URL" {
+		t.Errorf("env var name = %q, want DATABASE_URL", envs[0].Name)
+	}
+	if !strings.HasPrefix(envs[0].Value, "postgres://") {
+		t.Errorf("value = %q, want postgres:// prefix", envs[0].Value)
+	}
+}
+
+func TestBuildDependencyConnectionEnvVars_CustomEnvVarName(t *testing.T) {
+	dep := appsv1alpha1.DependencySpec{
+		Type:       appsv1alpha1.DependencyRedis,
+		EnvVarName: "MY_REDIS_URL",
+	}
+	envs := buildDependencyConnectionEnvVars("myapp", dep)
+	if len(envs) == 0 {
+		t.Fatal("expected at least one env var")
+	}
+	if envs[0].Name != "MY_REDIS_URL" {
+		t.Errorf("env var name = %q, want MY_REDIS_URL", envs[0].Name)
+	}
+}
+
+func TestBuildDependencyConnectionEnvVars_MinIO_ExtraCredentials(t *testing.T) {
+	dep := appsv1alpha1.DependencySpec{Type: appsv1alpha1.DependencyMinIO}
+	envs := buildDependencyConnectionEnvVars("myapp", dep)
+	if len(envs) < 3 {
+		t.Fatalf("MinIO should have at least 3 env vars (URL + S3_ACCESS_KEY + S3_SECRET_KEY), got %d", len(envs))
+	}
+	names := make(map[string]bool)
+	for _, e := range envs {
+		names[e.Name] = true
+	}
+	if !names["S3_ACCESS_KEY"] {
+		t.Error("missing S3_ACCESS_KEY env var for MinIO")
+	}
+	if !names["S3_SECRET_KEY"] {
+		t.Error("missing S3_SECRET_KEY env var for MinIO")
+	}
+}
+
+func TestBuildDependencyConnectionEnvVars_Vault_Token(t *testing.T) {
+	dep := appsv1alpha1.DependencySpec{Type: appsv1alpha1.DependencyVault}
+	envs := buildDependencyConnectionEnvVars("myapp", dep)
+	names := make(map[string]bool)
+	for _, e := range envs {
+		names[e.Name] = true
+	}
+	if !names["VAULT_TOKEN"] {
+		t.Error("missing VAULT_TOKEN env var for Vault")
+	}
+}
+
+func TestBuildDependencyConnectionEnvVars_InfluxDB_OrgBucket(t *testing.T) {
+	dep := appsv1alpha1.DependencySpec{Type: appsv1alpha1.DependencyInfluxDB}
+	envs := buildDependencyConnectionEnvVars("myapp", dep)
+	names := make(map[string]bool)
+	for _, e := range envs {
+		names[e.Name] = true
+	}
+	if !names["INFLUXDB_ORG"] {
+		t.Error("missing INFLUXDB_ORG env var")
+	}
+	if !names["INFLUXDB_BUCKET"] {
+		t.Error("missing INFLUXDB_BUCKET env var")
+	}
+}
+
+func TestBuildDependencyConnectionEnvVars_Jaeger_OTLP(t *testing.T) {
+	dep := appsv1alpha1.DependencySpec{Type: appsv1alpha1.DependencyJaeger}
+	envs := buildDependencyConnectionEnvVars("myapp", dep)
+	names := make(map[string]bool)
+	for _, e := range envs {
+		names[e.Name] = true
+	}
+	if !names["OTEL_EXPORTER_OTLP_ENDPOINT"] {
+		t.Error("missing OTEL_EXPORTER_OTLP_ENDPOINT env var for Jaeger")
+	}
+}
+
+func TestBuildDependencyConnectionEnvVars_Unknown(t *testing.T) {
+	dep := appsv1alpha1.DependencySpec{Type: "unknown-dep"}
+	envs := buildDependencyConnectionEnvVars("myapp", dep)
+	if envs != nil {
+		t.Errorf("unknown dependency should return nil, got %v", envs)
+	}
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// mergeEnvVars
+// ────────────────────────────────────────────────────────────────────────────
+
+func TestMergeEnvVars_Empty(t *testing.T) {
+	result := mergeEnvVars(nil, nil)
+	if len(result) != 0 {
+		t.Errorf("expected empty, got %d", len(result))
+	}
+}
+
+func TestMergeEnvVars_BaseOnly(t *testing.T) {
+	base := []corev1.EnvVar{
+		{Name: "A", Value: "1"},
+		{Name: "B", Value: "2"},
+	}
+	result := mergeEnvVars(base, nil)
+	if len(result) != 2 {
+		t.Fatalf("expected 2 env vars, got %d", len(result))
+	}
+	if result[0].Name != "A" || result[1].Name != "B" {
+		t.Errorf("order not preserved: %v", result)
+	}
+}
+
+func TestMergeEnvVars_Override(t *testing.T) {
+	base := []corev1.EnvVar{
+		{Name: "A", Value: "1"},
+		{Name: "B", Value: "2"},
+	}
+	overrides := []corev1.EnvVar{
+		{Name: "B", Value: "overridden"},
+	}
+	result := mergeEnvVars(base, overrides)
+	if len(result) != 2 {
+		t.Fatalf("expected 2 env vars, got %d", len(result))
+	}
+	if result[0].Name != "A" || result[0].Value != "1" {
+		t.Errorf("A should be unchanged: %v", result[0])
+	}
+	if result[1].Name != "B" || result[1].Value != "overridden" {
+		t.Errorf("B should be overridden: %v", result[1])
+	}
+}
+
+func TestMergeEnvVars_NewKeysAppended(t *testing.T) {
+	base := []corev1.EnvVar{
+		{Name: "A", Value: "1"},
+	}
+	overrides := []corev1.EnvVar{
+		{Name: "B", Value: "2"},
+		{Name: "C", Value: "3"},
+	}
+	result := mergeEnvVars(base, overrides)
+	if len(result) != 3 {
+		t.Fatalf("expected 3 env vars, got %d", len(result))
+	}
+	if result[0].Name != "A" {
+		t.Error("A should be first")
+	}
+	if result[1].Name != "B" {
+		t.Error("B should be second")
+	}
+	if result[2].Name != "C" {
+		t.Error("C should be third")
+	}
+}
+
+func TestMergeEnvVars_OrderPreserved(t *testing.T) {
+	base := []corev1.EnvVar{
+		{Name: "Z", Value: "z"},
+		{Name: "A", Value: "a"},
+		{Name: "M", Value: "m"},
+	}
+	result := mergeEnvVars(base, nil)
+	if result[0].Name != "Z" || result[1].Name != "A" || result[2].Name != "M" {
+		t.Errorf("order not preserved: %v", result)
+	}
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// toK8sEnvVars
+// ────────────────────────────────────────────────────────────────────────────
+
+func TestToK8sEnvVars_PlainValues(t *testing.T) {
+	input := []ci.ContainerEnvVar{
+		{Name: "REPO", Value: "myorg/myrepo"},
+		{Name: "TOKEN", Value: "abc123"},
+	}
+	result := toK8sEnvVars(input)
+	if len(result) != 2 {
+		t.Fatalf("expected 2, got %d", len(result))
+	}
+	if result[0].Name != "REPO" || result[0].Value != "myorg/myrepo" {
+		t.Errorf("first env var = %v", result[0])
+	}
+	if result[1].ValueFrom != nil {
+		t.Error("plain value should not have ValueFrom")
+	}
+}
+
+func TestToK8sEnvVars_SecretRef(t *testing.T) {
+	input := []ci.ContainerEnvVar{
+		{
+			Name: "GITHUB_TOKEN",
+			SecretRef: &ci.SecretRef{
+				Name: "runner-secret",
+				Key:  "github-token",
+			},
+		},
+	}
+	result := toK8sEnvVars(input)
+	if len(result) != 1 {
+		t.Fatalf("expected 1, got %d", len(result))
+	}
+	ev := result[0]
+	if ev.Name != "GITHUB_TOKEN" {
+		t.Errorf("name = %q", ev.Name)
+	}
+	if ev.Value != "" {
+		t.Error("secret-ref env var should not have plain Value")
+	}
+	if ev.ValueFrom == nil || ev.ValueFrom.SecretKeyRef == nil {
+		t.Fatal("expected ValueFrom.SecretKeyRef")
+	}
+	if ev.ValueFrom.SecretKeyRef.Name != "runner-secret" {
+		t.Errorf("secret name = %q", ev.ValueFrom.SecretKeyRef.Name)
+	}
+	if ev.ValueFrom.SecretKeyRef.Key != "github-token" {
+		t.Errorf("secret key = %q", ev.ValueFrom.SecretKeyRef.Key)
+	}
+}
+
+func TestToK8sEnvVars_Empty(t *testing.T) {
+	result := toK8sEnvVars(nil)
+	if len(result) != 0 {
+		t.Errorf("expected empty, got %d", len(result))
+	}
+}
+
+func TestToK8sEnvVars_Mixed(t *testing.T) {
+	input := []ci.ContainerEnvVar{
+		{Name: "PLAIN", Value: "hello"},
+		{Name: "SECRET", SecretRef: &ci.SecretRef{Name: "s", Key: "k"}},
+		{Name: "ANOTHER", Value: "world"},
+	}
+	result := toK8sEnvVars(input)
+	if len(result) != 3 {
+		t.Fatalf("expected 3, got %d", len(result))
+	}
+	if result[0].Value != "hello" || result[0].ValueFrom != nil {
+		t.Error("PLAIN should be a plain value")
+	}
+	if result[1].Value != "" || result[1].ValueFrom == nil {
+		t.Error("SECRET should be a secret ref")
+	}
+	if result[2].Value != "world" || result[2].ValueFrom != nil {
+		t.Error("ANOTHER should be a plain value")
+	}
+}

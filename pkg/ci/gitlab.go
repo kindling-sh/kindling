@@ -19,8 +19,8 @@ var (
 	_ WorkflowGenerator = (*GitLabWorkflowGenerator)(nil)
 )
 
-func (g *GitLabProvider) Name() string        { return "gitlab" }
-func (g *GitLabProvider) DisplayName() string  { return "GitLab CI" }
+func (g *GitLabProvider) Name() string          { return "gitlab" }
+func (g *GitLabProvider) DisplayName() string   { return "GitLab CI" }
 func (g *GitLabProvider) Runner() RunnerAdapter { return &GitLabRunnerAdapter{} }
 func (g *GitLabProvider) Workflow() WorkflowGenerator {
 	return &GitLabWorkflowGenerator{}
@@ -29,7 +29,7 @@ func (g *GitLabProvider) CLILabels() CLILabels {
 	return CLILabels{
 		Username:        "GitLab username",
 		Repository:      "GitLab project (group/project)",
-		Token:           "GitLab PAT (api scope)",
+		Token:           "GitLab PAT (create_runner scope)",
 		SecretName:      "gitlab-runner-token",
 		CRDKind:         "GithubActionRunnerPool",
 		CRDPlural:       "githubactionrunnerpools",
@@ -76,12 +76,10 @@ func (a *GitLabRunnerAdapter) RunnerEnvVars(cfg RunnerEnvConfig) []ContainerEnvV
 	runnerTags := []string{"self-hosted", cfg.Username}
 	runnerTags = append(runnerTags, cfg.Labels...)
 
-	apiURL := a.APIBaseURL(platformURL)
-
 	envVars := []ContainerEnvVar{
 		{
 			// The GitLab PAT (from the referenced Secret) is used at startup
-			// to create a runner authentication token via the API.
+			// to create a runner via POST /user/runners and obtain an auth token.
 			Name: "GITLAB_PAT",
 			SecretRef: &SecretRef{
 				Name: cfg.TokenSecretName,
@@ -93,13 +91,13 @@ func (a *GitLabRunnerAdapter) RunnerEnvVars(cfg RunnerEnvConfig) []ContainerEnvV
 			Value: platformURL,
 		},
 		{
-			// API base URL for token exchange.
+			// API base URL for runner creation.
 			Name:  "GITLAB_API_URL",
-			Value: apiURL,
+			Value: a.APIBaseURL(platformURL),
 		},
 		{
-			// Project path for runner registration (e.g. "group/project").
-			Name:  "RUNNER_PROJECT_PATH",
+			// Project path (group/project) for resolving project ID.
+			Name:  "GITLAB_PROJECT_PATH",
 			Value: cfg.Repository,
 		},
 		{
@@ -131,32 +129,51 @@ func (a *GitLabRunnerAdapter) RunnerEnvVars(cfg RunnerEnvConfig) []ContainerEnvV
 }
 
 // StartupScript returns the bash script that:
-//  1. Exchanges the GitLab PAT for a runner authentication token via the API
-//  2. Registers the runner with gitlab-runner register using the auth token
-//  3. Sets up a SIGTERM trap so the runner de-registers on pod shutdown
-//  4. Starts the runner process
+//  1. Resolves the GitLab project ID from the project path
+//  2. Creates a runner via POST /user/runners (GitLab 16+ API)
+//  3. Writes config.toml directly (avoids gitlab-runner register quirks)
+//  4. Sets up a SIGTERM trap to delete the runner on pod shutdown
+//  5. Starts the runner process
 func (a *GitLabRunnerAdapter) StartupScript() string {
 	return `#!/bin/bash
 set -uo pipefail
 
-# ── Exchange PAT for a runner authentication token ──────────────
-echo "🔑 Exchanging PAT for runner authentication token..."
+# ── Resolve project ID from project path ──────────────────────────
+ENCODED_PATH=$(echo "${GITLAB_PROJECT_PATH}" | sed 's|/|%2F|g')
+echo "🔍 Looking up project ID for ${GITLAB_PROJECT_PATH}..."
+echo "   API: ${GITLAB_API_URL}/projects/${ENCODED_PATH}"
+
+PROJECT_RESPONSE=$(curl -sS --fail-with-body \
+  -H "PRIVATE-TOKEN: ${GITLAB_PAT}" \
+  "${GITLAB_API_URL}/projects/${ENCODED_PATH}") || true
+
+PROJECT_ID=$(echo "${PROJECT_RESPONSE}" | grep -o '"id":[0-9]*' | head -1 | cut -d: -f2)
+
+if [ -z "${PROJECT_ID}" ]; then
+  echo "❌ Could not resolve project ID:"
+  echo "${PROJECT_RESPONSE}"
+  echo ""
+  echo "Make sure your PAT has api or read_api scope and the project path is correct."
+  exit 1
+fi
+echo "   Project ID: ${PROJECT_ID}"
+
+# ── Create a runner via the GitLab API (16+ flow) ─────────────────
+echo "🔑 Creating runner via GitLab API..."
 echo "   API: ${GITLAB_API_URL}/user/runners"
 
-# Encode project path for URL
-PROJECT_ID_ENC=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${RUNNER_PROJECT_PATH}', safe=''))" 2>/dev/null || echo "${RUNNER_PROJECT_PATH}")
+# Convert comma-separated tags to JSON array
+TAG_JSON=$(echo "${RUNNER_TAG_LIST}" | tr ',' '\n' | sed 's/.*/ "&"/' | paste -sd, - | sed 's/^/[/;s/$/]/')
 
-# Create a project-scoped runner via the REST API (GitLab 16.0+)
-# POST /user/runners creates a runner and returns an authentication token.
 HTTP_CODE=$(curl -sS -o /tmp/runner_response.json -w '%{http_code}' -X POST \
   -H "PRIVATE-TOKEN: ${GITLAB_PAT}" \
   -H "Content-Type: application/json" \
   -d "{
     \"runner_type\": \"project_type\",
-    \"project_id\": null,
+    \"project_id\": ${PROJECT_ID},
     \"description\": \"${RUNNER_NAME}\",
-    \"tag_list\": [$(echo \"${RUNNER_TAG_LIST}\" | sed 's/,/\",\"/g' | sed 's/^/\"/;s/$/\"/')],
-    \"run_untagged\": false
+    \"tag_list\": ${TAG_JSON},
+    \"run_untagged\": true
   }" \
   "${GITLAB_API_URL}/user/runners") || true
 
@@ -166,78 +183,71 @@ if [ "${HTTP_CODE}" != "201" ]; then
   echo "❌ GitLab API returned HTTP ${HTTP_CODE}:"
   cat /tmp/runner_response.json 2>/dev/null || echo "(no response body)"
   echo ""
-  echo "Falling back to project runners endpoint..."
-
-  # Fallback: look up project ID then use /projects/:id/runners
-  PROJECT_HTTP=$(curl -sS -o /tmp/project_response.json -w '%{http_code}' \
-    -H "PRIVATE-TOKEN: ${GITLAB_PAT}" \
-    "${GITLAB_API_URL}/projects/${PROJECT_ID_ENC}") || true
-
-  if [ "${PROJECT_HTTP}" = "200" ]; then
-    PROJECT_ID=$(python3 -c "import json; print(json.load(open('/tmp/project_response.json'))['id'])")
-    echo "   Project ID: ${PROJECT_ID}"
-
-    HTTP_CODE=$(curl -sS -o /tmp/runner_response.json -w '%{http_code}' -X POST \
-      -H "PRIVATE-TOKEN: ${GITLAB_PAT}" \
-      -H "Content-Type: application/json" \
-      -d "{
-        \"runner_type\": \"project_type\",
-        \"project_id\": ${PROJECT_ID},
-        \"description\": \"${RUNNER_NAME}\",
-        \"tag_list\": [$(echo \"${RUNNER_TAG_LIST}\" | sed 's/,/\",\"/g' | sed 's/^/\"/;s/$/\"/')],
-        \"run_untagged\": false
-      }" \
-      "${GITLAB_API_URL}/user/runners") || true
-
-    echo "   HTTP status: ${HTTP_CODE}"
-  fi
-
-  if [ "${HTTP_CODE}" != "201" ]; then
-    echo "❌ Failed to create runner:"
-    cat /tmp/runner_response.json 2>/dev/null || echo "(no response body)"
-    echo ""
-    echo "Make sure your PAT has the 'api' scope and you have Maintainer access."
-    exit 1
-  fi
+  echo "Make sure your PAT has the create_runner scope."
+  exit 1
 fi
 
-RUNNER_TOKEN=$(python3 -c "import json; print(json.load(open('/tmp/runner_response.json'))['token'])")
-RUNNER_ID=$(python3 -c "import json; print(json.load(open('/tmp/runner_response.json'))['id'])")
-echo "✅ Got runner token (runner ID: ${RUNNER_ID})"
+# Extract the authentication token (glrt-*) and runner ID
+AUTH_TOKEN=$(grep -o '"token":"[^"]*"' /tmp/runner_response.json | head -1 | cut -d'"' -f4)
+RUNNER_ID=$(grep -o '"id":[0-9]*' /tmp/runner_response.json | head -1 | cut -d: -f2)
+rm -f /tmp/runner_response.json
 
-# ── Register the runner with the obtained token ──────────────────
-echo "🔧 Registering runner..."
-gitlab-runner register \
-  --non-interactive \
-  --url "${CI_SERVER_URL}" \
-  --token "${RUNNER_TOKEN}" \
-  --executor "${RUNNER_EXECUTOR}" \
-  --name "${RUNNER_NAME}"
+if [ -z "${AUTH_TOKEN}" ]; then
+  echo "❌ Could not parse authentication token from response"
+  exit 1
+fi
+echo "✅ Runner created (ID: ${RUNNER_ID})"
 
-# De-register on shutdown
+# ── Write config.toml directly (bypass gitlab-runner register) ────
+# gitlab-runner 18.x restricts flags during register with auth tokens.
+# Writing config.toml directly is the most reliable approach.
+echo "🔧 Writing runner configuration..."
+mkdir -p /etc/gitlab-runner
+cat > /etc/gitlab-runner/config.toml <<EOF
+concurrent = 1
+check_interval = 3
+
+[[runners]]
+  name = "${RUNNER_NAME}"
+  url = "${CI_SERVER_URL}"
+  token = "${AUTH_TOKEN}"
+  executor = "${RUNNER_EXECUTOR}"
+  [runners.custom_build_dir]
+  [runners.cache]
+    MaxUploadedArchiveSize = 0
+  [runners.docker]
+    image = "alpine:latest"
+    privileged = false
+    disable_entrypoint_overwrite = false
+    oom_kill_disable = false
+    disable_cache = false
+    shm_size = 0
+EOF
+
+echo "✅ Runner configured and ready to pick up jobs"
+
+# ── De-register on shutdown ───────────────────────────────────────
+# Delete the runner via the API so it does not leave a ghost entry.
 cleanup() {
-  echo "🛑 Unregistering runner..."
-  gitlab-runner unregister --name "${RUNNER_NAME}" || true
-  # Delete the runner via API so the token is invalidated
+  echo "🛑 Removing runner (ID: ${RUNNER_ID})..."
   curl -sS -X DELETE \
     -H "PRIVATE-TOKEN: ${GITLAB_PAT}" \
     "${GITLAB_API_URL}/runners/${RUNNER_ID}" 2>/dev/null || true
+  echo "✅ Runner removed"
 }
 trap cleanup SIGTERM SIGINT
 
-echo "✅ Runner registered and ready"
-
 # Start the runner (exec so PID 1 gets signals)
-exec gitlab-runner run
+exec gitlab-runner run --working-directory /builds
 `
 }
 
 func (a *GitLabRunnerAdapter) RunnerLabels(username string, crName string) map[string]string {
 	return map[string]string{
-		"app.kubernetes.io/name":          crName,
-		"app.kubernetes.io/component":     "gitlab-ci-runner",
-		"app.kubernetes.io/managed-by":    "githubactionrunnerpool-operator",
-		"app.kubernetes.io/instance":      crName,
+		"app.kubernetes.io/name":           crName,
+		"app.kubernetes.io/component":      "gitlab-ci-runner",
+		"app.kubernetes.io/managed-by":     "githubactionrunnerpool-operator",
+		"app.kubernetes.io/instance":       crName,
 		"apps.example.com/gitlab-username": username,
 	}
 }
@@ -292,14 +302,37 @@ To deploy a DevStagingEnvironment CR, write a shell script step that:
 
 Key conventions you MUST follow:
 - Registry: registry:5000 (in-cluster)
-- Image tag: ${GITLAB_USER_LOGIN}-${CI_COMMIT_SHORT_SHA}
-- Runner tags: [self-hosted, "$GITLAB_USER_LOGIN"]
-- Ingress host pattern: ${GITLAB_USER_LOGIN}-<service>.localhost
-- DSE name pattern: ${GITLAB_USER_LOGIN}-<service>
+- Define a KINDLING_USER variable set to the GitLab username of whoever owns the runner
+  pool.  Do NOT use $GITLAB_USER_LOGIN — it often resolves to a long project-bot
+  username (e.g. "project_12345_bot_abc...") that contains underscores, exceeds
+  Kubernetes name limits, and breaks DNS-based addressing.
+  Example variables block:
+    variables:
+      REGISTRY: "registry:5000"
+      KINDLING_USER: "myusername"
+      TAG: "${KINDLING_USER}-${CI_COMMIT_SHORT_SHA}"
+- Image tag: ${KINDLING_USER}-${CI_COMMIT_SHORT_SHA}
+- Runner tags: [self-hosted, kindling]
+- Ingress host pattern: ${KINDLING_USER}-<service>.localhost
+- DSE name pattern: ${KINDLING_USER}-<service>
 - Trigger on push to the default branch
 - Always include a checkout step (GitLab does this automatically)
 - Always include a "Clean builds directory" step at the start
 - For multi-service repos, use stages: [build, deploy] with build before deploy
+
+CRITICAL — Heredoc escaping for Kubernetes variable expansion:
+  When a DSE env var uses Kubernetes dependent-variable syntax $(VAR_NAME) inside
+  a bash heredoc (<<EOF ... EOF), you MUST escape the dollar sign as \$(VAR_NAME).
+  Otherwise bash interprets $(VAR_NAME) as command substitution and fails with
+  "VAR_NAME: command not found".
+  Example:
+    cat > /builds/my-dse.yaml <<EOF
+    ...
+      env:
+        - name: EVENT_STORE_URL
+          value: "\$(REDIS_URL)"
+    ...
+    EOF
 ` + PromptHealthChecks + `
 - If a service (like an API gateway) depends on other services via env vars,
   deploy it LAST so its upstreams are already running
@@ -322,7 +355,7 @@ When a service calls other services via gRPC or HTTP, it reads their addresses f
 environment variables. You MUST examine the source code snippets for EVERY service
 and find ALL env var references that look like service address variables. For each,
 add an env entry mapping it to the target service's cluster-internal DNS name:
-  ${GITLAB_USER_LOGIN}-<service-name>:<port>
+  ${KINDLING_USER}-<service-name>:<port>
 Do NOT skip inter-service env vars — without them, services cannot find each other.
 
 ` + PromptDockerCompose + `
@@ -343,11 +376,11 @@ func (g *GitLabWorkflowGenerator) PromptContext() PromptContext {
 		BuildActionRef:  "(inline shell — see system prompt)",
 		DeployActionRef: "(inline shell — see system prompt)",
 		CheckoutAction:  "(automatic in GitLab CI)",
-		ActorExpr:       "${GITLAB_USER_LOGIN}",
+		ActorExpr:       "${KINDLING_USER}",
 		SHAExpr:         "${CI_COMMIT_SHORT_SHA}",
 		WorkspaceExpr:   "${CI_PROJECT_DIR}",
-		RunnerSpec:      `[self-hosted, "$GITLAB_USER_LOGIN"]`,
-		EnvTagExpr:      "${GITLAB_USER_LOGIN}-${CI_COMMIT_SHORT_SHA}",
+		RunnerSpec:      `[self-hosted, kindling]`,
+		EnvTagExpr:      "${KINDLING_USER}-${CI_COMMIT_SHORT_SHA}",
 		TriggerBlock: func(branch string) string {
 			return fmt.Sprintf("workflow:\n  rules:\n    - if: $CI_COMMIT_BRANCH == \"%s\"\n    - when: manual", branch)
 		},
@@ -362,6 +395,8 @@ func (g *GitLabWorkflowGenerator) ExampleWorkflows() (singleService, multiServic
 // StripTemplateExpressions removes GitLab CI variable expressions from content.
 func (g *GitLabWorkflowGenerator) StripTemplateExpressions(content string) string {
 	replacements := []struct{ old, new string }{
+		{"${KINDLING_USER}", "ACTOR"},
+		{"$KINDLING_USER", "ACTOR"},
 		{"${GITLAB_USER_LOGIN}", "ACTOR"},
 		{"$GITLAB_USER_LOGIN", "ACTOR"},
 		{"${CI_COMMIT_SHORT_SHA}", "SHA"},
@@ -387,7 +422,8 @@ func (g *GitLabWorkflowGenerator) StripTemplateExpressions(content string) strin
 
 const gitlabSingleServiceExample = `variables:
   REGISTRY: "registry:5000"
-  TAG: "${GITLAB_USER_LOGIN}-${CI_COMMIT_SHORT_SHA}"
+  KINDLING_USER: "myusername"   # ← set to your GitLab username
+  TAG: "${KINDLING_USER}-${CI_COMMIT_SHORT_SHA}"
 
 stages:
   - build
@@ -395,7 +431,7 @@ stages:
 
 build-sample-app:
   stage: build
-  tags: [self-hosted, "$GITLAB_USER_LOGIN"]
+  tags: [self-hosted, kindling]
   script:
     # Clean builds directory
     - |
@@ -426,16 +462,16 @@ build-sample-app:
 
 deploy-sample-app:
   stage: deploy
-  tags: [self-hosted, "$GITLAB_USER_LOGIN"]
+  tags: [self-hosted, kindling]
   script:
     - |
-      cat > /builds/${GITLAB_USER_LOGIN}-sample-app-dse.yaml <<EOF
+      cat > /builds/${KINDLING_USER}-sample-app-dse.yaml <<EOF
       apiVersion: apps.example.com/v1alpha1
       kind: DevStagingEnvironment
       metadata:
-        name: ${GITLAB_USER_LOGIN}-sample-app
+        name: ${KINDLING_USER}-sample-app
         labels:
-          app.kubernetes.io/name: ${GITLAB_USER_LOGIN}-sample-app
+          app.kubernetes.io/name: ${KINDLING_USER}-sample-app
           app.kubernetes.io/managed-by: kindling
       spec:
         deployment:
@@ -450,31 +486,32 @@ deploy-sample-app:
           type: ClusterIP
         ingress:
           enabled: true
-          host: ${GITLAB_USER_LOGIN}-sample-app.localhost
+          host: ${KINDLING_USER}-sample-app.localhost
           ingressClassName: nginx
         dependencies:
           - type: postgres
             version: "16"
           - type: redis
       EOF
-    - touch /builds/${GITLAB_USER_LOGIN}-sample-app-dse.apply
+    - touch /builds/${KINDLING_USER}-sample-app-dse.apply
     - |
       WAITED=0
-      while [ ! -f /builds/${GITLAB_USER_LOGIN}-sample-app-dse.apply-done ]; do
+      while [ ! -f /builds/${KINDLING_USER}-sample-app-dse.apply-done ]; do
         sleep 1; WAITED=$((WAITED+1))
         if [ ${WAITED} -ge 60 ]; then echo "❌ Deploy timed out"; exit 1; fi
       done
     - |
-      EXIT_CODE=$(cat /builds/${GITLAB_USER_LOGIN}-sample-app-dse.apply-exitcode 2>/dev/null || echo "1")
+      EXIT_CODE=$(cat /builds/${KINDLING_USER}-sample-app-dse.apply-exitcode 2>/dev/null || echo "1")
       if [ "${EXIT_CODE}" != "0" ]; then
-        echo "❌ Deploy failed"; cat /builds/${GITLAB_USER_LOGIN}-sample-app-dse.apply-log 2>/dev/null; exit 1
+        echo "❌ Deploy failed"; cat /builds/${KINDLING_USER}-sample-app-dse.apply-log 2>/dev/null; exit 1
       fi
     - echo "🎉 Deploy complete!"
-    - echo "🌐 http://${GITLAB_USER_LOGIN}-sample-app.localhost"`
+    - echo "🌐 http://${KINDLING_USER}-sample-app.localhost"`
 
 const gitlabMultiServiceExample = `variables:
   REGISTRY: "registry:5000"
-  TAG: "${GITLAB_USER_LOGIN}-${CI_COMMIT_SHORT_SHA}"
+  KINDLING_USER: "myusername"   # ← set to your GitLab username
+  TAG: "${KINDLING_USER}-${CI_COMMIT_SHORT_SHA}"
 
 stages:
   - build
@@ -484,7 +521,7 @@ stages:
 
 build-api:
   stage: build
-  tags: [self-hosted, "$GITLAB_USER_LOGIN"]
+  tags: [self-hosted, kindling]
   script:
     - |
       rm -f /builds/*.done /builds/*.request /builds/*.processing \
@@ -512,7 +549,7 @@ build-api:
 
 build-ui:
   stage: build
-  tags: [self-hosted, "$GITLAB_USER_LOGIN"]
+  tags: [self-hosted, kindling]
   script:
     - tar -czf /builds/ui.tar.gz -C ${CI_PROJECT_DIR}/ui .
     - echo "${REGISTRY}/ui:${TAG}" > /builds/ui.dest
@@ -536,20 +573,20 @@ build-ui:
 
 deploy-api:
   stage: deploy
-  tags: [self-hosted, "$GITLAB_USER_LOGIN"]
+  tags: [self-hosted, kindling]
   script:
     - |
-      cat > /builds/${GITLAB_USER_LOGIN}-api-dse.yaml <<EOF
+      cat > /builds/${KINDLING_USER}-api-dse.yaml <<EOF
       apiVersion: apps.example.com/v1alpha1
       kind: DevStagingEnvironment
       metadata:
-        name: ${GITLAB_USER_LOGIN}-api
+        name: ${KINDLING_USER}-api
         labels:
-          app.kubernetes.io/name: ${GITLAB_USER_LOGIN}-api
+          app.kubernetes.io/name: ${KINDLING_USER}-api
           app.kubernetes.io/managed-by: kindling
           app.kubernetes.io/part-of: my-app
           app.kubernetes.io/component: api
-          apps.example.com/gitlab-username: ${GITLAB_USER_LOGIN}
+          apps.example.com/kindling-user: ${KINDLING_USER}
       spec:
         deployment:
           image: ${REGISTRY}/api:${TAG}
@@ -563,44 +600,44 @@ deploy-api:
           type: ClusterIP
         ingress:
           enabled: true
-          host: ${GITLAB_USER_LOGIN}-api.localhost
+          host: ${KINDLING_USER}-api.localhost
           ingressClassName: nginx
         dependencies:
           - type: postgres
             version: "16"
           - type: redis
       EOF
-    - touch /builds/${GITLAB_USER_LOGIN}-api-dse.apply
+    - touch /builds/${KINDLING_USER}-api-dse.apply
     - |
       WAITED=0
-      while [ ! -f /builds/${GITLAB_USER_LOGIN}-api-dse.apply-done ]; do
+      while [ ! -f /builds/${KINDLING_USER}-api-dse.apply-done ]; do
         sleep 1; WAITED=$((WAITED+1))
         if [ ${WAITED} -ge 60 ]; then echo "❌ Deploy timed out"; exit 1; fi
       done
     - |
-      EXIT_CODE=$(cat /builds/${GITLAB_USER_LOGIN}-api-dse.apply-exitcode 2>/dev/null || echo "1")
+      EXIT_CODE=$(cat /builds/${KINDLING_USER}-api-dse.apply-exitcode 2>/dev/null || echo "1")
       if [ "${EXIT_CODE}" != "0" ]; then
-        echo "❌ Deploy failed"; cat /builds/${GITLAB_USER_LOGIN}-api-dse.apply-log 2>/dev/null; exit 1
+        echo "❌ Deploy failed"; cat /builds/${KINDLING_USER}-api-dse.apply-log 2>/dev/null; exit 1
       fi
       echo "✅ Deployed api"
 
 deploy-ui:
   stage: deploy
-  tags: [self-hosted, "$GITLAB_USER_LOGIN"]
+  tags: [self-hosted, kindling]
   needs: [deploy-api]
   script:
     - |
-      cat > /builds/${GITLAB_USER_LOGIN}-ui-dse.yaml <<EOF
+      cat > /builds/${KINDLING_USER}-ui-dse.yaml <<EOF
       apiVersion: apps.example.com/v1alpha1
       kind: DevStagingEnvironment
       metadata:
-        name: ${GITLAB_USER_LOGIN}-ui
+        name: ${KINDLING_USER}-ui
         labels:
-          app.kubernetes.io/name: ${GITLAB_USER_LOGIN}-ui
+          app.kubernetes.io/name: ${KINDLING_USER}-ui
           app.kubernetes.io/managed-by: kindling
           app.kubernetes.io/part-of: my-app
           app.kubernetes.io/component: ui
-          apps.example.com/gitlab-username: ${GITLAB_USER_LOGIN}
+          apps.example.com/kindling-user: ${KINDLING_USER}
       spec:
         deployment:
           image: ${REGISTRY}/ui:${TAG}
@@ -611,27 +648,27 @@ deploy-ui:
             path: /
           env:
             - name: API_URL
-              value: "http://${GITLAB_USER_LOGIN}-api:8080"
+              value: "http://${KINDLING_USER}-api:8080"
         service:
           port: 80
           type: ClusterIP
         ingress:
           enabled: true
-          host: ${GITLAB_USER_LOGIN}-ui.localhost
+          host: ${KINDLING_USER}-ui.localhost
           ingressClassName: nginx
       EOF
-    - touch /builds/${GITLAB_USER_LOGIN}-ui-dse.apply
+    - touch /builds/${KINDLING_USER}-ui-dse.apply
     - |
       WAITED=0
-      while [ ! -f /builds/${GITLAB_USER_LOGIN}-ui-dse.apply-done ]; do
+      while [ ! -f /builds/${KINDLING_USER}-ui-dse.apply-done ]; do
         sleep 1; WAITED=$((WAITED+1))
         if [ ${WAITED} -ge 60 ]; then echo "❌ Deploy timed out"; exit 1; fi
       done
     - |
-      EXIT_CODE=$(cat /builds/${GITLAB_USER_LOGIN}-ui-dse.apply-exitcode 2>/dev/null || echo "1")
+      EXIT_CODE=$(cat /builds/${KINDLING_USER}-ui-dse.apply-exitcode 2>/dev/null || echo "1")
       if [ "${EXIT_CODE}" != "0" ]; then
-        echo "❌ Deploy failed"; cat /builds/${GITLAB_USER_LOGIN}-ui-dse.apply-log 2>/dev/null; exit 1
+        echo "❌ Deploy failed"; cat /builds/${KINDLING_USER}-ui-dse.apply-log 2>/dev/null; exit 1
       fi
     - echo "🎉 Deploy complete!"
-    - echo "🌐 UI:  http://${GITLAB_USER_LOGIN}-ui.localhost"
-    - echo "🌐 API: http://${GITLAB_USER_LOGIN}-api.localhost"`
+    - echo "🌐 UI:  http://${KINDLING_USER}-ui.localhost"
+    - echo "🌐 API: http://${KINDLING_USER}-api.localhost"`

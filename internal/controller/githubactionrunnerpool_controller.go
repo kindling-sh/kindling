@@ -338,8 +338,6 @@ func (r *GithubActionRunnerPoolReconciler) reconcileRunnerRBAC(ctx context.Conte
 	return nil
 }
 
-
-
 // ────────────────────────────────────────────────────────────────────────────
 // Runner Deployment
 // ────────────────────────────────────────────────────────────────────────────
@@ -603,7 +601,7 @@ done
 			Namespace: cr.Namespace,
 			Labels:    labels,
 			Annotations: map[string]string{
-				runnerPoolHashAnnotation: computeRunnerPoolHash(cr.Spec),
+				runnerPoolHashAnnotation: computeRunnerPoolHash(cr.Spec, r.providerFor(cr).Name(), runnerAdapter.StartupScript()),
 			},
 		},
 		Spec: appsv1.DeploymentSpec{
@@ -672,7 +670,6 @@ func (r *GithubActionRunnerPoolReconciler) updateRunnerPoolStatus(ctx context.Co
 // Helpers
 // ────────────────────────────────────────────────────────────────────────────
 
-
 func buildRunnerResourceRequirements(res *appsv1alpha1.RunnerResourceRequirements) corev1.ResourceRequirements {
 	reqs := corev1.ResourceRequirements{
 		Requests: corev1.ResourceList{},
@@ -693,8 +690,11 @@ func buildRunnerResourceRequirements(res *appsv1alpha1.RunnerResourceRequirement
 	return reqs
 }
 
-func computeRunnerPoolHash(obj interface{}) string {
+func computeRunnerPoolHash(obj interface{}, extras ...string) string {
 	data, _ := json.Marshal(obj)
+	for _, e := range extras {
+		data = append(data, []byte(e)...)
+	}
 	sum := sha256.Sum256(data)
 	return fmt.Sprintf("%x", sum[:8])
 }
@@ -702,7 +702,6 @@ func computeRunnerPoolHash(obj interface{}) string {
 func int64Ptr(v int64) *int64 {
 	return &v
 }
-
 
 // SetupWithManager sets up the controller with the Manager.
 // It watches GithubActionRunnerPool (primary) and Deployments that it owns.
