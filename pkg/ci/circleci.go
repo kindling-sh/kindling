@@ -215,6 +215,9 @@ Key conventions you MUST follow:
 - DSE name pattern: ${CIRCLE_USERNAME}-<service>
 - Trigger on push to the default branch
 - Always include a checkout step
+- Tar context paths: ALWAYS use paths relative to the repo root (e.g. -C . or -C ui),
+  NEVER use ~/project which does not exist on self-hosted runners.
+  After checkout, the CWD is the repo root.
 - Always include a "Clean builds directory" step that only removes files for THAT
   service: rm -f /builds/<service>.* — never rm -f /builds/* which races with
   parallel jobs
@@ -264,7 +267,7 @@ func (g *CircleCIWorkflowGenerator) PromptContext() PromptContext {
 		CheckoutAction:  "checkout",
 		ActorExpr:       "${CIRCLE_USERNAME}",
 		SHAExpr:         "${CIRCLE_SHA1:0:8}",
-		WorkspaceExpr:   "~/project",
+		WorkspaceExpr:   ".",
 		RunnerSpec:      "self-hosted resource class",
 		EnvTagExpr:      "${CIRCLE_USERNAME}-${CIRCLE_SHA1:0:8}",
 		TriggerBlock: func(branch string) string {
@@ -324,7 +327,7 @@ jobs:
       - run:
           name: Build sample-app image
           command: |
-            tar -czf /builds/sample-app.tar.gz -C ~/project .
+            tar -czf /builds/sample-app.tar.gz .
             echo "${REGISTRY}/sample-app:${TAG}" > /builds/sample-app.dest
             touch /builds/sample-app.request
 
@@ -425,7 +428,7 @@ jobs:
       - run:
           name: Build API image
           command: |
-            tar -czf /builds/api.tar.gz -C ~/project --exclude='./ui' .
+            tar -czf /builds/api.tar.gz --exclude='./ui' .
             echo "${REGISTRY}/api:${TAG}" > /builds/api.dest
             touch /builds/api.request
 
@@ -463,7 +466,7 @@ jobs:
       - run:
           name: Build UI image
           command: |
-            tar -czf /builds/ui.tar.gz -C ~/project/ui .
+            tar -czf /builds/ui.tar.gz -C ui .
             echo "${REGISTRY}/ui:${TAG}" > /builds/ui.dest
             touch /builds/ui.request
 

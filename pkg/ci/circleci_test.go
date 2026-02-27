@@ -239,8 +239,8 @@ func TestCircleCIPromptContext(t *testing.T) {
 	if !strings.Contains(ctx.ActorExpr, "CIRCLE_USERNAME") {
 		t.Errorf("ActorExpr = %q", ctx.ActorExpr)
 	}
-	if ctx.WorkspaceExpr != "~/project" {
-		t.Errorf("WorkspaceExpr = %q", ctx.WorkspaceExpr)
+	if ctx.WorkspaceExpr != "." {
+		t.Errorf("WorkspaceExpr = %q, want %q", ctx.WorkspaceExpr, ".")
 	}
 	if ctx.TriggerBlock == nil {
 		t.Fatal("TriggerBlock is nil")
