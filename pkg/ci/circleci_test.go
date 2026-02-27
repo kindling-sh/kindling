@@ -212,6 +212,8 @@ func TestCircleCISystemPrompt(t *testing.T) {
 		"registry:5000",
 		"resource class",
 		"CIRCLE_USERNAME",
+		"$BASH_ENV",
+		"Do NOT put TAG in the environment: block",
 	}
 	for _, c := range checks {
 		if !strings.Contains(prompt, c) {
@@ -273,6 +275,21 @@ func TestCircleCIExampleWorkflows(t *testing.T) {
 	}
 	if !strings.Contains(multi, "requires") {
 		t.Error("multi should use requires for job ordering")
+	}
+
+	// TAG must NOT be in environment: block (CircleCI can't evaluate bash substrings there)
+	for _, ex := range []struct{ name, content string }{{"single", single}, {"multi", multi}} {
+		if strings.Contains(ex.content, `TAG: "${CIRCLE_USERNAME}`) {
+			t.Errorf("%s example still has TAG in environment: block — use $BASH_ENV instead", ex.name)
+		}
+		// Must use $BASH_ENV to compute TAG
+		if !strings.Contains(ex.content, `$BASH_ENV`) {
+			t.Errorf("%s example missing $BASH_ENV pattern for computed TAG", ex.name)
+		}
+		// Must NOT use broad wildcard rm -f /builds/* (races with parallel jobs)
+		if strings.Contains(ex.content, `rm -f /builds/*`) {
+			t.Errorf("%s example uses broad 'rm -f /builds/*' — scope per service", ex.name)
+		}
 	}
 }
 

@@ -196,12 +196,22 @@ To deploy a DevStagingEnvironment CR, write a run step that:
 Key conventions you MUST follow:
 - Registry: registry:5000 (in-cluster)
 - Image tag: ${CIRCLE_USERNAME}-${CIRCLE_SHA1:0:8}
+  IMPORTANT: CircleCI cannot evaluate bash substring syntax like ${CIRCLE_SHA1:0:8}
+  inside the declarative "environment:" block. You MUST compute TAG in a run step
+  and persist it via $BASH_ENV:
+    - run:
+        name: Set image tag
+        command: |
+          echo "export TAG=${CIRCLE_USERNAME}-${CIRCLE_SHA1:0:8}" >> "$BASH_ENV"
+  Do NOT put TAG in the environment: block.
 - Runner resource class: use the self-hosted resource class with machine: true
 - Ingress host pattern: ${CIRCLE_USERNAME}-<service>.localhost
 - DSE name pattern: ${CIRCLE_USERNAME}-<service>
 - Trigger on push to the default branch
 - Always include a checkout step
-- Always include a "Clean builds directory" step after checkout
+- Always include a "Clean builds directory" step that only removes files for THAT
+  service: rm -f /builds/<service>.* — never rm -f /builds/* which races with
+  parallel jobs
 - For multi-service repos, use separate jobs with requires for ordering
 ` + PromptHealthChecks + `
 - If a service (like an API gateway) depends on other services via env vars,
@@ -293,18 +303,17 @@ jobs:
     resource_class: kindling/self-hosted
     environment:
       REGISTRY: "registry:5000"
-      TAG: "${CIRCLE_USERNAME}-${CIRCLE_SHA1:0:8}"
     steps:
       - checkout
 
       - run:
-          name: Clean builds directory
+          name: Set image tag
           command: |
-            rm -f /builds/*.done /builds/*.request /builds/*.processing \
-                  /builds/*.apply /builds/*.apply-done /builds/*.apply-log \
-                  /builds/*.apply-exitcode /builds/*.exitcode \
-                  /builds/*.log /builds/*.dest /builds/*.tar.gz \
-                  /builds/*.yaml /builds/*.sh
+            echo "export TAG=${CIRCLE_USERNAME}-${CIRCLE_SHA1:0:8}" >> "$BASH_ENV"
+
+      - run:
+          name: Clean builds directory
+          command: rm -f /builds/sample-app.*
 
       - run:
           name: Build sample-app image
@@ -395,18 +404,17 @@ jobs:
     resource_class: kindling/self-hosted
     environment:
       REGISTRY: "registry:5000"
-      TAG: "${CIRCLE_USERNAME}-${CIRCLE_SHA1:0:8}"
     steps:
       - checkout
 
       - run:
-          name: Clean builds directory
+          name: Set image tag
           command: |
-            rm -f /builds/*.done /builds/*.request /builds/*.processing \
-                  /builds/*.apply /builds/*.apply-done /builds/*.apply-log \
-                  /builds/*.apply-exitcode /builds/*.exitcode \
-                  /builds/*.log /builds/*.dest /builds/*.tar.gz \
-                  /builds/*.yaml /builds/*.sh
+            echo "export TAG=${CIRCLE_USERNAME}-${CIRCLE_SHA1:0:8}" >> "$BASH_ENV"
+
+      - run:
+          name: Clean builds directory
+          command: rm -f /builds/api.*
 
       - run:
           name: Build API image
@@ -434,9 +442,17 @@ jobs:
     resource_class: kindling/self-hosted
     environment:
       REGISTRY: "registry:5000"
-      TAG: "${CIRCLE_USERNAME}-${CIRCLE_SHA1:0:8}"
     steps:
       - checkout
+
+      - run:
+          name: Set image tag
+          command: |
+            echo "export TAG=${CIRCLE_USERNAME}-${CIRCLE_SHA1:0:8}" >> "$BASH_ENV"
+
+      - run:
+          name: Clean builds directory
+          command: rm -f /builds/ui.*
 
       - run:
           name: Build UI image
@@ -466,8 +482,12 @@ jobs:
     resource_class: kindling/self-hosted
     environment:
       REGISTRY: "registry:5000"
-      TAG: "${CIRCLE_USERNAME}-${CIRCLE_SHA1:0:8}"
     steps:
+      - run:
+          name: Set image tag
+          command: |
+            echo "export TAG=${CIRCLE_USERNAME}-${CIRCLE_SHA1:0:8}" >> "$BASH_ENV"
+
       - run:
           name: Deploy API
           command: |
@@ -524,8 +544,12 @@ jobs:
     resource_class: kindling/self-hosted
     environment:
       REGISTRY: "registry:5000"
-      TAG: "${CIRCLE_USERNAME}-${CIRCLE_SHA1:0:8}"
     steps:
+      - run:
+          name: Set image tag
+          command: |
+            echo "export TAG=${CIRCLE_USERNAME}-${CIRCLE_SHA1:0:8}" >> "$BASH_ENV"
+
       - run:
           name: Deploy UI
           command: |
