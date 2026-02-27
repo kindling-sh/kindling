@@ -65,11 +65,11 @@ func TestCircleCIDefaultTokenKey(t *testing.T) {
 
 func TestCircleCIAPIBaseURL(t *testing.T) {
 	a := &CircleCIRunnerAdapter{}
-	// CircleCI always returns the same URL regardless of input
+	// CircleCI always returns the runner API URL regardless of input
 	tests := []string{"https://circleci.com", "", "https://anything.com"}
 	for _, input := range tests {
-		if got := a.APIBaseURL(input); got != "https://circleci.com/api/v2" {
-			t.Errorf("APIBaseURL(%q) = %q, want https://circleci.com/api/v2", input, got)
+		if got := a.APIBaseURL(input); got != "https://runner.circleci.com/api/v3" {
+			t.Errorf("APIBaseURL(%q) = %q, want https://runner.circleci.com/api/v3", input, got)
 		}
 	}
 }
@@ -91,23 +91,13 @@ func TestCircleCIRunnerEnvVars(t *testing.T) {
 		m[e.Name] = e
 	}
 
-	// CIRCLECI_PAT should use SecretRef
-	pat, ok := m["CIRCLECI_PAT"]
+	// CIRCLECI_RUNNER_API_AUTH_TOKEN should use SecretRef
+	token, ok := m["CIRCLECI_RUNNER_API_AUTH_TOKEN"]
 	if !ok {
-		t.Fatal("missing CIRCLECI_PAT")
+		t.Fatal("missing CIRCLECI_RUNNER_API_AUTH_TOKEN")
 	}
-	if pat.SecretRef == nil {
-		t.Fatal("CIRCLECI_PAT should use SecretRef")
-	}
-
-	// CIRCLECI_RESOURCE_CLASS should be org/self-hosted
-	if m["CIRCLECI_RESOURCE_CLASS"].Value != "myorg/self-hosted" {
-		t.Errorf("CIRCLECI_RESOURCE_CLASS = %q, want myorg/self-hosted", m["CIRCLECI_RESOURCE_CLASS"].Value)
-	}
-
-	// CIRCLECI_ORG_SLUG
-	if m["CIRCLECI_ORG_SLUG"].Value != "myorg" {
-		t.Errorf("CIRCLECI_ORG_SLUG = %q, want myorg", m["CIRCLECI_ORG_SLUG"].Value)
+	if token.SecretRef == nil {
+		t.Fatal("CIRCLECI_RUNNER_API_AUTH_TOKEN should use SecretRef")
 	}
 
 	// CIRCLECI_RUNNER_NAME
@@ -115,31 +105,37 @@ func TestCircleCIRunnerEnvVars(t *testing.T) {
 		t.Errorf("CIRCLECI_RUNNER_NAME = %q", m["CIRCLECI_RUNNER_NAME"].Value)
 	}
 
+	// CIRCLECI_RUNNER_WORKING_DIRECTORY
+	if m["CIRCLECI_RUNNER_WORKING_DIRECTORY"].Value != "/work" {
+		t.Errorf("CIRCLECI_RUNNER_WORKING_DIRECTORY = %q", m["CIRCLECI_RUNNER_WORKING_DIRECTORY"].Value)
+	}
+
 	// CIRCLECI_USERNAME
 	if m["CIRCLECI_USERNAME"].Value != "jeff" {
 		t.Errorf("CIRCLECI_USERNAME = %q", m["CIRCLECI_USERNAME"].Value)
 	}
+
+	// Should NOT have old env vars
+	for _, removed := range []string{"CIRCLECI_PAT", "CIRCLECI_API_URL", "CIRCLECI_RESOURCE_CLASS", "CIRCLECI_ORG_SLUG"} {
+		if _, exists := m[removed]; exists {
+			t.Errorf("should not have %s env var (removed in simplification)", removed)
+		}
+	}
 }
 
-func TestCircleCIRunnerEnvVarsNoSlash(t *testing.T) {
+func TestCircleCIRunnerEnvVarsMinimal(t *testing.T) {
 	a := &CircleCIRunnerAdapter{}
 	cfg := RunnerEnvConfig{
 		Username:        "jeff",
-		Repository:      "standalone-project", // no slash
+		Repository:      "standalone-project",
 		TokenSecretName: "s",
 		TokenSecretKey:  "k",
 		CRName:          "p",
 	}
 
 	envVars := a.RunnerEnvVars(cfg)
-	m := make(map[string]ContainerEnvVar)
-	for _, e := range envVars {
-		m[e.Name] = e
-	}
-
-	// Without slash, the entire repo becomes the org slug
-	if m["CIRCLECI_RESOURCE_CLASS"].Value != "standalone-project/self-hosted" {
-		t.Errorf("CIRCLECI_RESOURCE_CLASS = %q", m["CIRCLECI_RESOURCE_CLASS"].Value)
+	if len(envVars) != 4 {
+		t.Errorf("expected 4 env vars, got %d", len(envVars))
 	}
 }
 
@@ -168,9 +164,8 @@ func TestCircleCIStartupScript(t *testing.T) {
 	}
 
 	checks := []string{
-		"CIRCLECI_PAT",
-		"resource-class",
-		"runner/token",
+		"CIRCLECI_RUNNER_API_AUTH_TOKEN",
+		"CIRCLECI_RUNNER_NAME",
 		"cleanup",
 		"trap cleanup",
 		"SIGTERM",
@@ -179,6 +174,13 @@ func TestCircleCIStartupScript(t *testing.T) {
 	for _, c := range checks {
 		if !strings.Contains(script, c) {
 			t.Errorf("startup script missing %q", c)
+		}
+	}
+
+	// Should NOT reference old PAT exchange flow
+	for _, old := range []string{"CIRCLECI_PAT", "resource-class", "runner/token"} {
+		if strings.Contains(script, old) {
+			t.Errorf("startup script should not contain %q (removed PAT exchange)", old)
 		}
 	}
 }
