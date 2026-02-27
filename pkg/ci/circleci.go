@@ -81,7 +81,7 @@ func (a *CircleCIRunnerAdapter) RunnerEnvVars(cfg RunnerEnvConfig) []ContainerEn
 		},
 		{
 			Name:  "CIRCLECI_RUNNER_NAME",
-			Value: fmt.Sprintf("%s-%s", cfg.Username, cfg.CRName),
+			Value: fmt.Sprintf("%s-%s", SanitizeDNS(cfg.Username), cfg.CRName),
 		},
 		{
 			Name:  "CIRCLECI_RUNNER_WORK_DIR",
