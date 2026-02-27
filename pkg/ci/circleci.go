@@ -84,7 +84,7 @@ func (a *CircleCIRunnerAdapter) RunnerEnvVars(cfg RunnerEnvConfig) []ContainerEn
 			Value: fmt.Sprintf("%s-%s", cfg.Username, cfg.CRName),
 		},
 		{
-			Name:  "CIRCLECI_RUNNER_WORKING_DIRECTORY",
+			Name:  "CIRCLECI_RUNNER_WORK_DIR",
 			Value: cfg.WorkDir,
 		},
 		{
@@ -120,7 +120,7 @@ fi
 
 echo "✅ CircleCI runner configured"
 echo "   Runner name: ${CIRCLECI_RUNNER_NAME}"
-echo "   Working dir: ${CIRCLECI_RUNNER_WORKING_DIRECTORY:-/tmp/_work}"
+echo "   Working dir: ${CIRCLECI_RUNNER_WORK_DIR:-/tmp/_work}"
 
 # Clean up on shutdown
 cleanup() {
@@ -129,8 +129,9 @@ cleanup() {
 trap cleanup SIGTERM SIGINT
 
 # Start the machine runner 3 agent (exec so PID 1 gets signals)
-exec circleci-runner machine --name "${CIRCLECI_RUNNER_NAME}" \
-  --working-directory "${CIRCLECI_RUNNER_WORKING_DIRECTORY:-/tmp/_work}"
+exec /opt/circleci/bin/circleci-runner machine \
+  --runner.name "${CIRCLECI_RUNNER_NAME}" \
+  --runner.working-directory "${CIRCLECI_RUNNER_WORK_DIR:-/tmp/_work}"
 `
 }
 
@@ -140,7 +141,7 @@ func (a *CircleCIRunnerAdapter) RunnerLabels(username string, crName string) map
 		"app.kubernetes.io/component":       "circleci-runner",
 		"app.kubernetes.io/managed-by":      "githubactionrunnerpool-operator",
 		"app.kubernetes.io/instance":        crName,
-		"apps.example.com/circleci-username": username,
+		"apps.example.com/circleci-username": SanitizeDNS(username),
 	}
 }
 

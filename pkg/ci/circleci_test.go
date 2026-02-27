@@ -105,9 +105,9 @@ func TestCircleCIRunnerEnvVars(t *testing.T) {
 		t.Errorf("CIRCLECI_RUNNER_NAME = %q", m["CIRCLECI_RUNNER_NAME"].Value)
 	}
 
-	// CIRCLECI_RUNNER_WORKING_DIRECTORY
-	if m["CIRCLECI_RUNNER_WORKING_DIRECTORY"].Value != "/work" {
-		t.Errorf("CIRCLECI_RUNNER_WORKING_DIRECTORY = %q", m["CIRCLECI_RUNNER_WORKING_DIRECTORY"].Value)
+	// CIRCLECI_RUNNER_WORK_DIR
+	if m["CIRCLECI_RUNNER_WORK_DIR"].Value != "/work" {
+		t.Errorf("CIRCLECI_RUNNER_WORK_DIR = %q", m["CIRCLECI_RUNNER_WORK_DIR"].Value)
 	}
 
 	// CIRCLECI_USERNAME
@@ -149,6 +149,12 @@ func TestCircleCIRunnerLabels(t *testing.T) {
 	if labels["apps.example.com/circleci-username"] != "jeff" {
 		t.Errorf("username label = %q", labels["apps.example.com/circleci-username"])
 	}
+
+	// Email-style username must be sanitized for K8s label values
+	emailLabels := a.RunnerLabels("Jeff.D.Vincent@gmail.com", "my-pool")
+	if emailLabels["apps.example.com/circleci-username"] != "jeff.d.vincent-gmail.com" {
+		t.Errorf("email username label = %q, want jeff.d.vincent-gmail.com", emailLabels["apps.example.com/circleci-username"])
+	}
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -169,7 +175,7 @@ func TestCircleCIStartupScript(t *testing.T) {
 		"cleanup",
 		"trap cleanup",
 		"SIGTERM",
-		"circleci-runner machine",
+		"/opt/circleci/bin/circleci-runner machine",
 	}
 	for _, c := range checks {
 		if !strings.Contains(script, c) {
