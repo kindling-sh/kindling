@@ -388,12 +388,11 @@ func (r *GithubActionRunnerPoolReconciler) buildRunnerDeployment(cr *appsv1alpha
 		replicas = *spec.Replicas
 	}
 
-	// Default work directory — must be under /home/runner (the runner user's
-	// home in the official actions-runner image) so the non-root process can
-	// create it at runtime.
+	// Default work directory — each CI provider image has a different
+	// filesystem layout so the adapter supplies the right default.
 	workDir := spec.WorkDir
 	if workDir == "" || workDir == "/runner/_work" {
-		workDir = "/home/runner/_work"
+		workDir = runnerAdapter.DefaultWorkDir()
 	}
 
 	// Default service account — use the auto-created one if not specified

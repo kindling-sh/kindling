@@ -34,6 +34,13 @@ type RunnerAdapter interface {
 	// Example: "ghcr.io/actions/actions-runner:latest"
 	DefaultImage() string
 
+	// DefaultWorkDir returns the default working directory inside the runner
+	// container. Each CI platform image has different filesystem layouts:
+	//   GitHub Actions: "/home/runner/_work"  (runner user owns /home/runner)
+	//   CircleCI:       "/tmp/_work"          (no /home/runner in the image)
+	//   GitLab:         "/builds"             (gitlab-runner convention)
+	DefaultWorkDir() string
+
 	// DefaultTokenKey returns the default key name within the CI token secret.
 	// Example: "github-token"
 	DefaultTokenKey() string

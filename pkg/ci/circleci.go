@@ -52,6 +52,10 @@ func (a *CircleCIRunnerAdapter) DefaultImage() string {
 	return "circleci/runner-agent:machine-3"
 }
 
+func (a *CircleCIRunnerAdapter) DefaultWorkDir() string {
+	return "/tmp/_work"
+}
+
 func (a *CircleCIRunnerAdapter) DefaultTokenKey() string {
 	return "circleci-token"
 }

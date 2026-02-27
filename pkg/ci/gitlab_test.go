@@ -219,6 +219,12 @@ func TestGitLabRunnerLabels(t *testing.T) {
 	if labels["apps.example.com/gitlab-username"] != "jeff" {
 		t.Errorf("username label = %q", labels["apps.example.com/gitlab-username"])
 	}
+
+	// Email-style username must be sanitized for K8s label values
+	emailLabels := a.RunnerLabels("Jeff.D.Vincent@gmail.com", "my-pool")
+	if emailLabels["apps.example.com/gitlab-username"] != "jeff.d.vincent-gmail.com" {
+		t.Errorf("email username label = %q, want jeff.d.vincent-gmail.com", emailLabels["apps.example.com/gitlab-username"])
+	}
 }
 
 // ────────────────────────────────────────────────────────────────────────────

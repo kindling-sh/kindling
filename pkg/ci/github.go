@@ -19,8 +19,8 @@ var (
 	_ WorkflowGenerator = (*GitHubWorkflowGenerator)(nil)
 )
 
-func (g *GitHubProvider) Name() string        { return "github" }
-func (g *GitHubProvider) DisplayName() string  { return "GitHub Actions" }
+func (g *GitHubProvider) Name() string          { return "github" }
+func (g *GitHubProvider) DisplayName() string   { return "GitHub Actions" }
 func (g *GitHubProvider) Runner() RunnerAdapter { return &GitHubRunnerAdapter{} }
 func (g *GitHubProvider) Workflow() WorkflowGenerator {
 	return &GitHubWorkflowGenerator{}
@@ -50,6 +50,10 @@ type GitHubRunnerAdapter struct{ BaseRunnerAdapter }
 
 func (a *GitHubRunnerAdapter) DefaultImage() string {
 	return "ghcr.io/actions/actions-runner:latest"
+}
+
+func (a *GitHubRunnerAdapter) DefaultWorkDir() string {
+	return "/home/runner/_work"
 }
 
 func (a *GitHubRunnerAdapter) DefaultTokenKey() string {
@@ -220,7 +224,7 @@ func (a *GitHubRunnerAdapter) RunnerLabels(username string, crName string) map[s
 		"app.kubernetes.io/component":      "github-actions-runner",
 		"app.kubernetes.io/managed-by":     "githubactionrunnerpool-operator",
 		"app.kubernetes.io/instance":       crName,
-		"apps.example.com/github-username": username,
+		"apps.example.com/github-username": SanitizeDNS(username),
 	}
 }
 

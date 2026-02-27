@@ -52,6 +52,10 @@ func (a *GitLabRunnerAdapter) DefaultImage() string {
 	return "gitlab/gitlab-runner:latest"
 }
 
+func (a *GitLabRunnerAdapter) DefaultWorkDir() string {
+	return "/builds"
+}
+
 func (a *GitLabRunnerAdapter) DefaultTokenKey() string {
 	return "gitlab-token"
 }
@@ -248,7 +252,7 @@ func (a *GitLabRunnerAdapter) RunnerLabels(username string, crName string) map[s
 		"app.kubernetes.io/component":      "gitlab-ci-runner",
 		"app.kubernetes.io/managed-by":     "githubactionrunnerpool-operator",
 		"app.kubernetes.io/instance":       crName,
-		"apps.example.com/gitlab-username": username,
+		"apps.example.com/gitlab-username": SanitizeDNS(username),
 	}
 }
 

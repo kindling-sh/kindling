@@ -2309,9 +2309,12 @@ spec:
                   type: object
                 type: array
               workDir:
-                default: /home/runner/_work
-                description: WorkDir is the working directory mount path inside the
-                  runner container.
+                description: |-
+                  WorkDir is the working directory mount path inside the runner container.
+                  If empty, the controller uses the CI provider's default:
+                    GitHub Actions: /home/runner/_work
+                    CircleCI:       /tmp/_work
+                    GitLab:         /builds
                 type: string
             required:
             - githubUsername

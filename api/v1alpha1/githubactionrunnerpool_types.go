@@ -86,7 +86,10 @@ type GithubActionRunnerPoolSpec struct {
 	ServiceAccountName string `json:"serviceAccountName,omitempty"`
 
 	// WorkDir is the working directory mount path inside the runner container.
-	//+kubebuilder:default="/home/runner/_work"
+	// If empty, the controller uses the CI provider's default:
+	//   GitHub Actions: /home/runner/_work
+	//   CircleCI:       /tmp/_work
+	//   GitLab:         /builds
 	//+optional
 	WorkDir string `json:"workDir,omitempty"`
 
