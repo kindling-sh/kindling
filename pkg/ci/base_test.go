@@ -13,7 +13,9 @@ func TestBaseRunnerAdapterDeploymentName(t *testing.T) {
 		{"jeff", "jeff-runner"},
 		{"alice", "alice-runner"},
 		{"bob-123", "bob-123-runner"},
-		{"", "-runner"},
+		{"", "runner-runner"},
+		{"Jeff.D.Vincent@gmail.com", "jeff.d.vincent-gmail.com-runner"},
+		{"user_name", "user-name-runner"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.user, func(t *testing.T) {

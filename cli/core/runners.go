@@ -73,6 +73,10 @@ func CreateRunnerPool(cfg RunnerPoolConfig) ([]string, error) {
 		platformURL = "https://circleci.com"
 	}
 
+	// Sanitize the username for use in K8s resource names (RFC 1123).
+	// The original username is preserved in spec.githubUsername.
+	safeName := ci.SanitizeDNS(cfg.Username)
+
 	crYAML := fmt.Sprintf(`apiVersion: apps.example.com/v1alpha1
 kind: %s
 metadata:
@@ -90,13 +94,13 @@ spec:
 %s  labels:
     - kindling
 `, labels.CRDKind, platformURL, runnerImage, labels.SecretName, provider.Runner().DefaultTokenKey(), ciProviderField)
-	crYAML = fmt.Sprintf(crYAML, cfg.Username, ns, cfg.Username, cfg.Repo)
+	crYAML = fmt.Sprintf(crYAML, safeName, ns, cfg.Username, cfg.Repo)
 
 	out, err = KubectlApplyStdin(cfg.ClusterName, crYAML)
 	if err != nil {
 		return nil, fmt.Errorf("failed to apply runner pool: %s", out)
 	}
-	poolName := fmt.Sprintf("%s-runner-pool", cfg.Username)
+	poolName := fmt.Sprintf("%s-runner-pool", safeName)
 	outputs = append(outputs, fmt.Sprintf("%s runner pool %s created", provider.DisplayName(), poolName))
 
 	return outputs, nil
