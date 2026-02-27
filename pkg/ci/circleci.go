@@ -19,8 +19,8 @@ var (
 	_ WorkflowGenerator = (*CircleCIWorkflowGenerator)(nil)
 )
 
-func (c *CircleCIProvider) Name() string        { return "circleci" }
-func (c *CircleCIProvider) DisplayName() string  { return "CircleCI" }
+func (c *CircleCIProvider) Name() string          { return "circleci" }
+func (c *CircleCIProvider) DisplayName() string   { return "CircleCI" }
 func (c *CircleCIProvider) Runner() RunnerAdapter { return &CircleCIRunnerAdapter{} }
 func (c *CircleCIProvider) Workflow() WorkflowGenerator {
 	return &CircleCIWorkflowGenerator{}
@@ -137,10 +137,10 @@ exec /opt/circleci/bin/circleci-runner machine \
 
 func (a *CircleCIRunnerAdapter) RunnerLabels(username string, crName string) map[string]string {
 	return map[string]string{
-		"app.kubernetes.io/name":            crName,
-		"app.kubernetes.io/component":       "circleci-runner",
-		"app.kubernetes.io/managed-by":      "githubactionrunnerpool-operator",
-		"app.kubernetes.io/instance":        crName,
+		"app.kubernetes.io/name":             crName,
+		"app.kubernetes.io/component":        "circleci-runner",
+		"app.kubernetes.io/managed-by":       "githubactionrunnerpool-operator",
+		"app.kubernetes.io/instance":         crName,
 		"apps.example.com/circleci-username": SanitizeDNS(username),
 	}
 }
@@ -204,6 +204,8 @@ Key conventions you MUST follow:
         command: |
           echo "export TAG=${CIRCLE_USERNAME}-${CIRCLE_SHA1:0:8}" >> "$BASH_ENV"
   Do NOT put TAG in the environment: block.
+- Heredocs: CircleCI v2.1 uses << for parameter syntax, so heredocs like <<EOF
+  MUST be escaped as \<<EOF in the YAML. The shell still interprets \<< as <<.
 - Runner resource class: use the self-hosted resource class with machine: true
 - Ingress host pattern: ${CIRCLE_USERNAME}-<service>.localhost
 - DSE name pattern: ${CIRCLE_USERNAME}-<service>
@@ -339,7 +341,7 @@ jobs:
       - run:
           name: Deploy sample-app
           command: |
-            cat > /builds/${CIRCLE_USERNAME}-sample-app-dse.yaml <<EOF
+            cat > /builds/${CIRCLE_USERNAME}-sample-app-dse.yaml \<<EOF
             apiVersion: apps.example.com/v1alpha1
             kind: DevStagingEnvironment
             metadata:
@@ -491,7 +493,7 @@ jobs:
       - run:
           name: Deploy API
           command: |
-            cat > /builds/${CIRCLE_USERNAME}-api-dse.yaml <<EOF
+            cat > /builds/${CIRCLE_USERNAME}-api-dse.yaml \<<EOF
             apiVersion: apps.example.com/v1alpha1
             kind: DevStagingEnvironment
             metadata:
@@ -553,7 +555,7 @@ jobs:
       - run:
           name: Deploy UI
           command: |
-            cat > /builds/${CIRCLE_USERNAME}-ui-dse.yaml <<EOF
+            cat > /builds/${CIRCLE_USERNAME}-ui-dse.yaml \<<EOF
             apiVersion: apps.example.com/v1alpha1
             kind: DevStagingEnvironment
             metadata:
