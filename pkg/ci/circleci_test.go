@@ -236,8 +236,8 @@ func TestCircleCIPromptContext(t *testing.T) {
 	if ctx.WorkflowNoun != "config" {
 		t.Errorf("WorkflowNoun = %q", ctx.WorkflowNoun)
 	}
-	if !strings.Contains(ctx.ActorExpr, "CIRCLE_USERNAME") {
-		t.Errorf("ActorExpr = %q", ctx.ActorExpr)
+	if !strings.Contains(ctx.ActorExpr, "SAFE_USER") {
+		t.Errorf("ActorExpr = %q, want ${SAFE_USER}", ctx.ActorExpr)
 	}
 	if ctx.WorkspaceExpr != "." {
 		t.Errorf("WorkspaceExpr = %q, want %q", ctx.WorkspaceExpr, ".")

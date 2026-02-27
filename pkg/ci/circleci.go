@@ -199,20 +199,28 @@ To deploy a DevStagingEnvironment CR, write a run step that:
 
 Key conventions you MUST follow:
 - Registry: registry:5000 (in-cluster)
-- Image tag: ${CIRCLE_USERNAME}-${CIRCLE_SHA1:0:8}
+- Image tag: ${SAFE_USER}-${CIRCLE_SHA1:0:8}
   IMPORTANT: CircleCI cannot evaluate bash substring syntax like ${CIRCLE_SHA1:0:8}
   inside the declarative "environment:" block. You MUST compute TAG in a run step
-  and persist it via $BASH_ENV:
+  and persist it via $BASH_ENV.
+  Do NOT put TAG in the environment: block.
+- Username sanitization: CIRCLE_USERNAME can be an email address (e.g.
+  user@domain.com) which contains characters invalid for Docker tags, K8s
+  resource names, and hostnames. You MUST sanitize it into SAFE_USER and
+  persist it via $BASH_ENV in the same "Set image tag" step:
     - run:
         name: Set image tag
         command: |
-          echo "export TAG=${CIRCLE_USERNAME}-${CIRCLE_SHA1:0:8}" >> "$BASH_ENV"
-  Do NOT put TAG in the environment: block.
+          SAFE_USER=$(echo "$CIRCLE_USERNAME" | tr '[:upper:]' '[:lower:]' | sed 's/@/-/g; s/_/-/g' | tr -cd 'a-z0-9.-' | sed 's/--*/-/g; s/^[-.]*//; s/[-.]*$//')
+          echo "export SAFE_USER=${SAFE_USER}" >> "$BASH_ENV"
+          echo "export TAG=${SAFE_USER}-${CIRCLE_SHA1:0:8}" >> "$BASH_ENV"
+  Use ${SAFE_USER} (NOT raw ${CIRCLE_USERNAME}) everywhere: image tags, DSE
+  names, ingress hosts, labels, file paths, and inter-service env vars.
 - Heredocs: CircleCI v2.1 uses << for parameter syntax, so heredocs like <<EOF
   MUST be escaped as \<<EOF in the YAML. The shell still interprets \<< as <<.
 - Runner resource class: use the self-hosted resource class with machine: true
-- Ingress host pattern: ${CIRCLE_USERNAME}-<service>.localhost
-- DSE name pattern: ${CIRCLE_USERNAME}-<service>
+- Ingress host pattern: ${SAFE_USER}-<service>.localhost
+- DSE name pattern: ${SAFE_USER}-<service>
 - Trigger on push to the default branch
 - Always include a checkout step
 - Tar context paths: ALWAYS use paths relative to the repo root (e.g. -C . or -C ui),
@@ -244,7 +252,7 @@ When a service calls other services via gRPC or HTTP, it reads their addresses f
 environment variables. You MUST examine the source code snippets for EVERY service
 and find ALL env var references that look like service address variables. For each,
 add an env entry mapping it to the target service's cluster-internal DNS name:
-  ${CIRCLE_USERNAME}-<service-name>:<port>
+  ${SAFE_USER}-<service-name>:<port>
 Do NOT skip inter-service env vars — without them, services cannot find each other.
 
 ` + PromptDockerCompose + `
@@ -265,11 +273,11 @@ func (g *CircleCIWorkflowGenerator) PromptContext() PromptContext {
 		BuildActionRef:  "(inline shell — see system prompt)",
 		DeployActionRef: "(inline shell — see system prompt)",
 		CheckoutAction:  "checkout",
-		ActorExpr:       "${CIRCLE_USERNAME}",
+		ActorExpr:       "${SAFE_USER}",
 		SHAExpr:         "${CIRCLE_SHA1:0:8}",
 		WorkspaceExpr:   ".",
 		RunnerSpec:      "self-hosted resource class",
-		EnvTagExpr:      "${CIRCLE_USERNAME}-${CIRCLE_SHA1:0:8}",
+		EnvTagExpr:      "${SAFE_USER}-${CIRCLE_SHA1:0:8}",
 		TriggerBlock: func(branch string) string {
 			return fmt.Sprintf("workflows:\n  dev-deploy:\n    jobs:\n      - build-and-deploy:\n          filters:\n            branches:\n              only: %s", branch)
 		},
@@ -286,6 +294,8 @@ func (g *CircleCIWorkflowGenerator) StripTemplateExpressions(content string) str
 	replacements := []struct{ old, new string }{
 		{"${CIRCLE_USERNAME}", "ACTOR"},
 		{"$CIRCLE_USERNAME", "ACTOR"},
+		{"${SAFE_USER}", "ACTOR"},
+		{"$SAFE_USER", "ACTOR"},
 		{"${CIRCLE_SHA1:0:8}", "SHA"},
 		{"${CIRCLE_SHA1}", "SHA"},
 		{"$CIRCLE_SHA1", "SHA"},
@@ -318,7 +328,9 @@ jobs:
       - run:
           name: Set image tag
           command: |
-            echo "export TAG=${CIRCLE_USERNAME}-${CIRCLE_SHA1:0:8}" >> "$BASH_ENV"
+            SAFE_USER=$(echo "$CIRCLE_USERNAME" | tr '[:upper:]' '[:lower:]' | sed 's/@/-/g; s/_/-/g' | tr -cd 'a-z0-9.-' | sed 's/--*/-/g; s/^[-.]*//; s/[-.]*$//')
+            echo "export SAFE_USER=${SAFE_USER}" >> "$BASH_ENV"
+            echo "export TAG=${SAFE_USER}-${CIRCLE_SHA1:0:8}" >> "$BASH_ENV"
 
       - run:
           name: Clean builds directory
@@ -348,13 +360,13 @@ jobs:
       - run:
           name: Deploy sample-app
           command: |
-            cat > /builds/${CIRCLE_USERNAME}-sample-app-dse.yaml \<<EOF
+            cat > /builds/${SAFE_USER}-sample-app-dse.yaml \<<EOF
             apiVersion: apps.example.com/v1alpha1
             kind: DevStagingEnvironment
             metadata:
-              name: ${CIRCLE_USERNAME}-sample-app
+              name: ${SAFE_USER}-sample-app
               labels:
-                app.kubernetes.io/name: ${CIRCLE_USERNAME}-sample-app
+                app.kubernetes.io/name: ${SAFE_USER}-sample-app
                 app.kubernetes.io/managed-by: kindling
             spec:
               deployment:
@@ -369,7 +381,7 @@ jobs:
                 type: ClusterIP
               ingress:
                 enabled: true
-                host: ${CIRCLE_USERNAME}-sample-app.localhost
+                host: ${SAFE_USER}-sample-app.localhost
                 ingressClassName: nginx
               dependencies:
                 - type: postgres
@@ -377,23 +389,23 @@ jobs:
                 - type: redis
             EOF
 
-            touch /builds/${CIRCLE_USERNAME}-sample-app-dse.apply
+            touch /builds/${SAFE_USER}-sample-app-dse.apply
 
             WAITED=0
-            while [ ! -f /builds/${CIRCLE_USERNAME}-sample-app-dse.apply-done ]; do
+            while [ ! -f /builds/${SAFE_USER}-sample-app-dse.apply-done ]; do
               sleep 1; WAITED=$((WAITED+1))
               if [ ${WAITED} -ge 60 ]; then echo "❌ Deploy timed out"; exit 1; fi
             done
 
-            EXIT_CODE=$(cat /builds/${CIRCLE_USERNAME}-sample-app-dse.apply-exitcode 2>/dev/null || echo "1")
+            EXIT_CODE=$(cat /builds/${SAFE_USER}-sample-app-dse.apply-exitcode 2>/dev/null || echo "1")
             if [ "${EXIT_CODE}" != "0" ]; then
               echo "❌ Deploy failed"
-              cat /builds/${CIRCLE_USERNAME}-sample-app-dse.apply-log 2>/dev/null
+              cat /builds/${SAFE_USER}-sample-app-dse.apply-log 2>/dev/null
               exit 1
             fi
 
             echo "🎉 Deploy complete!"
-            echo "🌐 http://${CIRCLE_USERNAME}-sample-app.localhost"
+            echo "🌐 http://${SAFE_USER}-sample-app.localhost"
 
 workflows:
   dev-deploy:
@@ -419,7 +431,9 @@ jobs:
       - run:
           name: Set image tag
           command: |
-            echo "export TAG=${CIRCLE_USERNAME}-${CIRCLE_SHA1:0:8}" >> "$BASH_ENV"
+            SAFE_USER=$(echo "$CIRCLE_USERNAME" | tr '[:upper:]' '[:lower:]' | sed 's/@/-/g; s/_/-/g' | tr -cd 'a-z0-9.-' | sed 's/--*/-/g; s/^[-.]*//; s/[-.]*$//')
+            echo "export SAFE_USER=${SAFE_USER}" >> "$BASH_ENV"
+            echo "export TAG=${SAFE_USER}-${CIRCLE_SHA1:0:8}" >> "$BASH_ENV"
 
       - run:
           name: Clean builds directory
@@ -457,7 +471,9 @@ jobs:
       - run:
           name: Set image tag
           command: |
-            echo "export TAG=${CIRCLE_USERNAME}-${CIRCLE_SHA1:0:8}" >> "$BASH_ENV"
+            SAFE_USER=$(echo "$CIRCLE_USERNAME" | tr '[:upper:]' '[:lower:]' | sed 's/@/-/g; s/_/-/g' | tr -cd 'a-z0-9.-' | sed 's/--*/-/g; s/^[-.]*//; s/[-.]*$//')
+            echo "export SAFE_USER=${SAFE_USER}" >> "$BASH_ENV"
+            echo "export TAG=${SAFE_USER}-${CIRCLE_SHA1:0:8}" >> "$BASH_ENV"
 
       - run:
           name: Clean builds directory
@@ -495,22 +511,24 @@ jobs:
       - run:
           name: Set image tag
           command: |
-            echo "export TAG=${CIRCLE_USERNAME}-${CIRCLE_SHA1:0:8}" >> "$BASH_ENV"
+            SAFE_USER=$(echo "$CIRCLE_USERNAME" | tr '[:upper:]' '[:lower:]' | sed 's/@/-/g; s/_/-/g' | tr -cd 'a-z0-9.-' | sed 's/--*/-/g; s/^[-.]*//; s/[-.]*$//')
+            echo "export SAFE_USER=${SAFE_USER}" >> "$BASH_ENV"
+            echo "export TAG=${SAFE_USER}-${CIRCLE_SHA1:0:8}" >> "$BASH_ENV"
 
       - run:
           name: Deploy API
           command: |
-            cat > /builds/${CIRCLE_USERNAME}-api-dse.yaml \<<EOF
+            cat > /builds/${SAFE_USER}-api-dse.yaml \<<EOF
             apiVersion: apps.example.com/v1alpha1
             kind: DevStagingEnvironment
             metadata:
-              name: ${CIRCLE_USERNAME}-api
+              name: ${SAFE_USER}-api
               labels:
-                app.kubernetes.io/name: ${CIRCLE_USERNAME}-api
+                app.kubernetes.io/name: ${SAFE_USER}-api
                 app.kubernetes.io/managed-by: kindling
                 app.kubernetes.io/part-of: my-app
                 app.kubernetes.io/component: api
-                apps.example.com/circleci-username: ${CIRCLE_USERNAME}
+                apps.example.com/circleci-username: ${SAFE_USER}
             spec:
               deployment:
                 image: ${REGISTRY}/api:${TAG}
@@ -524,7 +542,7 @@ jobs:
                 type: ClusterIP
               ingress:
                 enabled: true
-                host: ${CIRCLE_USERNAME}-api.localhost
+                host: ${SAFE_USER}-api.localhost
                 ingressClassName: nginx
               dependencies:
                 - type: postgres
@@ -532,18 +550,18 @@ jobs:
                 - type: redis
             EOF
 
-            touch /builds/${CIRCLE_USERNAME}-api-dse.apply
+            touch /builds/${SAFE_USER}-api-dse.apply
 
             WAITED=0
-            while [ ! -f /builds/${CIRCLE_USERNAME}-api-dse.apply-done ]; do
+            while [ ! -f /builds/${SAFE_USER}-api-dse.apply-done ]; do
               sleep 1; WAITED=$((WAITED+1))
               if [ ${WAITED} -ge 60 ]; then echo "❌ Deploy timed out"; exit 1; fi
             done
 
-            EXIT_CODE=$(cat /builds/${CIRCLE_USERNAME}-api-dse.apply-exitcode 2>/dev/null || echo "1")
+            EXIT_CODE=$(cat /builds/${SAFE_USER}-api-dse.apply-exitcode 2>/dev/null || echo "1")
             if [ "${EXIT_CODE}" != "0" ]; then
               echo "❌ Deploy failed"
-              cat /builds/${CIRCLE_USERNAME}-api-dse.apply-log 2>/dev/null
+              cat /builds/${SAFE_USER}-api-dse.apply-log 2>/dev/null
               exit 1
             fi
             echo "✅ Deployed api"
@@ -557,22 +575,24 @@ jobs:
       - run:
           name: Set image tag
           command: |
-            echo "export TAG=${CIRCLE_USERNAME}-${CIRCLE_SHA1:0:8}" >> "$BASH_ENV"
+            SAFE_USER=$(echo "$CIRCLE_USERNAME" | tr '[:upper:]' '[:lower:]' | sed 's/@/-/g; s/_/-/g' | tr -cd 'a-z0-9.-' | sed 's/--*/-/g; s/^[-.]*//; s/[-.]*$//')
+            echo "export SAFE_USER=${SAFE_USER}" >> "$BASH_ENV"
+            echo "export TAG=${SAFE_USER}-${CIRCLE_SHA1:0:8}" >> "$BASH_ENV"
 
       - run:
           name: Deploy UI
           command: |
-            cat > /builds/${CIRCLE_USERNAME}-ui-dse.yaml \<<EOF
+            cat > /builds/${SAFE_USER}-ui-dse.yaml \<<EOF
             apiVersion: apps.example.com/v1alpha1
             kind: DevStagingEnvironment
             metadata:
-              name: ${CIRCLE_USERNAME}-ui
+              name: ${SAFE_USER}-ui
               labels:
-                app.kubernetes.io/name: ${CIRCLE_USERNAME}-ui
+                app.kubernetes.io/name: ${SAFE_USER}-ui
                 app.kubernetes.io/managed-by: kindling
                 app.kubernetes.io/part-of: my-app
                 app.kubernetes.io/component: ui
-                apps.example.com/circleci-username: ${CIRCLE_USERNAME}
+                apps.example.com/circleci-username: ${SAFE_USER}
             spec:
               deployment:
                 image: ${REGISTRY}/ui:${TAG}
@@ -583,34 +603,34 @@ jobs:
                   path: /
                 env:
                   - name: API_URL
-                    value: "http://${CIRCLE_USERNAME}-api:8080"
+                    value: "http://${SAFE_USER}-api:8080"
               service:
                 port: 80
                 type: ClusterIP
               ingress:
                 enabled: true
-                host: ${CIRCLE_USERNAME}-ui.localhost
+                host: ${SAFE_USER}-ui.localhost
                 ingressClassName: nginx
             EOF
 
-            touch /builds/${CIRCLE_USERNAME}-ui-dse.apply
+            touch /builds/${SAFE_USER}-ui-dse.apply
 
             WAITED=0
-            while [ ! -f /builds/${CIRCLE_USERNAME}-ui-dse.apply-done ]; do
+            while [ ! -f /builds/${SAFE_USER}-ui-dse.apply-done ]; do
               sleep 1; WAITED=$((WAITED+1))
               if [ ${WAITED} -ge 60 ]; then echo "❌ Deploy timed out"; exit 1; fi
             done
 
-            EXIT_CODE=$(cat /builds/${CIRCLE_USERNAME}-ui-dse.apply-exitcode 2>/dev/null || echo "1")
+            EXIT_CODE=$(cat /builds/${SAFE_USER}-ui-dse.apply-exitcode 2>/dev/null || echo "1")
             if [ "${EXIT_CODE}" != "0" ]; then
               echo "❌ Deploy failed"
-              cat /builds/${CIRCLE_USERNAME}-ui-dse.apply-log 2>/dev/null
+              cat /builds/${SAFE_USER}-ui-dse.apply-log 2>/dev/null
               exit 1
             fi
 
             echo "🎉 Deploy complete!"
-            echo "🌐 UI:  http://${CIRCLE_USERNAME}-ui.localhost"
-            echo "🌐 API: http://${CIRCLE_USERNAME}-api.localhost"
+            echo "🌐 UI:  http://${SAFE_USER}-ui.localhost"
+            echo "🌐 API: http://${SAFE_USER}-api.localhost"
 
 workflows:
   dev-deploy:
