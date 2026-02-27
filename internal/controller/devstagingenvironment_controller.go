@@ -43,6 +43,13 @@ import (
 	appsv1alpha1 "github.com/jeffvincent/kindling/api/v1alpha1"
 )
 
+// safeName converts a CR name (DNS-1123 subdomain, which allows dots) into a
+// DNS-1035 label (lowercase alphanumeric + hyphens only). This is necessary
+// because K8s Services require DNS-1035 names, while metadata.name allows dots.
+func safeName(name string) string {
+	return strings.ReplaceAll(name, ".", "-")
+}
+
 // DevStagingEnvironmentReconciler reconciles a DevStagingEnvironment object
 type DevStagingEnvironmentReconciler struct {
 	client.Client
@@ -203,7 +210,7 @@ func (r *DevStagingEnvironmentReconciler) buildDeployment(cr *appsv1alpha1.DevSt
 	allEnv = append(allEnv, spec.Env...)
 
 	container := corev1.Container{
-		Name:    cr.Name,
+		Name:    safeName(cr.Name),
 		Image:   spec.Image,
 		Command: spec.Command,
 		Args:    spec.Args,
@@ -241,7 +248,7 @@ func (r *DevStagingEnvironmentReconciler) buildDeployment(cr *appsv1alpha1.DevSt
 
 	return &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      cr.Name,
+			Name:      safeName(cr.Name),
 			Namespace: cr.Namespace,
 			Labels:    labels,
 			Annotations: map[string]string{
@@ -328,7 +335,7 @@ func (r *DevStagingEnvironmentReconciler) buildService(cr *appsv1alpha1.DevStagi
 
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      cr.Name,
+			Name:      safeName(cr.Name),
 			Namespace: cr.Namespace,
 			Labels:    labels,
 			Annotations: map[string]string{
@@ -354,7 +361,7 @@ func (r *DevStagingEnvironmentReconciler) buildService(cr *appsv1alpha1.DevStagi
 
 func (r *DevStagingEnvironmentReconciler) reconcileIngress(ctx context.Context, cr *appsv1alpha1.DevStagingEnvironment) error {
 	logger := log.FromContext(ctx)
-	ingressName := types.NamespacedName{Name: cr.Name, Namespace: cr.Namespace}
+	ingressName := types.NamespacedName{Name: safeName(cr.Name), Namespace: cr.Namespace}
 
 	// If Ingress is not enabled, clean up any existing one
 	if cr.Spec.Ingress == nil || !cr.Spec.Ingress.Enabled {
@@ -426,7 +433,7 @@ func (r *DevStagingEnvironmentReconciler) buildIngress(cr *appsv1alpha1.DevStagi
 
 	ingress := &networkingv1.Ingress{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:        cr.Name,
+			Name:        safeName(cr.Name),
 			Namespace:   cr.Namespace,
 			Labels:      labels,
 			Annotations: annotations,
@@ -442,7 +449,7 @@ func (r *DevStagingEnvironmentReconciler) buildIngress(cr *appsv1alpha1.DevStagi
 							PathType: &pathType,
 							Backend: networkingv1.IngressBackend{
 								Service: &networkingv1.IngressServiceBackend{
-									Name: cr.Name,
+									Name: safeName(cr.Name),
 									Port: networkingv1.ServiceBackendPort{
 										Number: cr.Spec.Service.Port,
 									},
@@ -477,7 +484,7 @@ func (r *DevStagingEnvironmentReconciler) buildIngress(cr *appsv1alpha1.DevStagi
 func (r *DevStagingEnvironmentReconciler) updateStatus(ctx context.Context, cr *appsv1alpha1.DevStagingEnvironment) error {
 	// Fetch current Deployment state
 	deploy := &appsv1.Deployment{}
-	if err := r.Get(ctx, types.NamespacedName{Name: cr.Name, Namespace: cr.Namespace}, deploy); err == nil {
+	if err := r.Get(ctx, types.NamespacedName{Name: safeName(cr.Name), Namespace: cr.Namespace}, deploy); err == nil {
 		cr.Status.AvailableReplicas = deploy.Status.AvailableReplicas
 		cr.Status.DeploymentReady = deploy.Status.AvailableReplicas == deploy.Status.Replicas &&
 			deploy.Status.Replicas > 0
@@ -485,7 +492,7 @@ func (r *DevStagingEnvironmentReconciler) updateStatus(ctx context.Context, cr *
 
 	// Fetch current Service state
 	svc := &corev1.Service{}
-	if err := r.Get(ctx, types.NamespacedName{Name: cr.Name, Namespace: cr.Namespace}, svc); err == nil {
+	if err := r.Get(ctx, types.NamespacedName{Name: safeName(cr.Name), Namespace: cr.Namespace}, svc); err == nil {
 		cr.Status.ServiceReady = true
 	} else {
 		cr.Status.ServiceReady = false
@@ -494,7 +501,7 @@ func (r *DevStagingEnvironmentReconciler) updateStatus(ctx context.Context, cr *
 	// Fetch current Ingress state
 	if cr.Spec.Ingress != nil && cr.Spec.Ingress.Enabled {
 		ing := &networkingv1.Ingress{}
-		if err := r.Get(ctx, types.NamespacedName{Name: cr.Name, Namespace: cr.Namespace}, ing); err == nil {
+		if err := r.Get(ctx, types.NamespacedName{Name: safeName(cr.Name), Namespace: cr.Namespace}, ing); err == nil {
 			cr.Status.IngressReady = true
 			if cr.Spec.Ingress.Host != "" {
 				scheme := "http"
@@ -841,7 +848,7 @@ var dependencyRegistry = map[appsv1alpha1.DependencyType]dependencyDefaults{
 
 // dependencyName returns the child resource name for a given dependency.
 func dependencyName(crName string, depType appsv1alpha1.DependencyType) string {
-	return fmt.Sprintf("%s-%s", crName, string(depType))
+	return fmt.Sprintf("%s-%s", safeName(crName), string(depType))
 }
 
 // buildDependencyWaitInitContainers creates one init container per dependency
@@ -1429,5 +1436,3 @@ func generatePassword(length int) string {
 	return string(b)
 }
 
-// init is used to silence the strings import if no other code references it.
-var _ = strings.TrimSpace

@@ -252,7 +252,7 @@ func (a *GitLabRunnerAdapter) RunnerLabels(username string, crName string) map[s
 		"app.kubernetes.io/component":      "gitlab-ci-runner",
 		"app.kubernetes.io/managed-by":     "githubactionrunnerpool-operator",
 		"app.kubernetes.io/instance":       crName,
-		"apps.example.com/gitlab-username": SanitizeDNS(username),
+		"apps.example.com/gitlab-username": username,
 	}
 }
 
@@ -310,6 +310,10 @@ Key conventions you MUST follow:
   pool.  Do NOT use $GITLAB_USER_LOGIN — it often resolves to a long project-bot
   username (e.g. "project_12345_bot_abc...") that contains underscores, exceeds
   Kubernetes name limits, and breaks DNS-based addressing.
+  IMPORTANT: KINDLING_USER must be a valid DNS-1035 label — lowercase
+  alphanumeric and hyphens only (no dots, underscores, or uppercase).
+  If the GitLab username contains dots (e.g. "john.doe"), replace them with
+  hyphens: KINDLING_USER: "john-doe"
   Example variables block:
     variables:
       REGISTRY: "registry:5000"

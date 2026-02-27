@@ -29,6 +29,10 @@ type Provider interface {
 // Implementations translate provider-agnostic runner pool configuration into
 // provider-specific container specs: environment variables, startup scripts,
 // Kubernetes labels, and naming conventions.
+//
+// All methods that accept a "username" parameter expect a pre-sanitized value
+// (via SanitizeDNS). Callers — typically the controller — must sanitize raw
+// user input once at the boundary before passing it to any adapter method.
 type RunnerAdapter interface {
 	// DefaultImage returns the default container image for self-hosted runners.
 	// Example: "ghcr.io/actions/actions-runner:latest"

@@ -224,7 +224,7 @@ func (a *GitHubRunnerAdapter) RunnerLabels(username string, crName string) map[s
 		"app.kubernetes.io/component":      "github-actions-runner",
 		"app.kubernetes.io/managed-by":     "githubactionrunnerpool-operator",
 		"app.kubernetes.io/instance":       crName,
-		"apps.example.com/github-username": SanitizeDNS(username),
+		"apps.example.com/github-username": username,
 	}
 }
 

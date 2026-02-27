@@ -85,7 +85,7 @@ func (a *CircleCIRunnerAdapter) RunnerEnvVars(cfg RunnerEnvConfig) []ContainerEn
 		},
 		{
 			Name:  "CIRCLECI_RUNNER_NAME",
-			Value: fmt.Sprintf("%s-%s", SanitizeDNS(cfg.Username), cfg.CRName),
+			Value: fmt.Sprintf("%s-%s", cfg.Username, cfg.CRName),
 		},
 		{
 			Name:  "CIRCLECI_RUNNER_WORK_DIR",
@@ -145,7 +145,7 @@ func (a *CircleCIRunnerAdapter) RunnerLabels(username string, crName string) map
 		"app.kubernetes.io/component":        "circleci-runner",
 		"app.kubernetes.io/managed-by":       "githubactionrunnerpool-operator",
 		"app.kubernetes.io/instance":         crName,
-		"apps.example.com/circleci-username": SanitizeDNS(username),
+		"apps.example.com/circleci-username": username,
 	}
 }
 
@@ -211,7 +211,7 @@ Key conventions you MUST follow:
     - run:
         name: Set image tag
         command: |
-          SAFE_USER=$(echo "$CIRCLE_USERNAME" | tr '[:upper:]' '[:lower:]' | sed 's/@/-/g; s/_/-/g' | tr -cd 'a-z0-9.-' | sed 's/--*/-/g; s/^[-.]*//; s/[-.]*$//')
+          SAFE_USER=$(echo "$CIRCLE_USERNAME" | tr '[:upper:]' '[:lower:]' | sed 's/@/-/g; s/_/-/g; s/\./-/g' | tr -cd 'a-z0-9-' | sed 's/--*/-/g; s/^[-]*//; s/[-]*$//')
           echo "export SAFE_USER=${SAFE_USER}" >> "$BASH_ENV"
           echo "export TAG=${SAFE_USER}-${CIRCLE_SHA1:0:8}" >> "$BASH_ENV"
   Use ${SAFE_USER} (NOT raw ${CIRCLE_USERNAME}) everywhere: image tags, DSE
@@ -328,7 +328,7 @@ jobs:
       - run:
           name: Set image tag
           command: |
-            SAFE_USER=$(echo "$CIRCLE_USERNAME" | tr '[:upper:]' '[:lower:]' | sed 's/@/-/g; s/_/-/g' | tr -cd 'a-z0-9.-' | sed 's/--*/-/g; s/^[-.]*//; s/[-.]*$//')
+            SAFE_USER=$(echo "$CIRCLE_USERNAME" | tr '[:upper:]' '[:lower:]' | sed 's/@/-/g; s/_/-/g; s/\./-/g' | tr -cd 'a-z0-9-' | sed 's/--*/-/g; s/^[-]*//; s/[-]*$//')
             echo "export SAFE_USER=${SAFE_USER}" >> "$BASH_ENV"
             echo "export TAG=${SAFE_USER}-${CIRCLE_SHA1:0:8}" >> "$BASH_ENV"
 
@@ -431,7 +431,7 @@ jobs:
       - run:
           name: Set image tag
           command: |
-            SAFE_USER=$(echo "$CIRCLE_USERNAME" | tr '[:upper:]' '[:lower:]' | sed 's/@/-/g; s/_/-/g' | tr -cd 'a-z0-9.-' | sed 's/--*/-/g; s/^[-.]*//; s/[-.]*$//')
+            SAFE_USER=$(echo "$CIRCLE_USERNAME" | tr '[:upper:]' '[:lower:]' | sed 's/@/-/g; s/_/-/g; s/\./-/g' | tr -cd 'a-z0-9-' | sed 's/--*/-/g; s/^[-]*//; s/[-]*$//')
             echo "export SAFE_USER=${SAFE_USER}" >> "$BASH_ENV"
             echo "export TAG=${SAFE_USER}-${CIRCLE_SHA1:0:8}" >> "$BASH_ENV"
 
@@ -471,7 +471,7 @@ jobs:
       - run:
           name: Set image tag
           command: |
-            SAFE_USER=$(echo "$CIRCLE_USERNAME" | tr '[:upper:]' '[:lower:]' | sed 's/@/-/g; s/_/-/g' | tr -cd 'a-z0-9.-' | sed 's/--*/-/g; s/^[-.]*//; s/[-.]*$//')
+            SAFE_USER=$(echo "$CIRCLE_USERNAME" | tr '[:upper:]' '[:lower:]' | sed 's/@/-/g; s/_/-/g; s/\./-/g' | tr -cd 'a-z0-9-' | sed 's/--*/-/g; s/^[-]*//; s/[-]*$//')
             echo "export SAFE_USER=${SAFE_USER}" >> "$BASH_ENV"
             echo "export TAG=${SAFE_USER}-${CIRCLE_SHA1:0:8}" >> "$BASH_ENV"
 
@@ -511,7 +511,7 @@ jobs:
       - run:
           name: Set image tag
           command: |
-            SAFE_USER=$(echo "$CIRCLE_USERNAME" | tr '[:upper:]' '[:lower:]' | sed 's/@/-/g; s/_/-/g' | tr -cd 'a-z0-9.-' | sed 's/--*/-/g; s/^[-.]*//; s/[-.]*$//')
+            SAFE_USER=$(echo "$CIRCLE_USERNAME" | tr '[:upper:]' '[:lower:]' | sed 's/@/-/g; s/_/-/g; s/\./-/g' | tr -cd 'a-z0-9-' | sed 's/--*/-/g; s/^[-]*//; s/[-]*$//')
             echo "export SAFE_USER=${SAFE_USER}" >> "$BASH_ENV"
             echo "export TAG=${SAFE_USER}-${CIRCLE_SHA1:0:8}" >> "$BASH_ENV"
 
@@ -575,7 +575,7 @@ jobs:
       - run:
           name: Set image tag
           command: |
-            SAFE_USER=$(echo "$CIRCLE_USERNAME" | tr '[:upper:]' '[:lower:]' | sed 's/@/-/g; s/_/-/g' | tr -cd 'a-z0-9.-' | sed 's/--*/-/g; s/^[-.]*//; s/[-.]*$//')
+            SAFE_USER=$(echo "$CIRCLE_USERNAME" | tr '[:upper:]' '[:lower:]' | sed 's/@/-/g; s/_/-/g; s/\./-/g' | tr -cd 'a-z0-9-' | sed 's/--*/-/g; s/^[-]*//; s/[-]*$//')
             echo "export SAFE_USER=${SAFE_USER}" >> "$BASH_ENV"
             echo "export TAG=${SAFE_USER}-${CIRCLE_SHA1:0:8}" >> "$BASH_ENV"
 

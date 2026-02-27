@@ -208,7 +208,7 @@ func (r *GithubActionRunnerPoolReconciler) Reconcile(ctx context.Context, req ct
 func (r *GithubActionRunnerPoolReconciler) reconcileRunnerRBAC(ctx context.Context, cr *appsv1alpha1.GithubActionRunnerPool) error {
 	logger := log.FromContext(ctx)
 
-	username := cr.Spec.GitHubUsername
+	username := ci.SanitizeDNS(cr.Spec.GitHubUsername)
 	runnerAdapter := r.runnerFor(cr)
 	saName := runnerAdapter.ServiceAccountName(username)
 	crName := runnerAdapter.ClusterRoleName(username)
@@ -379,7 +379,8 @@ func (r *GithubActionRunnerPoolReconciler) reconcileRunnerDeployment(ctx context
 
 func (r *GithubActionRunnerPoolReconciler) buildRunnerDeployment(cr *appsv1alpha1.GithubActionRunnerPool) *appsv1.Deployment {
 	runnerAdapter := r.runnerFor(cr)
-	labels := runnerAdapter.RunnerLabels(cr.Spec.GitHubUsername, cr.Name)
+	username := ci.SanitizeDNS(cr.Spec.GitHubUsername)
+	labels := runnerAdapter.RunnerLabels(username, cr.Name)
 	spec := cr.Spec
 
 	// Default replica count
@@ -398,7 +399,7 @@ func (r *GithubActionRunnerPoolReconciler) buildRunnerDeployment(cr *appsv1alpha
 	// Default service account — use the auto-created one if not specified
 	saName := spec.ServiceAccountName
 	if saName == "" {
-		saName = runnerAdapter.ServiceAccountName(spec.GitHubUsername)
+		saName = runnerAdapter.ServiceAccountName(username)
 	}
 
 	githubURL := spec.GitHubURL
@@ -409,7 +410,7 @@ func (r *GithubActionRunnerPoolReconciler) buildRunnerDeployment(cr *appsv1alpha
 	// ── Build environment variables for the runner container ───────────
 	// Env vars come from the CI provider (GitHub Actions, GitLab CI, etc.)
 	envCfg := ci.RunnerEnvConfig{
-		Username:        spec.GitHubUsername,
+		Username:        username,
 		Repository:      spec.Repository,
 		PlatformURL:     githubURL,
 		TokenSecretName: spec.TokenSecretRef.Name,
@@ -596,7 +597,7 @@ done
 	// Name the deployment after the username so it's obvious in `kubectl get deploy`
 	return &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      runnerAdapter.DeploymentName(spec.GitHubUsername),
+			Name:      runnerAdapter.DeploymentName(username),
 			Namespace: cr.Namespace,
 			Labels:    labels,
 			Annotations: map[string]string{
@@ -624,7 +625,7 @@ done
 
 func (r *GithubActionRunnerPoolReconciler) updateRunnerPoolStatus(ctx context.Context, cr *appsv1alpha1.GithubActionRunnerPool) error {
 	deploy := &appsv1.Deployment{}
-	deployName := r.runnerFor(cr).DeploymentName(cr.Spec.GitHubUsername)
+	deployName := r.runnerFor(cr).DeploymentName(ci.SanitizeDNS(cr.Spec.GitHubUsername))
 	deployKey := types.NamespacedName{Name: deployName, Namespace: cr.Namespace}
 	if err := r.Get(ctx, deployKey, deploy); err == nil {
 		cr.Status.Replicas = *deploy.Spec.Replicas

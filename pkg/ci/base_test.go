@@ -4,8 +4,34 @@ import (
 	"testing"
 )
 
+func TestSanitizeDNS(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"jeff", "jeff"},
+		{"alice", "alice"},
+		{"bob-123", "bob-123"},
+		{"", "runner"},
+		{"Jeff.D.Vincent@gmail.com", "jeff-d-vincent-gmail-com"},
+		{"user_name", "user-name"},
+		{"UPPER", "upper"},
+		{"dots.in.name", "dots-in-name"},
+		{"---leading", "leading"},
+		{"trailing---", "trailing"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			if got := SanitizeDNS(tt.input); got != tt.want {
+				t.Errorf("SanitizeDNS(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestBaseRunnerAdapterDeploymentName(t *testing.T) {
 	b := &BaseRunnerAdapter{}
+	// Adapter methods receive pre-sanitized usernames.
 	tests := []struct {
 		user string
 		want string
@@ -13,9 +39,7 @@ func TestBaseRunnerAdapterDeploymentName(t *testing.T) {
 		{"jeff", "jeff-runner"},
 		{"alice", "alice-runner"},
 		{"bob-123", "bob-123-runner"},
-		{"", "runner-runner"},
-		{"Jeff.D.Vincent@gmail.com", "jeff.d.vincent-gmail.com-runner"},
-		{"user_name", "user-name-runner"},
+		{"jeff-d-vincent-gmail-com", "jeff-d-vincent-gmail-com-runner"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.user, func(t *testing.T) {
