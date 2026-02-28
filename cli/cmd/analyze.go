@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -84,13 +85,16 @@ func runAnalyze(cmd *cobra.Command, args []string) error {
 	// ── 3. Dependencies & language detection ────────────────────
 	checks = append(checks, checkDependencies(repoCtx)...)
 
-	// ── 4. Multi-agent architecture ─────────────────────────────
+	// ── 4. Project structure (multi-service layout) ─────────────
+	checks = append(checks, checkProjectStructure(repoPath, repoCtx)...)
+
+	// ── 5. Multi-agent architecture ─────────────────────────────
 	checks = append(checks, checkAgentArchitecture(repoCtx)...)
 
-	// ── 5. Secrets & credentials ────────────────────────────────
+	// ── 6. Secrets & credentials ────────────────────────────────
 	checks = append(checks, checkSecrets(repoCtx)...)
 
-	// ── 6. Kindling cluster readiness ───────────────────────────
+	// ── 7. Kindling cluster readiness ───────────────────────────
 	checks = append(checks, checkCluster()...)
 
 	// ── Print results ───────────────────────────────────────────
@@ -223,6 +227,277 @@ func checkDependencies(ctx *repoContext) []checkResult {
 	return results
 }
 
+// ── Project structure check ─────────────────────────────────────
+
+// entryPointPatterns are filename patterns that typically indicate a
+// runnable service entry point (not a library/utility module).
+var entryPointPatterns = []string{
+	"worker", "orchestrator", "server", "app", "main", "api",
+	"consumer", "producer", "gateway", "scheduler", "bot",
+	"agent", "handler", "service", "web", "grpc",
+}
+
+// checkProjectStructure detects when a multi-service system is laid out as
+// a flat directory with a single Dockerfile. In K8s each independently
+// scalable process should be its own Deployment, which means its own
+// Dockerfile and ideally its own subdirectory.
+func checkProjectStructure(repoPath string, ctx *repoContext) []checkResult {
+	var results []checkResult
+
+	// Detect entry-point files at the repo root
+	entryPoints := detectEntryPoints(repoPath, ctx)
+	if len(entryPoints) < 2 {
+		// Single service or can't tell — nothing to suggest
+		return results
+	}
+
+	// Multiple entry points in a flat layout
+	hasMultiServiceSignal := len(ctx.workerProcesses) > 0 ||
+		len(ctx.interServiceCalls) > 0 ||
+		len(ctx.agentFrameworks) > 0
+
+	if !hasMultiServiceSignal {
+		// Multiple files but no inter-service evidence — could just be
+		// a monolith with multiple scripts. Don't over-suggest.
+		return results
+	}
+
+	if ctx.dockerfileCount <= 1 {
+		results = append(results, checkResult{
+			status: checkWarn,
+			message: fmt.Sprintf("Flat project structure: %d entry points but %d Dockerfile(s)",
+				len(entryPoints), ctx.dockerfileCount),
+		})
+
+		results = append(results, checkResult{
+			status: checkInfo,
+			message: "Each independently scalable service should have its own Dockerfile",
+		})
+
+		results = append(results, checkResult{
+			status: checkInfo,
+			message: "This lets Kubernetes scale, restart, and update each service independently",
+		})
+
+		// Build the suggested structure
+		lang := detectPrimaryLanguage(ctx)
+		suggestion := buildStructureSuggestion(entryPoints, lang, ctx)
+		results = append(results, checkResult{
+			status:  checkInfo,
+			message: "Suggested project structure:",
+		})
+		for _, line := range suggestion {
+			results = append(results, checkResult{
+				status:  checkInfo,
+				message: "  " + line,
+			})
+		}
+
+		// Show what changes
+		results = append(results, checkResult{
+			status: checkInfo,
+			message: "Benefits: independent scaling, isolated failures, faster rebuilds, rolling updates per service",
+		})
+
+		results = append(results, checkResult{
+			status: checkWarn,
+			message: "Current flat layout will work — but each push rebuilds everything and all services share one pod",
+			fix:     "Restructure into service directories, then re-run 'kindling analyze'",
+		})
+	} else {
+		// Multiple Dockerfiles — they're already structured
+		results = append(results, checkResult{
+			status:  checkPass,
+			message: fmt.Sprintf("Multi-service layout: %d Dockerfiles for %d entry points", ctx.dockerfileCount, len(entryPoints)),
+		})
+	}
+
+	return results
+}
+
+// detectEntryPoints finds files at the repo root that look like service
+// entry points (worker.py, orchestrator.py, server.js, main.go, etc.)
+func detectEntryPoints(repoPath string, ctx *repoContext) []string {
+	var entryPoints []string
+
+	// Check source snippets for root-level files with entry-point names
+	for relPath, content := range ctx.sourceSnippets {
+		// Only consider root-level files (no path separator)
+		if strings.Contains(relPath, string(filepath.Separator)) {
+			continue
+		}
+
+		base := strings.TrimSuffix(filepath.Base(relPath), filepath.Ext(relPath))
+		baseLower := strings.ToLower(base)
+
+		isEntryPoint := false
+
+		// Check filename against known entry-point patterns
+		for _, pattern := range entryPointPatterns {
+			if strings.Contains(baseLower, pattern) {
+				isEntryPoint = true
+				break
+			}
+		}
+
+		// Also check for if __name__ == "__main__" or similar patterns
+		if !isEntryPoint {
+			if strings.Contains(content, `if __name__`) ||
+				strings.Contains(content, `func main()`) ||
+				strings.Contains(content, `app.listen(`) ||
+				strings.Contains(content, `server.listen(`) ||
+				strings.Contains(content, `uvicorn.run(`) {
+				isEntryPoint = true
+			}
+		}
+
+		if isEntryPoint {
+			entryPoints = append(entryPoints, relPath)
+		}
+	}
+
+	// Also check Procfile for multiple process types
+	for relPath, content := range ctx.depFiles {
+		if strings.ToLower(filepath.Base(relPath)) == "procfile" {
+			for _, line := range strings.Split(content, "\n") {
+				line = strings.TrimSpace(line)
+				if line != "" && !strings.HasPrefix(line, "#") && strings.Contains(line, ":") {
+					parts := strings.SplitN(line, ":", 2)
+					name := strings.TrimSpace(parts[0])
+					if name != "" {
+						entryPoints = append(entryPoints, name+" (Procfile)")
+					}
+				}
+			}
+		}
+	}
+
+	sort.Strings(entryPoints)
+	return entryPoints
+}
+
+// buildStructureSuggestion generates a visual directory tree showing the
+// recommended multi-service layout based on detected entry points.
+func buildStructureSuggestion(entryPoints []string, lang string, ctx *repoContext) []string {
+	var lines []string
+	lines = append(lines, ".")
+
+	// Derive service names from entry point filenames
+	var serviceNames []string
+	for _, ep := range entryPoints {
+		name := strings.TrimSuffix(filepath.Base(ep), filepath.Ext(ep))
+		name = strings.TrimSuffix(name, " (Procfile)")
+		serviceNames = append(serviceNames, name)
+	}
+
+	// Show each service directory
+	depFile, cmd := depFileAndCmd(lang)
+	sharedModules := detectSharedModules(ctx, serviceNames)
+	hasShared := len(sharedModules) > 0
+	hasDeps := hasDependency(ctx)
+
+	for i, svc := range serviceNames {
+		isLast := i == len(serviceNames)-1 && !hasShared && !hasDeps
+		prefix := "├── "
+		subPrefix := "│   "
+		if isLast {
+			prefix = "└── "
+			subPrefix = "    "
+		}
+		lines = append(lines, prefix+svc+"/")
+		lines = append(lines, subPrefix+"├── Dockerfile")
+		lines = append(lines, subPrefix+"├── "+depFile)
+		lines = append(lines, subPrefix+"└── "+svc+extForLang(lang)+"    "+cmd)
+	}
+
+	// Show shared code directory if there are utility modules
+	if hasShared {
+		isLast := !hasDeps
+		prefix := "├── "
+		subPrefix := "│   "
+		if isLast {
+			prefix = "└── "
+			subPrefix = "    "
+		}
+		lines = append(lines, prefix+"shared/")
+		for i, mod := range sharedModules {
+			modPrefix := subPrefix + "├── "
+			if i == len(sharedModules)-1 {
+				modPrefix = subPrefix + "└── "
+			}
+			lines = append(lines, modPrefix+mod)
+		}
+	}
+
+	// Show dependency if detected (redis, postgres, etc.)
+	if hasDeps {
+		lines = append(lines, "└── .kindling/")
+		lines = append(lines, "    └── dev-environment.yaml    # declares redis, etc. as dependencies")
+	}
+
+	return lines
+}
+
+func depFileAndCmd(lang string) (string, string) {
+	switch lang {
+	case "Python":
+		return "requirements.txt", "# entry point"
+	case "Node.js":
+		return "package.json", "// entry point"
+	case "Go":
+		return "go.mod", "// entry point"
+	case "Rust":
+		return "Cargo.toml", "// entry point"
+	case "Ruby":
+		return "Gemfile", "# entry point"
+	default:
+		return "deps", "# entry point"
+	}
+}
+
+func extForLang(lang string) string {
+	switch lang {
+	case "Python":
+		return ".py"
+	case "Node.js":
+		return ".js"
+	case "Go":
+		return ".go"
+	case "Rust":
+		return ".rs"
+	case "Ruby":
+		return ".rb"
+	default:
+		return ""
+	}
+}
+
+// detectSharedModules finds source files at root that are NOT entry points
+// — these are likely shared libraries that should go in a common directory.
+func detectSharedModules(ctx *repoContext, serviceNames []string) []string {
+	svcSet := make(map[string]bool)
+	for _, s := range serviceNames {
+		svcSet[s] = true
+	}
+
+	var shared []string
+	for relPath := range ctx.sourceSnippets {
+		if strings.Contains(relPath, string(filepath.Separator)) {
+			continue
+		}
+		base := strings.TrimSuffix(filepath.Base(relPath), filepath.Ext(relPath))
+		if !svcSet[base] {
+			shared = append(shared, relPath)
+		}
+	}
+	sort.Strings(shared)
+	return shared
+}
+
+func hasDependency(ctx *repoContext) bool {
+	return len(ctx.workerProcesses) > 0 || len(ctx.interServiceCalls) > 0
+}
+
 func checkAgentArchitecture(ctx *repoContext) []checkResult {
 	var results []checkResult
 
@@ -304,20 +579,71 @@ func checkSecrets(ctx *repoContext) []checkResult {
 		return results
 	}
 
-	results = append(results, checkResult{
-		status:  checkWarn,
-		message: fmt.Sprintf("Found %d credential(s) that need to be set before deploy:", len(allSecrets)),
-	})
+	// Check which secrets actually exist in the cluster
+	clusterSecrets := listClusterSecrets()
 
+	missingCount := 0
 	for name := range allSecrets {
+		k8sNames := secretK8sNames(name)
+		found := false
+		for _, k := range k8sNames {
+			if clusterSecrets[k] {
+				found = true
+				break
+			}
+		}
+		if found {
+			results = append(results, checkResult{
+				status:  checkPass,
+				message: fmt.Sprintf("Secret %s exists in cluster", name),
+			})
+		} else {
+			missingCount++
+			results = append(results, checkResult{
+				status:  checkFail,
+				message: fmt.Sprintf("Secret %s is required but not set — pod will crash without it", name),
+				fix:     fmt.Sprintf("kindling secrets set %s <value>", name),
+			})
+		}
+	}
+
+	if missingCount > 0 {
 		results = append(results, checkResult{
-			status:  checkWarn,
-			message: fmt.Sprintf("  • %s", name),
-			fix:     fmt.Sprintf("kindling secrets set %s <value>", name),
+			status:  checkFail,
+			message: fmt.Sprintf("%d secret(s) missing — deploy will fail until these are set", missingCount),
 		})
 	}
 
 	return results
+}
+
+// listClusterSecrets returns a set of K8s secret names that exist in the
+// default namespace of the Kind cluster. Returns an empty set if the cluster
+// is unreachable (analyze still works offline, just can't verify secrets).
+func listClusterSecrets() map[string]bool {
+	secrets := make(map[string]bool)
+
+	out, err := exec.Command("kubectl", "--context", kindContext(),
+		"get", "secrets", "-n", "default",
+		"-o", "jsonpath={.items[*].metadata.name}").Output()
+	if err != nil {
+		return secrets
+	}
+
+	for _, name := range strings.Fields(string(out)) {
+		secrets[name] = true
+	}
+	return secrets
+}
+
+// secretK8sNames returns both the kindling-prefixed name and the bare
+// kebab-case name, since AI-generated workflows may use either form.
+func secretK8sNames(envVar string) []string {
+	bare := strings.ToLower(strings.ReplaceAll(envVar, "_", "-"))
+	return []string{
+		"kindling-secret-" + bare,
+		bare,
+	}
 }
 
 // inferFrameworkSecrets returns secret names implied by detected frameworks.

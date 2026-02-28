@@ -302,4 +302,315 @@ func TestCheckAgentArchitecture_FullStack(t *testing.T) {
 	}
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// secretK8sNames
+// ────────────────────────────────────────────────────────────────────────────
 
+func TestSecretK8sNames_OpenAI(t *testing.T) {
+	names := secretK8sNames("OPENAI_API_KEY")
+	if len(names) != 2 {
+		t.Fatalf("expected 2 names, got %d", len(names))
+	}
+	if names[0] != "kindling-secret-openai-api-key" {
+		t.Errorf("got %q, want kindling-secret-openai-api-key", names[0])
+	}
+	if names[1] != "openai-api-key" {
+		t.Errorf("got %q, want openai-api-key", names[1])
+	}
+}
+
+func TestSecretK8sNames_StripeKey(t *testing.T) {
+	names := secretK8sNames("STRIPE_API_KEY")
+	if names[0] != "kindling-secret-stripe-api-key" {
+		t.Errorf("got %q, want kindling-secret-stripe-api-key", names[0])
+	}
+	if names[1] != "stripe-api-key" {
+		t.Errorf("got %q, want stripe-api-key", names[1])
+	}
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// extractSecretKeyRefNames (push pre-flight)
+// ────────────────────────────────────────────────────────────────────────────
+
+func TestExtractSecretKeyRefNames_Single(t *testing.T) {
+	workflow := `
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: openai-api-key
+                  key: OPENAI_API_KEY
+`
+	names := extractSecretKeyRefNames(workflow)
+	if len(names) != 1 {
+		t.Fatalf("expected 1 secret, got %d: %v", len(names), names)
+	}
+	if names[0] != "openai-api-key" {
+		t.Errorf("got %q, want openai-api-key", names[0])
+	}
+}
+
+func TestExtractSecretKeyRefNames_Multiple(t *testing.T) {
+	workflow := `
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: openai-api-key
+                  key: OPENAI_API_KEY
+            - name: STRIPE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: stripe-key
+                  key: STRIPE_KEY
+`
+	names := extractSecretKeyRefNames(workflow)
+	if len(names) != 2 {
+		t.Fatalf("expected 2 secrets, got %d: %v", len(names), names)
+	}
+}
+
+func TestExtractSecretKeyRefNames_Dedup(t *testing.T) {
+	workflow := `
+                secretKeyRef:
+                  name: openai-api-key
+                  key: OPENAI_API_KEY
+                secretKeyRef:
+                  name: openai-api-key
+                  key: OPENAI_API_KEY
+`
+	names := extractSecretKeyRefNames(workflow)
+	if len(names) != 1 {
+		t.Errorf("expected 1 deduped secret, got %d", len(names))
+	}
+}
+
+func TestExtractSecretKeyRefNames_None(t *testing.T) {
+	workflow := `
+name: dev-deploy
+on: push
+jobs:
+  build:
+    runs-on: self-hosted
+`
+	names := extractSecretKeyRefNames(workflow)
+	if len(names) != 0 {
+		t.Errorf("expected 0 secrets, got %d", len(names))
+	}
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// detectEntryPoints
+// ────────────────────────────────────────────────────────────────────────────
+
+func TestDetectEntryPoints_MultipleRootFiles(t *testing.T) {
+	ctx := &repoContext{
+		sourceSnippets: map[string]string{
+			"orchestrator.py": "import redis\ndef main():\n    pass",
+			"worker.py":       "import redis\ndef run():\n    pass",
+			"config.py":       "REDIS_HOST = 'localhost'",
+		},
+		depFiles: map[string]string{},
+	}
+	eps := detectEntryPoints("/tmp", ctx)
+	// orchestrator and worker match entry point patterns; config does not
+	if len(eps) != 2 {
+		t.Errorf("expected 2 entry points, got %d: %v", len(eps), eps)
+	}
+}
+
+func TestDetectEntryPoints_IfNameMain(t *testing.T) {
+	ctx := &repoContext{
+		sourceSnippets: map[string]string{
+			"foo.py": "import sys\nif __name__ == '__main__':\n    run()",
+		},
+		depFiles: map[string]string{},
+	}
+	eps := detectEntryPoints("/tmp", ctx)
+	if len(eps) != 1 {
+		t.Errorf("expected 1 entry point from __name__ pattern, got %d", len(eps))
+	}
+}
+
+func TestDetectEntryPoints_NestedFilesIgnored(t *testing.T) {
+	ctx := &repoContext{
+		sourceSnippets: map[string]string{
+			"worker.py":          "import redis",
+			"subdir/worker2.py":  "import redis",
+		},
+		depFiles: map[string]string{},
+	}
+	eps := detectEntryPoints("/tmp", ctx)
+	// Only root-level worker.py should match
+	if len(eps) != 1 {
+		t.Errorf("expected 1 root entry point, got %d: %v", len(eps), eps)
+	}
+}
+
+func TestDetectEntryPoints_Procfile(t *testing.T) {
+	ctx := &repoContext{
+		sourceSnippets: map[string]string{},
+		depFiles: map[string]string{
+			"Procfile": "web: python orchestrator.py\nworker: python worker.py",
+		},
+	}
+	eps := detectEntryPoints("/tmp", ctx)
+	if len(eps) != 2 {
+		t.Errorf("expected 2 Procfile entry points, got %d: %v", len(eps), eps)
+	}
+}
+
+func TestDetectEntryPoints_SingleService(t *testing.T) {
+	ctx := &repoContext{
+		sourceSnippets: map[string]string{
+			"app.py":    "from flask import Flask",
+			"models.py": "class User:\n    pass",
+			"utils.py":  "def helper():\n    pass",
+		},
+		depFiles: map[string]string{},
+	}
+	eps := detectEntryPoints("/tmp", ctx)
+	// Only app.py matches
+	if len(eps) != 1 {
+		t.Errorf("expected 1 entry point for single-service app, got %d: %v", len(eps), eps)
+	}
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// checkProjectStructure
+// ────────────────────────────────────────────────────────────────────────────
+
+func TestCheckProjectStructure_FlatMultiService(t *testing.T) {
+	ctx := &repoContext{
+		dockerfileCount: 1,
+		dockerfiles:     map[string]string{"Dockerfile": "FROM python:3.12\nCOPY . ."},
+		depFiles:        map[string]string{"requirements.txt": "langchain\nredis\n"},
+		sourceSnippets: map[string]string{
+			"orchestrator.py": "import redis\ndef main(): pass",
+			"worker.py":       "import redis\ndef run(): pass",
+			"config.py":       "REDIS_HOST = 'localhost'",
+		},
+		workerProcesses:   []string{"Redis queue consumer"},
+		interServiceCalls: []string{"inter-service HTTP"},
+		agentFrameworks:   []string{"LangChain"},
+	}
+	results := checkProjectStructure("/tmp", ctx)
+	if len(results) == 0 {
+		t.Fatal("expected structure suggestions for flat multi-service repo")
+	}
+	// Should contain a warning about flat layout
+	hasWarn := false
+	for _, r := range results {
+		if r.status == checkWarn {
+			hasWarn = true
+			break
+		}
+	}
+	if !hasWarn {
+		t.Error("expected at least one warning about flat structure")
+	}
+	// Should contain structure suggestion
+	hasStructure := false
+	for _, r := range results {
+		if strings.Contains(r.message, "Dockerfile") && strings.Contains(r.message, "├") {
+			hasStructure = true
+			break
+		}
+	}
+	if !hasStructure {
+		t.Error("expected directory tree suggestion in output")
+	}
+}
+
+func TestCheckProjectStructure_AlreadyMultiDockerfile(t *testing.T) {
+	ctx := &repoContext{
+		dockerfileCount: 2,
+		dockerfiles: map[string]string{
+			"orchestrator/Dockerfile": "FROM python:3.12",
+			"worker/Dockerfile":       "FROM python:3.12",
+		},
+		depFiles: map[string]string{"requirements.txt": "langchain\n"},
+		sourceSnippets: map[string]string{
+			"orchestrator.py": "def main(): pass",
+			"worker.py":       "def run(): pass",
+		},
+		workerProcesses: []string{"Redis queue consumer"},
+	}
+	results := checkProjectStructure("/tmp", ctx)
+	hasPass := false
+	for _, r := range results {
+		if r.status == checkPass && strings.Contains(r.message, "Multi-service layout") {
+			hasPass = true
+		}
+	}
+	if !hasPass {
+		t.Error("expected pass for already-structured multi-Dockerfile project")
+	}
+}
+
+func TestCheckProjectStructure_SingleService(t *testing.T) {
+	ctx := &repoContext{
+		dockerfileCount: 1,
+		dockerfiles:     map[string]string{"Dockerfile": "FROM python:3.12"},
+		depFiles:        map[string]string{"requirements.txt": "flask\n"},
+		sourceSnippets: map[string]string{
+			"app.py":    "from flask import Flask",
+			"models.py": "class User: pass",
+		},
+	}
+	results := checkProjectStructure("/tmp", ctx)
+	// Single entry point, no multi-service signal — should return nothing
+	if len(results) != 0 {
+		t.Errorf("expected no suggestions for single-service app, got %d", len(results))
+	}
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// buildStructureSuggestion
+// ────────────────────────────────────────────────────────────────────────────
+
+func TestBuildStructureSuggestion_Python(t *testing.T) {
+	ctx := &repoContext{
+		sourceSnippets: map[string]string{
+			"orchestrator.py": "code",
+			"worker.py":       "code",
+			"config.py":       "code",
+		},
+		workerProcesses: []string{"worker"},
+	}
+	lines := buildStructureSuggestion(
+		[]string{"orchestrator.py", "worker.py"},
+		"Python",
+		ctx,
+	)
+	joined := strings.Join(lines, "\n")
+	if !strings.Contains(joined, "orchestrator/") {
+		t.Error("expected orchestrator/ directory in suggestion")
+	}
+	if !strings.Contains(joined, "worker/") {
+		t.Error("expected worker/ directory in suggestion")
+	}
+	if !strings.Contains(joined, "Dockerfile") {
+		t.Error("expected Dockerfile in each service directory")
+	}
+	if !strings.Contains(joined, "requirements.txt") {
+		t.Error("expected requirements.txt for Python project")
+	}
+	if !strings.Contains(joined, "shared/") || !strings.Contains(joined, "config.py") {
+		t.Error("expected shared/ directory with config.py")
+	}
+}
+
+func TestDetectSharedModules(t *testing.T) {
+	ctx := &repoContext{
+		sourceSnippets: map[string]string{
+			"orchestrator.py": "code",
+			"worker.py":       "code",
+			"config.py":       "code",
+			"context.py":      "code",
+		},
+	}
+	shared := detectSharedModules(ctx, []string{"orchestrator", "worker"})
+	if len(shared) != 2 {
+		t.Errorf("expected 2 shared modules, got %d: %v", len(shared), shared)
+	}
+}
