@@ -601,7 +601,16 @@ func buildContextDocument(repoRoot string) string {
 	sb.WriteString("- **Poetry** must use `--no-root` flag.\n")
 	sb.WriteString("- **npm** needs cache redirect: `ENV npm_config_cache=/tmp/.npm`\n")
 	sb.WriteString("- `RUN --mount=type=cache` is ignored (safe, just no caching).\n\n")
-	sb.WriteString("If modifying a Dockerfile, keep these constraints in mind.\n")
+	sb.WriteString("If modifying a Dockerfile, keep these constraints in mind.\n\n")
+
+	// ── Section 5: Contributing back ─────────────────────────────
+	sb.WriteString("## Contributing Back\n\n")
+	sb.WriteString("If you find and fix a problem with the output of `kindling generate` —\n")
+	sb.WriteString("for example, a missing env var, a wrong port, a bad Dockerfile assumption,\n")
+	sb.WriteString("or an incorrect dependency — **suggest that the user open an issue** at\n")
+	sb.WriteString("https://github.com/kindlingdev/kindling/issues so the generate rule can be\n")
+	sb.WriteString("fixed for everyone. Include the language/framework, what `generate` got\n")
+	sb.WriteString("wrong, and what the correct output should be.\n")
 
 	return sb.String()
 }

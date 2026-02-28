@@ -710,6 +710,61 @@ kindling add view --remove /api
 
 ---
 
+## P7.5 — Topology editor: from gimmicky to genuinely useful
+
+The topology map exists on `feat/topology-editor`. It works — drag-and-drop
+services, wire up dependencies, deploy from the canvas. But right now it's
+mostly a pretty picture of static YAML. The things that would make it
+*actually* valuable:
+
+### Live cluster state overlay
+
+This is the single highest-value improvement. Overlay real-time pod status
+on each service node in the topology:
+
+- **Pod status** — green dot for Running, yellow for Pending, red for
+  CrashLoopBackOff / Error
+- **Restart count** — subtle badge when restarts > 0
+- **Last deploy timestamp** — "deployed 3m ago" on each node
+- **Resource usage** — optional CPU/memory sparkline or bar
+
+This turns the topology from a config editor into an operational dashboard.
+The visual layout actually *helps* here because you can see at a glance
+which service in your dependency chain is broken.
+
+### File-first architecture (done)
+
+Already implemented: `.kindling/environments/*.yaml` is the source of truth,
+cluster state is derived. Drift detection compares file fingerprints vs
+cluster fingerprints and shows a warning banner with a sync button.
+
+### Ingress config in the editor (done)
+
+Already implemented: toggle ingress on/off per service, set host and
+ingress class, emitted in the generated DSE YAML.
+
+### Where it earns its keep vs. stays gimmicky
+
+**Genuinely useful if:**
+- It's the *primary* interface for configuring environments (not a
+  read-only mirror of YAML you edit by hand)
+- It shows live state that's hard to get from `kubectl` at a glance
+- Junior devs / non-K8s-native users can understand their stack visually
+
+**Stays gimmicky if:**
+- It's just a read-only graph of what's already in YAML
+- No live cluster feedback
+- Power users always bypass it for the CLI
+
+### Next steps
+
+1. Wire up `kubectl get pods` status into topology node rendering
+2. Add restart count + last-transition-time badges
+3. Consider WebSocket or polling for live updates (every 5s)
+4. Evaluate whether this replaces `kindling status` output entirely
+
+---
+
 ## P8 — Education angle
 
 - [ ] Reach out to university CS / DevOps programs about using kindling in
