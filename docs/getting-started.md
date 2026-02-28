@@ -90,7 +90,7 @@ kindling runners -u <your-github-username> -r <owner/repo> -t <your-pat>
 You need a [GitLab runner registration token](https://docs.gitlab.com/ee/ci/runners/) for your project.
 
 ```bash
-kindling runners --provider gitlab -u <your-gitlab-username> -r <group/project> -t <your-token>
+kindling runners --ci-provider gitlab -u <your-gitlab-username> -r <group/project> -t <your-token>
 ```
 
 Verify the runner is registered:
@@ -120,7 +120,7 @@ health-check endpoints, then writes `.github/workflows/dev-deploy.yml`.
 
 ```bash
 # Use Anthropic instead of OpenAI
-kindling generate -k sk-ant-... -r . --provider anthropic
+kindling generate -k sk-ant-... -r . --ai-provider anthropic
 
 # Preview without writing a file
 kindling generate -k sk-... -r . --dry-run

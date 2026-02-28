@@ -70,7 +70,7 @@ This is your CI/CD pipeline, but it's free, instant, and local.
 ```bash
 kindling init                                        # bootstrap cluster + operator
 kindling runners -u <user> -r <org/repo> -t <pat>   # register runner (GitHub)
-kindling runners --provider gitlab -u <user> -r <group/project> -t <token>  # or GitLab
+kindling runners --ci-provider gitlab -u <user> -r <group/project> -t <token>  # or GitLab
 kindling generate -k <api-key> -r /path/to/app       # AI-generate workflow
 git push                                              # triggers build + deploy
 ```
@@ -118,7 +118,7 @@ kindling init
 
 # 2. Register a CI runner (GitHub or GitLab)
 kindling runners -u alice -r acme/myapp -t ghp_xxxxx             # GitHub
-kindling runners --provider gitlab -u alice -r group/myapp -t glpat_xxxxx  # GitLab
+kindling runners --ci-provider gitlab -u alice -r group/myapp -t glpat_xxxxx  # GitLab
 
 # 3. AI-generate a workflow for your app
 kindling generate -k sk-... -r /path/to/myapp
@@ -590,7 +590,7 @@ Supports OpenAI reasoning models (`o3`, `o3-mini`) for complex multi-service pro
 
 ```bash
 kindling generate -k sk-... -r . --model o3            # maximum accuracy
-kindling generate -k sk-... -r . --provider anthropic   # use Anthropic
+kindling generate -k sk-... -r . --ai-provider anthropic   # use Anthropic
 kindling generate -k sk-... -r . --dry-run              # preview without writing
 ```
 

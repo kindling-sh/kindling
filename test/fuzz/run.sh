@@ -116,7 +116,7 @@ test_repo() {
   if "$KINDLING" generate \
       --repo-path "$clone_dir" \
       --dry-run \
-      --provider "${FUZZ_PROVIDER:-openai}" \
+      --ai-provider "${FUZZ_PROVIDER:-openai}" \
       --api-key "${FUZZ_API_KEY:-$OPENAI_API_KEY}" \
       ${FUZZ_MODEL:+--model "$FUZZ_MODEL"} \
       > "$workflow_file" 2>"$gen_stderr"; then

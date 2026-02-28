@@ -265,7 +265,7 @@ kindling init
 # Register a CI runner (GitHub or GitLab)
 kindling runners -u <user> \\
   -r <owner/repo> -t <pat>
-# or: kindling runners --provider gitlab \\
+# or: kindling runners --ci-provider gitlab \\
 #   -u <user> -r <group/project> -t <token>
 
 # AI-generate a workflow for your app

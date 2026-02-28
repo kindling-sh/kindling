@@ -30,9 +30,9 @@ Supports GitHub Actions and GitLab CI via --ci-provider.
 
 Examples:
   kindling generate --api-key sk-... --repo-path /path/to/my-app
-  kindling generate -k sk-... -r . --provider openai --model o3
+  kindling generate -k sk-... -r . --ai-provider openai --model o3
   kindling generate -k sk-... -r . --ci-provider gitlab
-  kindling generate -k sk-ant-... -r . --provider anthropic
+  kindling generate -k sk-ant-... -r . --ai-provider anthropic
   kindling generate -k sk-... -r . --dry-run`,
 	RunE: runGenerate,
 }
@@ -51,7 +51,7 @@ var (
 func init() {
 	generateCmd.Flags().StringVarP(&genAPIKey, "api-key", "k", "", "GenAI API key (required)")
 	generateCmd.Flags().StringVarP(&genRepoPath, "repo-path", "r", ".", "Path to the local repository to analyze")
-	generateCmd.Flags().StringVar(&genProvider, "provider", "openai", "AI provider: openai or anthropic")
+	generateCmd.Flags().StringVar(&genProvider, "ai-provider", "openai", "AI provider: openai or anthropic")
 	generateCmd.Flags().StringVar(&genModel, "model", "", "Model name (default: o3 for openai, claude-sonnet-4-20250514 for anthropic)")
 	generateCmd.Flags().StringVarP(&genOutput, "output", "o", "", "Output path (default: <repo-path>/.github/workflows/dev-deploy.yml)")
 	generateCmd.Flags().StringVarP(&genBranch, "branch", "b", "", "Branch to trigger on (default: auto-detect from git, fallback to 'main')")

@@ -34,7 +34,7 @@ Creates a local Kubernetes cluster with an in-cluster container registry, ingres
 cp -r ~/.kindling/examples/microservices ~/kindling-demo
 ```
 
-This gives you a working 4-service app (API gateway, orders service, inventory service, React UI) with Postgres, Redis, and MongoDB — plus a pre-built GitHub Actions workflow (or run `kindling generate --provider gitlab` for GitLab CI). No AI key needed.
+This gives you a working 4-service app (API gateway, orders service, inventory service, React UI) with Postgres, Redis, and MongoDB — plus a pre-built GitHub Actions workflow (or run `kindling generate --ci-provider gitlab` for GitLab CI). No AI key needed.
 
 ## Create a repo and push
 
@@ -61,7 +61,7 @@ kindling runners -u <github-user> -r <github-user>/kindling-demo -t <pat>
 You need a [GitLab runner registration token](https://docs.gitlab.com/ee/ci/runners/) for your project.
 
 ```bash
-kindling runners --provider gitlab -u <gitlab-user> -r <group>/kindling-demo -t <token>
+kindling runners --ci-provider gitlab -u <gitlab-user> -r <group>/kindling-demo -t <token>
 ```
 
 This registers a self-hosted CI runner in your cluster, bound to your repo. Push a change to trigger a build:
@@ -103,7 +103,7 @@ kindling generate -k <openai-api-key> -r /path/to/your-app
 Scans your repo — Dockerfiles, docker-compose, Helm charts, source code — and writes a complete CI workflow using AI (`.github/workflows/dev-deploy.yml` for GitHub, `.gitlab-ci.yml` for GitLab).
 
 :::note
-Works with OpenAI (default) or Anthropic (`--provider anthropic`). Use `--provider gitlab` for GitLab CI workflows. Your app needs a working Dockerfile.
+Works with OpenAI (default) or Anthropic (`--ai-provider anthropic`). Use `--ci-provider gitlab` for GitLab CI workflows. Your app needs a working Dockerfile.
 :::
 
 ---

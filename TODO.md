@@ -525,10 +525,10 @@ Expanding to additional platforms unlocks even more developers.
 
 1. ✅ Abstract the runner pool CRD — `spec.ciProvider` field
    (`github | gitlab`) so the operator provisions the correct runner type
-2. ✅ `kindling runners --provider gitlab` creates a GitLab Runner registration
+2. ✅ `kindling runners --ci-provider gitlab` creates a GitLab Runner registration
    instead of a GitHub Actions runner
 3. ✅ `kindling generate` detects the remote origin to infer the platform, or
-   accepts `--provider` explicitly
+   accepts `--ci-provider` explicitly
 4. ✅ Factor composite actions into platform-agnostic build/deploy steps that emit
    the right CI config format per platform
 5. ✅ Keep GitHub as the default — zero breaking changes for existing users

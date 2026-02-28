@@ -10,7 +10,7 @@ kindling-sh/kindling/.github/actions/kindling-deploy@main
 ```
 
 > **Using GitLab CI?** These composite actions are GitHub-specific. For GitLab,
-> run `kindling generate --provider gitlab` to produce an equivalent
+> run `kindling generate --ci-provider gitlab` to produce an equivalent
 > `.gitlab-ci.yml` with Kaniko build + kubectl deploy stages. See the
 > [CLI Reference](cli.md#kindling-generate) for details.
 

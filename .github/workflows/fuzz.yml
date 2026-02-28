@@ -158,7 +158,7 @@ jobs:
         run: |
           if [ -d /tmp/fuzz-results ]; then
             python3 test/fuzz/summarize.py /tmp/fuzz-results \
-              --mode full --provider openai \
+              --mode full --ai-provider openai \
               >> "$GITHUB_STEP_SUMMARY" || true
           fi
 

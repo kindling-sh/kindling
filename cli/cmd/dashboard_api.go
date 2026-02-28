@@ -137,7 +137,7 @@ func handleDSEs(w http.ResponseWriter, r *http.Request) {
 
 func handleRunners(w http.ResponseWriter, r *http.Request) {
 	prov := ci.Default()
-	if pName := r.URL.Query().Get("provider"); pName != "" {
+	if pName := r.URL.Query().Get("ci-provider"); pName != "" {
 		if p, err := ci.Get(pName); err == nil {
 			prov = p
 		}

@@ -24,8 +24,8 @@ Supported providers:
   ngrok        — ngrok tunnel (requires free account + auth token)
 
 Examples:
-  kindling expose                          # auto-detect provider, expose port 80
-  kindling expose --provider cloudflared   # use cloudflared explicitly
+  kindling expose                          # auto-detect tunnel, expose port 80
+  kindling expose --tunnel cloudflared     # use cloudflared explicitly
   kindling expose --port 443               # expose a different port
   kindling expose --stop                   # stop a running tunnel
 
@@ -42,7 +42,7 @@ var (
 )
 
 func init() {
-	exposeCmd.Flags().StringVar(&exposeProvider, "provider", "", "Tunnel provider: cloudflared or ngrok (auto-detected if omitted)")
+	exposeCmd.Flags().StringVar(&exposeProvider, "tunnel", "", "Tunnel provider: cloudflared or ngrok (auto-detected if omitted)")
 	exposeCmd.Flags().IntVar(&exposePort, "port", 80, "Local port to expose (default: 80, the ingress controller)")
 	exposeCmd.Flags().BoolVar(&exposeStop, "stop", false, "Stop a running tunnel")
 	exposeCmd.Flags().StringVar(&exposeService, "service", "", "Ingress name to route tunnel traffic to (default: first ingress found)")

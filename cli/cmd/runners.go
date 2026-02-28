@@ -34,7 +34,7 @@ func init() {
 	runnersCmd.Flags().StringVarP(&ghUsername, "username", "u", "", "CI platform username")
 	runnersCmd.Flags().StringVarP(&ghRepo, "repo", "r", "", "Repository (owner/repo or group/project)")
 	runnersCmd.Flags().StringVarP(&ghPAT, "token", "t", "", "CI platform access token")
-	runnersCmd.Flags().StringVar(&ciProvider, "provider", "", "CI provider (github, gitlab)")
+	runnersCmd.Flags().StringVar(&ciProvider, "ci-provider", "", "CI provider (github, gitlab)")
 	rootCmd.AddCommand(runnersCmd)
 }
 

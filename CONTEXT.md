@@ -46,7 +46,7 @@ make deploy IMG=localhost:5001/kindling-controller:latest
 - **init.go** — creates Kind cluster, deploys ingress-nginx, in-cluster registry, builds
   and deploys the operator. Has `--expose` flag to also start a tunnel.
 - **runners.go** (formerly quickstart.go) — creates CI runner token secret and
-  CIRunnerPool CR. Supports `--provider github` (default) and `--provider gitlab`.
+  CIRunnerPool CR. Supports `--ci-provider github` (default) and `--ci-provider gitlab`.
   Prompts interactively for missing values.
 - **reset.go** — deletes all runner pools and the token secret without destroying the
   cluster, so you can re-run `runners` for a different repo.

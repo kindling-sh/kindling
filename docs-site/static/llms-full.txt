@@ -90,7 +90,7 @@ Once you've seen the demo, point kindling at your own repo:
 kindling generate -k <openai-api-key> -r /path/to/your-app
 ```
 
-Scans your repo — Dockerfiles, docker-compose, Helm charts, source code — and writes a complete `.github/workflows/dev-deploy.yml` using AI. Works with OpenAI (default) or Anthropic (`--provider anthropic`). Your app needs a working Dockerfile.
+Scans your repo — Dockerfiles, docker-compose, Helm charts, source code — and writes a complete `.github/workflows/dev-deploy.yml` using AI. Works with OpenAI (default) or Anthropic (`--ai-provider anthropic`). Your app needs a working Dockerfile.
 
 ## What just happened?
 
@@ -164,7 +164,7 @@ AI-generate a GitHub Actions workflow for any repository.
 |---|---|---|---|
 | `--api-key` | `-k` | — (required) | GenAI API key |
 | `--repo-path` | `-r` | `.` | Path to repository |
-| `--provider` | | `openai` | `openai` or `anthropic` |
+| `--ai-provider` | | `openai` | `openai` or `anthropic` |
 | `--model` | | auto | Model name |
 | `--output` | `-o` | `.github/workflows/dev-deploy.yml` | Output path |
 | `--dry-run` | | `false` | Print to stdout |
@@ -224,7 +224,7 @@ Create a public HTTPS tunnel for OAuth/OIDC callbacks.
 
 | Flag | Default | Description |
 |---|---|---|
-| `--provider` | auto-detect | `cloudflared` or `ngrok` |
+| `--tunnel` | auto-detect | `cloudflared` or `ngrok` |
 | `--port` | `80` | Local port to expose |
 | `--stop` | `false` | Stop tunnel |
 
