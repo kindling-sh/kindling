@@ -200,7 +200,7 @@ func handleDSEs(w http.ResponseWriter, r *http.Request) {
 // ── /api/runners — CIRunnerPools ──────────────────────
 
 func handleRunners(w http.ResponseWriter, r *http.Request) {
-	prov, _ := resolveProvider(r.URL.Query().Get("provider"))
+	prov, _ := resolveProvider(r.URL.Query().Get("ci-provider"))
 	labels := prov.CLILabels()
 	out, err := kubectlJSON("get", labels.CRDPlural, "-o", "json")
 	if err != nil {

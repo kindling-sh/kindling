@@ -27,7 +27,7 @@ and your app builds and deploys automatically.
 kindling generate -k sk-... -r . --dry-run
 
 # Use Anthropic instead of OpenAI
-kindling generate -k sk-ant-... -r . --provider anthropic
+kindling generate -k sk-ant-... -r . --ai-provider anthropic
 ```
 
 ---
@@ -84,7 +84,7 @@ ingress routes by default. Use `--ingress-all` to override.
 | OpenAI | `o3` | Reasoning model — uses `developer` role and extended thinking |
 | OpenAI | `o3-mini` | Faster and cheaper reasoning |
 | OpenAI | `gpt-4o` | Standard chat model |
-| Anthropic | `claude-sonnet-4-20250514` | Default for `--provider anthropic` |
+| Anthropic | `claude-sonnet-4-20250514` | Default for `--ai-provider anthropic` |
 
 ```bash
 # Use a specific model
@@ -100,7 +100,7 @@ kindling generate -k sk-... -r . --model o3-mini
 kindling generate -k sk-... -r /path/to/my-app
 
 # Anthropic
-kindling generate -k sk-ant-... -r . --provider anthropic
+kindling generate -k sk-ant-... -r . --ai-provider anthropic
 
 # Custom output path
 kindling generate -k sk-... -r . -o ./my-workflow.yml
@@ -120,7 +120,7 @@ kindling generate -k sk-... -r . --no-helm
 |---|---|---|---|
 | `--api-key` | `-k` | — (required) | GenAI API key |
 | `--repo-path` | `-r` | `.` | Path to the repository to analyze |
-| `--provider` | | `openai` | AI provider: `openai` or `anthropic` |
+| `--ai-provider` | | `openai` | AI provider: `openai` or `anthropic` |
 | `--model` | | auto | Model name |
 | `--output` | `-o` | `<repo>/.github/workflows/dev-deploy.yml` | Output path |
 | `--dry-run` | | `false` | Print to stdout instead of writing |

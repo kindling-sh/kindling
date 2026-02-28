@@ -29,7 +29,7 @@ var (
 
 func init() {
 	resetCmd.Flags().BoolVarP(&resetForce, "force", "y", false, "Skip confirmation prompt")
-	resetCmd.Flags().StringVar(&resetProvider, "provider", "", "CI provider (github, gitlab)")
+	resetCmd.Flags().StringVar(&resetProvider, "ci-provider", "", "CI provider (github, gitlab)")
 	rootCmd.AddCommand(resetCmd)
 }
 

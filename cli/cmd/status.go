@@ -23,7 +23,7 @@ var statusCmd = &cobra.Command{
 var statusProvider string
 
 func init() {
-	statusCmd.Flags().StringVar(&statusProvider, "provider", "", "CI provider (github, gitlab)")
+	statusCmd.Flags().StringVar(&statusProvider, "ci-provider", "", "CI provider (github, gitlab)")
 	rootCmd.AddCommand(statusCmd)
 }
 
@@ -223,7 +223,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-// ── Agent Intel ─────────────────────────────────────────────
+	// ── Agent Intel ─────────────────────────────────────────────
 	header("Agent Intel")
 
 	repoRoot, repoErr := findRepoRoot()

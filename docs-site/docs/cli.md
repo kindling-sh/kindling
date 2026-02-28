@@ -138,7 +138,7 @@ kindling runners [flags]
 | `--username` | `-u` | — | CI platform username |
 | `--repo` | `-r` | — | Repository — `owner/repo` (GitHub) or `group/project` (GitLab) |
 | `--token` | `-t` | — | Personal Access Token or runner registration token |
-| `--provider` | | `github` | CI provider: `github` or `gitlab` |
+| `--ci-provider` | | `github` | CI provider: `github` or `gitlab` |
 
 **Examples:**
 
@@ -150,7 +150,7 @@ kindling runners
 kindling runners -u myuser -r myorg/myrepo -t ghp_xxxxx
 
 # GitLab CI
-kindling runners --provider gitlab -u myuser -r mygroup/myproject -t glpat_xxxxx
+kindling runners --ci-provider gitlab -u myuser -r mygroup/myproject -t glpat_xxxxx
 ```
 
 ---
@@ -177,7 +177,7 @@ kindling generate [flags]
 |---|---|---|---|
 | `--api-key` | `-k` | — (required) | GenAI API key |
 | `--repo-path` | `-r` | `.` | Path to the local repository to analyze |
-| `--provider` | | `openai` | AI provider: `openai` or `anthropic` |
+| `--ai-provider` | | `openai` | AI provider: `openai` or `anthropic` |
 | `--model` | | auto | Model name (default: `o3` for openai, `claude-sonnet-4-20250514` for anthropic). Supports OpenAI reasoning models (`o3`, `o3-mini`) which use the `developer` role and extended thinking. |
 | `--output` | `-o` | `<repo>/.github/workflows/dev-deploy.yml` | Output path for the workflow file |
 | `--dry-run` | | `false` | Print the generated workflow to stdout instead of writing a file |
@@ -207,7 +207,7 @@ kindling generate -k sk-... -r . --model gpt-4o
 kindling generate -k sk-... -r . --model o3-mini
 
 # Use Anthropic
-kindling generate -k sk-ant-... -r . --provider anthropic
+kindling generate -k sk-ant-... -r . --ai-provider anthropic
 
 # Preview without writing
 kindling generate -k sk-... -r . --dry-run
@@ -444,7 +444,7 @@ kindling expose [flags]
 
 | Flag | Default | Description |
 |---|---|---|
-| `--provider` | auto-detect | Tunnel provider: `cloudflared` or `ngrok` |
+| `--tunnel` | auto-detect | Tunnel provider: `cloudflared` or `ngrok` |
 | `--port` | `80` | Local port to expose |
 | `--stop` | `false` | Stop a running tunnel and restore original ingress configuration |
 | `--service` | — | Ingress name to route tunnel traffic to |

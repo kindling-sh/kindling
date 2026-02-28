@@ -52,7 +52,7 @@ function HeroSection() {
           </div>
           <p className={styles.heroSubtitle}>{siteConfig.tagline}</p>
           <p className={styles.heroDescription}>
-            A Kubernetes operator that turns your laptop into a personal CI/CD
+            A free and open-source Kubernetes operator that turns your laptop into a personal CI/CD
             environment. Push to GitHub or GitLab, build locally via Kaniko, deploy
             ephemeral staging environments — all on localhost, in seconds.
           </p>
@@ -68,7 +68,7 @@ function HeroSection() {
               className={clsx("button button--lg", styles.heroSecondary)}
               to="https://github.com/kindling-sh/kindling"
             >
-              GitHub
+              Source
             </Link>
           </div>
         </div>
@@ -265,7 +265,7 @@ kindling init
 # Register a CI runner (GitHub or GitLab)
 kindling runners -u <user> \\
   -r <owner/repo> -t <pat>
-# or: kindling runners --provider gitlab \\
+# or: kindling runners --ci-provider gitlab \\
 #   -u <user> -r <group/project> -t <token>
 
 # AI-generate a workflow for your app
