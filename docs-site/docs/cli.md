@@ -461,6 +461,50 @@ kindling expose --stop
 
 ---
 
+### `kindling intel`
+
+Manage coding agent context. Automatically configures GitHub Copilot, Claude Code, Cursor, and Windsurf with full kindling project context.
+
+```
+kindling intel <subcommand>
+```
+
+**Subcommands:**
+
+| Subcommand | Description |
+|---|---|
+| `on` | Activate intel — writes context files and clears any disable flag |
+| `off` | Restore original agent configs and disable auto-activation |
+| `status` | Show whether intel is active, which files are managed, and last interaction time |
+
+:::info Auto-lifecycle
+Intel activates automatically on any `kindling` command. After 1 hour of inactivity, the next command restores originals before re-activating with fresh context. Use `kindling intel off` to disable this behavior.
+:::
+
+**Supported agents:**
+
+| Agent | Config file |
+|---|---|
+| GitHub Copilot | `.github/copilot-instructions.md` |
+| Claude Code | `CLAUDE.md` |
+| Cursor | `.cursor/rules/kindling.mdc` |
+| Windsurf | `.windsurfrules` |
+
+**Examples:**
+
+```bash
+# Activate for all detected agents
+kindling intel on
+
+# Check what's active
+kindling intel status
+
+# Restore originals and disable auto-activation
+kindling intel off
+```
+
+---
+
 ### `kindling env`
 
 Manage environment variables on running deployments without redeploying.
@@ -551,7 +595,7 @@ kindling version
 ## Typical workflow
 
 ```bash
-# 1. Bootstrap everything
+# 1. Bootstrap everything (intel auto-activates here)
 kindling init
 
 # 2. Restore secrets from a previous cluster (if any)

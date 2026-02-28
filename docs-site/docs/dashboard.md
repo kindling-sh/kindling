@@ -46,6 +46,8 @@ The dashboard provides a single-page view of your entire kindling cluster:
 
 The dashboard isn't just read-only. From the UI you can:
 
+- **Toggle Agent Intel** — activate or deactivate coding agent context with one click
+- **Generate workflows** — open the command menu (⌘K) and stream AI workflow generation in real time
 - **Create and manage secrets** — set, list, and delete API keys and credentials
 - **Manage environment variables** — set, list, and unset env vars on deployments
 - **Start and stop tunnels** — create public HTTPS tunnels for OAuth callbacks

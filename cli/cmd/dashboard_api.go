@@ -72,19 +72,19 @@ func parsePathParams(path, prefix string, minCount int) ([]string, error) {
 
 // Convenience constructors used by the route table in dashboard.go.
 var (
-	handleNodes              = resourceHandler("nodes", resourceOpts{})
-	handleNamespaces         = resourceHandler("namespaces", resourceOpts{})
-	handleClusterRoles       = resourceHandler("clusterroles", resourceOpts{emptyOnError: true})
+	handleNodes               = resourceHandler("nodes", resourceOpts{})
+	handleNamespaces          = resourceHandler("namespaces", resourceOpts{})
+	handleClusterRoles        = resourceHandler("clusterroles", resourceOpts{emptyOnError: true})
 	handleClusterRoleBindings = resourceHandler("clusterrolebindings", resourceOpts{emptyOnError: true})
-	handleDeployments        = resourceHandler("deployments", resourceOpts{namespaced: true})
-	handleServices           = resourceHandler("services", resourceOpts{namespaced: true})
-	handleIngresses          = resourceHandler("ingresses", resourceOpts{namespaced: true})
-	handleServiceAccounts    = resourceHandler("serviceaccounts", resourceOpts{namespaced: true})
-	handleRoles              = resourceHandler("roles", resourceOpts{namespaced: true, emptyOnError: true})
-	handleRoleBindings       = resourceHandler("rolebindings", resourceOpts{namespaced: true, emptyOnError: true})
-	handleReplicaSets        = resourceHandler("replicasets", resourceOpts{namespaced: true, selectable: true})
-	handlePods               = resourceHandler("pods", resourceOpts{namespaced: true, selectable: true})
-	handleEvents             = resourceHandler("events", resourceOpts{namespaced: true, emptyOnError: true, extraArgs: []string{"--sort-by=.lastTimestamp"}})
+	handleDeployments         = resourceHandler("deployments", resourceOpts{namespaced: true})
+	handleServices            = resourceHandler("services", resourceOpts{namespaced: true})
+	handleIngresses           = resourceHandler("ingresses", resourceOpts{namespaced: true})
+	handleServiceAccounts     = resourceHandler("serviceaccounts", resourceOpts{namespaced: true})
+	handleRoles               = resourceHandler("roles", resourceOpts{namespaced: true, emptyOnError: true})
+	handleRoleBindings        = resourceHandler("rolebindings", resourceOpts{namespaced: true, emptyOnError: true})
+	handleReplicaSets         = resourceHandler("replicasets", resourceOpts{namespaced: true, selectable: true})
+	handlePods                = resourceHandler("pods", resourceOpts{namespaced: true, selectable: true})
+	handleEvents              = resourceHandler("events", resourceOpts{namespaced: true, emptyOnError: true, extraArgs: []string{"--sort-by=.lastTimestamp"}})
 )
 
 // ── /api/cluster — cluster overview ─────────────────────────────

@@ -12,6 +12,7 @@ const sidebars: SidebarsConfig = {
       label: "Features",
       collapsed: false,
       items: [
+        "intel",
         "secrets",
         "dependencies",
         "github-actions",
