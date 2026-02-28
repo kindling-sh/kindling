@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/jeffvincent/kindling/pkg/ci"
 	"github.com/spf13/cobra"
 )
 
@@ -99,12 +98,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	}
 
 	// ── Runner Pools ────────────────────────────────────────────
-	statusProviderObj := ci.Default()
-	if statusProvider != "" {
-		if p, err := ci.Get(statusProvider); err == nil {
-			statusProviderObj = p
-		}
-	}
+	statusProviderObj, _ := resolveProvider(statusProvider)
 	labels := statusProviderObj.CLILabels()
 	header(labels.CRDListHeader)
 

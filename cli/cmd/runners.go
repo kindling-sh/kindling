@@ -42,13 +42,9 @@ func runRunners(cmd *cobra.Command, args []string) error {
 	reader := bufio.NewReader(os.Stdin)
 
 	// ── Resolve provider ──────────────────────────────────────────
-	provider := ci.Default()
-	if ciProvider != "" {
-		p, err := ci.Get(ciProvider)
-		if err != nil {
-			return fmt.Errorf("unknown provider %q (available: github, gitlab)", ciProvider)
-		}
-		provider = p
+	provider, err := resolveProvider(ciProvider)
+	if err != nil {
+		return err
 	}
 	labels := provider.CLILabels()
 

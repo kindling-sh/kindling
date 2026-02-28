@@ -506,10 +506,6 @@ Expanding to additional platforms unlocks even more developers.
 
 - ✅ **GitHub** — GitHub Actions runners, GitHub PATs, `.github/workflows/` generation
 - ✅ **GitLab** — GitLab runner registration, `.gitlab-ci.yml` generation via `kindling generate`
-- **Bitbucket** — Bitbucket Pipelines runner registration and
-  `bitbucket-pipelines.yml` generation
-- **Gitea / Forgejo** — self-hosted Git; register Gitea Actions runners (Gitea
-  Actions is Act-compatible, so much of the GitHub Actions plumbing carries over)
 
 ### CI systems
 
@@ -517,9 +513,6 @@ Expanding to additional platforms unlocks even more developers.
   self-hosted runner registration, AI workflow generation
 - ✅ **GitLab CI** — `.gitlab-ci.yml` with Kaniko build + kubectl deploy
   stages; GitLab Runner registration in the Kind cluster
-- **Jenkins** — generate `Jenkinsfile`; deploy a Jenkins agent pod in-cluster
-- **Drone / Woodpecker** — lightweight self-hosted CI; generate `.drone.yml` /
-  `.woodpecker.yml`
 
 ### Implementation approach
 

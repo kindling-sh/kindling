@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"github.com/jeffvincent/kindling/pkg/ci"
 )
 
 // ── ANSI colours ────────────────────────────────────────────────
@@ -20,6 +22,47 @@ const (
 	colorBold   = "\033[1m"
 	colorDim    = "\033[2m"
 )
+
+// ── Shared helpers ──────────────────────────────────────────────
+
+// kindContext returns the kubectl context string for the active Kind cluster.
+func kindContext() string {
+	return "kind-" + clusterName
+}
+
+// resolveProvider returns the CI provider for the given name, or the default
+// if name is empty. This centralises the 5-line pattern that was duplicated
+// across runners, reset, status, generate, and the dashboard API.
+func resolveProvider(name string) (ci.Provider, error) {
+	if name == "" {
+		return ci.Default(), nil
+	}
+	p, err := ci.Get(name)
+	if err != nil {
+		return nil, fmt.Errorf("unknown provider %q (available: github, gitlab)", name)
+	}
+	return p, nil
+}
+
+// skipDirNames is the canonical list of directories that should be skipped
+// during repo scanning (generate, intel, sync, etc.). Individual features
+// can extend this with their own entries or file-pattern globs.
+var skipDirNames = []string{
+	".git", "node_modules", "vendor", "__pycache__", ".venv", "venv", "env",
+	".tox", ".mypy_cache", ".ruff_cache", "dist", "build", ".next", ".nuxt",
+	".svelte-kit", "target", ".terraform", ".idea", ".vscode", ".github",
+	"bin", "obj", "_output", ".cache", "_build", "deps", "zig-cache", "zig-out",
+	".gradle", ".m2", ".elixir_ls", "coverage", ".nyc_output", "htmlcov",
+}
+
+// skipDirSet returns skipDirNames as a map for O(1) lookup.
+func skipDirSet() map[string]bool {
+	m := make(map[string]bool, len(skipDirNames))
+	for _, d := range skipDirNames {
+		m[d] = true
+	}
+	return m
+}
 
 // ── Pretty-print helpers ────────────────────────────────────────
 

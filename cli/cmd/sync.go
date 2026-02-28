@@ -318,30 +318,17 @@ var (
 	syncBuildOutput string
 )
 
-// Default patterns to exclude from sync.
-var defaultExcludes = []string{
-	".git",
-	"node_modules",
+// Default patterns to exclude from sync — starts from the shared skipDirNames
+// and appends sync-specific globs (file patterns like *.pyc).
+var defaultExcludes = append(append([]string{}, skipDirNames...),
 	".DS_Store",
-	"__pycache__",
 	"*.pyc",
-	".venv",
-	"vendor",
-	".idea",
-	".vscode",
-	"target",     // Rust/Java
-	"bin",        // Go/.NET
-	"obj",        // .NET
-	"_build",     // Elixir
-	"deps",       // Elixir
-	"*.class",    // Java
-	"*.o",        // C/C++
-	"*.so",       // shared objects
-	".zig-cache", // Zig
-	"dist",       // Frontend build output (Vite, Webpack)
-	".next",      // Next.js build output
-	"out",        // Static export output
-}
+	"*.class",
+	"*.o",
+	"*.so",
+	".zig-cache",
+	"out",
+)
 
 func init() {
 	syncCmd.Flags().StringVarP(&syncDeployment, "deployment", "d", "",
@@ -385,7 +372,7 @@ func detectRuntime(pod, namespace, container string) (runtimeProfile, string) {
 		WaitAfter: 3 * time.Second,
 	}
 
-	args := []string{"exec", pod, "-n", namespace, "--context", "kind-" + clusterName}
+	args := []string{"exec", pod, "-n", namespace, "--context", kindContext()}
 	if container != "" {
 		args = append(args, "-c", container)
 	}
@@ -628,7 +615,7 @@ func detectFrontendOutputDir(srcDir string) string {
 // detectNginxHtmlRoot tries to determine the nginx document root from the
 // container's configuration.  Falls back to /usr/share/nginx/html.
 func detectNginxHtmlRoot(pod, namespace, container string) string {
-	args := []string{"exec", pod, "-n", namespace, "--context", "kind-" + clusterName}
+	args := []string{"exec", pod, "-n", namespace, "--context", kindContext()}
 	if container != "" {
 		args = append(args, "-c", container)
 	}
@@ -778,7 +765,7 @@ func findPodForDeployment(deployment, namespace string) (string, error) {
 			"-l", sel,
 			"--field-selector=status.phase=Running",
 			"-o", "jsonpath={.items[0].metadata.name}",
-			"--context", "kind-"+clusterName,
+			"--context", kindContext(),
 		)
 		if err == nil && strings.TrimSpace(out) != "" {
 			return strings.TrimSpace(out), nil
@@ -789,7 +776,7 @@ func findPodForDeployment(deployment, namespace string) (string, error) {
 		"-n", namespace,
 		"--field-selector=status.phase=Running",
 		"-o", "jsonpath={.items[*].metadata.name}",
-		"--context", "kind-"+clusterName,
+		"--context", kindContext(),
 	)
 	if err == nil {
 		for _, name := range strings.Fields(out) {
@@ -805,7 +792,7 @@ func findPodForDeployment(deployment, namespace string) (string, error) {
 // Used to snapshot the revision before sync so we can rollback on stop.
 func getDeploymentRevision(deployment, namespace string) string {
 	out, err := runCapture("kubectl", "get", fmt.Sprintf("deployment/%s", deployment),
-		"-n", namespace, "--context", "kind-"+clusterName,
+		"-n", namespace, "--context", kindContext(),
 		"-o", "jsonpath={.metadata.annotations.deployment\\.kubernetes\\.io/revision}")
 	if err != nil {
 		return ""
@@ -829,7 +816,7 @@ func containerNameForDeployment(deployment, namespace, containerOverride string)
 		return containerOverride
 	}
 	name, _ := runCapture("kubectl", "get", fmt.Sprintf("deployment/%s", deployment),
-		"-n", namespace, "--context", "kind-"+clusterName,
+		"-n", namespace, "--context", kindContext(),
 		"-o", "jsonpath={.spec.template.spec.containers[0].name}")
 	name = strings.TrimSpace(name)
 	if name != "" {
@@ -845,7 +832,7 @@ func containerNameForDeployment(deployment, namespace, containerOverride string)
 // syncFile copies a single file into the pod via kubectl cp.
 func syncFile(pod, namespace, localPath, containerDest, container string) error {
 	args := []string{"cp", localPath, fmt.Sprintf("%s:%s", pod, containerDest),
-		"-n", namespace, "--context", "kind-" + clusterName}
+		"-n", namespace, "--context", kindContext()}
 	if container != "" {
 		args = append(args, "-c", container)
 	}
@@ -858,7 +845,7 @@ func syncFile(pod, namespace, localPath, containerDest, container string) error 
 func syncDir(pod, namespace, localDir, containerDest, container string) error {
 	src := strings.TrimRight(localDir, "/") + "/."
 	args := []string{"cp", src, fmt.Sprintf("%s:%s", pod, containerDest),
-		"-n", namespace, "--context", "kind-" + clusterName}
+		"-n", namespace, "--context", kindContext()}
 	if container != "" {
 		args = append(args, "-c", container)
 	}
@@ -874,7 +861,7 @@ func syncDir(pod, namespace, localDir, containerDest, container string) error {
 // Used by: uvicorn, gunicorn, Puma, Nginx, Apache, Caddy.
 func restartViaSignal(pod, namespace, container, sig string) error {
 	step("📡", fmt.Sprintf("Sending SIG%s to PID 1 for graceful reload", sig))
-	args := []string{"exec", pod, "-n", namespace, "--context", "kind-" + clusterName}
+	args := []string{"exec", pod, "-n", namespace, "--context", kindContext()}
 	if container != "" {
 		args = append(args, "-c", container)
 	}
@@ -903,14 +890,14 @@ func patchDeploymentWrapper(deployment, pod, namespace, container string) (strin
 		cName, strings.ReplaceAll(wrapperScript, `"`, `\"`))
 
 	if err := run("kubectl", "patch", fmt.Sprintf("deployment/%s", deployment),
-		"-n", namespace, "--context", "kind-"+clusterName,
+		"-n", namespace, "--context", kindContext(),
 		"--type=strategic", "-p", patch); err != nil {
 		return pod, fmt.Errorf("failed to patch deployment: %w", err)
 	}
 
 	step("⏳", "Waiting for patched pod to roll out...")
 	_ = run("kubectl", "rollout", "status", fmt.Sprintf("deployment/%s", deployment),
-		"-n", namespace, "--context", "kind-"+clusterName, "--timeout=90s")
+		"-n", namespace, "--context", kindContext(), "--timeout=90s")
 
 	// Brief wait for old pod termination to avoid stale pod lookup
 	time.Sleep(2 * time.Second)
@@ -926,7 +913,7 @@ func patchDeploymentWrapper(deployment, pod, namespace, container string) (strin
 // killAppChild kills the app child process (not PID 1 sh) so the wrapper
 // loop respawns it with the updated files.
 func killAppChild(pod, namespace, container string) {
-	args := []string{"exec", pod, "-n", namespace, "--context", "kind-" + clusterName}
+	args := []string{"exec", pod, "-n", namespace, "--context", kindContext()}
 	if container != "" {
 		args = append(args, "-c", container)
 	}
@@ -937,7 +924,7 @@ func killAppChild(pod, namespace, container string) {
 // isAlreadyPatched checks if the deployment has our wrapper marker file.
 func isAlreadyPatched(pod, namespace string) bool {
 	out, _ := runCapture("kubectl", "exec", pod, "-n", namespace,
-		"--context", "kind-"+clusterName, "--", "cat", "/tmp/.kindling-sync-wrapper")
+		"--context", kindContext(), "--", "cat", "/tmp/.kindling-sync-wrapper")
 	return strings.TrimSpace(out) == "1"
 }
 
@@ -1073,7 +1060,7 @@ func restartViaRebuild(pod, namespace, container, srcDir, dest string, profile r
 				binDest = innerBin
 			} else {
 				// Resolve via `command -v` inside the container (more portable than `which`)
-				resolveArgs := []string{"exec", pod, "-n", namespace, "--context", "kind-" + clusterName}
+				resolveArgs := []string{"exec", pod, "-n", namespace, "--context", kindContext()}
 				if container != "" {
 					resolveArgs = append(resolveArgs, "-c", container)
 				}
@@ -1091,7 +1078,7 @@ func restartViaRebuild(pod, namespace, container, srcDir, dest string, profile r
 	// ── Copy the binary into the container ─────────────────────
 	step("📦", fmt.Sprintf("Syncing binary → %s:%s", pod, binDest))
 	cpArgs := []string{"cp", absOutput, fmt.Sprintf("%s:%s", pod, binDest),
-		"-n", namespace, "--context", "kind-" + clusterName}
+		"-n", namespace, "--context", kindContext()}
 	if container != "" {
 		cpArgs = append(cpArgs, "-c", container)
 	}
@@ -1101,7 +1088,7 @@ func restartViaRebuild(pod, namespace, container, srcDir, dest string, profile r
 	}
 
 	// Make it executable
-	chmodArgs := []string{"exec", pod, "-n", namespace, "--context", "kind-" + clusterName}
+	chmodArgs := []string{"exec", pod, "-n", namespace, "--context", kindContext()}
 	if container != "" {
 		chmodArgs = append(chmodArgs, "-c", container)
 	}
@@ -1120,7 +1107,7 @@ func restartViaRebuild(pod, namespace, container, srcDir, dest string, profile r
 // isDistroless returns true if the container appears to be a distroless or
 // scratch image (no shell available).
 func isDistroless(pod, namespace, container string) bool {
-	args := []string{"exec", pod, "-n", namespace, "--context", "kind-" + clusterName}
+	args := []string{"exec", pod, "-n", namespace, "--context", kindContext()}
 	if container != "" {
 		args = append(args, "-c", container)
 	}
@@ -1172,14 +1159,14 @@ func patchDistrolessWithWrapper(deployment, namespace, container, origCmd string
 }`, cName, escapedWrapper)
 
 	if err := run("kubectl", "patch", fmt.Sprintf("deployment/%s", deployment),
-		"-n", namespace, "--context", "kind-"+clusterName,
+		"-n", namespace, "--context", kindContext(),
 		"--type=strategic", "-p", patch); err != nil {
 		return "", fmt.Errorf("failed to patch distroless deployment: %w", err)
 	}
 
 	step("⏳", "Waiting for patched pod to roll out...")
 	_ = run("kubectl", "rollout", "status", fmt.Sprintf("deployment/%s", deployment),
-		"-n", namespace, "--context", "kind-"+clusterName, "--timeout=90s")
+		"-n", namespace, "--context", kindContext(), "--timeout=90s")
 
 	// Brief wait for old pod termination to avoid stale pod lookup
 	time.Sleep(2 * time.Second)
@@ -1196,9 +1183,9 @@ func patchDistrolessWithWrapper(deployment, namespace, container, origCmd string
 
 // detectNodeArch returns (GOOS, GOARCH) of the Kind cluster's node.
 func detectNodeArch() (string, string) {
-	goos, _ := runCapture("kubectl", "get", "nodes", "--context", "kind-"+clusterName,
+	goos, _ := runCapture("kubectl", "get", "nodes", "--context", kindContext(),
 		"-o", "jsonpath={.items[0].status.nodeInfo.operatingSystem}")
-	goarch, _ := runCapture("kubectl", "get", "nodes", "--context", "kind-"+clusterName,
+	goarch, _ := runCapture("kubectl", "get", "nodes", "--context", kindContext(),
 		"-o", "jsonpath={.items[0].status.nodeInfo.architecture}")
 	goos = strings.TrimSpace(goos)
 	goarch = strings.TrimSpace(goarch)
@@ -1436,10 +1423,10 @@ func restartContainer(pod, namespace, container string) error {
 // readContainerCommand returns the original entrypoint/cmd for the deployment.
 func readContainerCommand(deployment, pod, namespace, container string) string {
 	currentCmd, _ := runCapture("kubectl", "get", fmt.Sprintf("deployment/%s", deployment),
-		"-n", namespace, "--context", "kind-"+clusterName,
+		"-n", namespace, "--context", kindContext(),
 		"-o", "jsonpath={.spec.template.spec.containers[0].command}")
 	currentArgs, _ := runCapture("kubectl", "get", fmt.Sprintf("deployment/%s", deployment),
-		"-n", namespace, "--context", "kind-"+clusterName,
+		"-n", namespace, "--context", kindContext(),
 		"-o", "jsonpath={.spec.template.spec.containers[0].args}")
 
 	if strings.TrimSpace(currentCmd) != "" && currentCmd != "[]" {
@@ -1451,7 +1438,7 @@ func readContainerCommand(deployment, pod, namespace, container string) string {
 
 	// Fall back: read PID 1's cmdline
 	cmdline, _ := runCapture("kubectl", "exec", pod, "-n", namespace,
-		"--context", "kind-"+clusterName, "--",
+		"--context", kindContext(), "--",
 		"cat", "/proc/1/cmdline")
 	if trimmed := strings.TrimSpace(strings.ReplaceAll(cmdline, "\x00", " ")); trimmed != "" {
 		return trimmed

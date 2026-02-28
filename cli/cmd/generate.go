@@ -81,13 +81,9 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 	}
 
 	// ── Resolve CI provider ──────────────────────────────────────
-	ciProv := ci.Default()
-	if genCIProvider != "" {
-		p, err := ci.Get(genCIProvider)
-		if err != nil {
-			return fmt.Errorf("unknown CI provider %q (available: github, gitlab)", genCIProvider)
-		}
-		ciProv = p
+	ciProv, err := resolveProvider(genCIProvider)
+	if err != nil {
+		return err
 	}
 
 	if genOutput == "" {
@@ -223,43 +219,8 @@ type repoContext struct {
 	hostArch          string   // host CPU architecture (arm64, amd64)
 }
 
-// Directories to skip during scanning.
-var scanSkipDirs = map[string]bool{
-	".git":         true,
-	"node_modules": true,
-	"vendor":       true,
-	"__pycache__":  true,
-	".venv":        true,
-	"venv":         true,
-	"env":          true,
-	".tox":         true,
-	".mypy_cache":  true,
-	".ruff_cache":  true,
-	"dist":         true,
-	"build":        true,
-	".next":        true,
-	".nuxt":        true,
-	".svelte-kit":  true,
-	"target":       true, // Rust, Java/Maven
-	".terraform":   true,
-	".idea":        true,
-	".vscode":      true,
-	".github":      true, // don't confuse the AI with existing workflows
-	"bin":          true,
-	"obj":          true, // .NET build output
-	"_output":      true,
-	".cache":       true,
-	"_build":       true, // Elixir/Mix
-	"deps":         true, // Elixir/Mix
-	"zig-cache":    true,
-	"zig-out":      true,
-	".gradle":      true,
-	".m2":          true,
-	".elixir_ls":   true,
-	"coverage":     true,
-	".nyc_output":  true,
-	"htmlcov":      true,
-}
+// Directories to skip during scanning (built from the shared skip list).
+var scanSkipDirs = skipDirSet()
 
 // Dependency manifests worth reading.
 var scanDepFiles = map[string]bool{

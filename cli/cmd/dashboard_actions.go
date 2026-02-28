@@ -75,8 +75,8 @@ func handleDeleteDSE(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodDelete) {
 		return
 	}
-	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/dses/"), "/")
-	if len(parts) < 2 {
+	parts, err := parsePathParams(r.URL.Path, "/api/dses/", 2)
+	if err != nil {
 		actionErr(w, "usage: DELETE /api/dses/{namespace}/{name}", http.StatusBadRequest)
 		return
 	}
@@ -132,8 +132,8 @@ func handleDeleteSecret(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodDelete) {
 		return
 	}
-	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/secrets/"), "/")
-	if len(parts) < 2 {
+	parts, err := parsePathParams(r.URL.Path, "/api/secrets/", 2)
+	if err != nil {
 		actionErr(w, "usage: DELETE /api/secrets/{namespace}/{name}", http.StatusBadRequest)
 		return
 	}
@@ -266,8 +266,8 @@ func handleEnvUnset(w http.ResponseWriter, r *http.Request) {
 // ── GET /api/env/list/{namespace}/{deployment} ──────────────────
 
 func handleEnvList(w http.ResponseWriter, r *http.Request) {
-	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/env/list/"), "/")
-	if len(parts) < 2 {
+	parts, err := parsePathParams(r.URL.Path, "/api/env/list/", 2)
+	if err != nil {
 		actionErr(w, "usage: /api/env/list/{namespace}/{deployment}", http.StatusBadRequest)
 		return
 	}
@@ -534,8 +534,8 @@ func handleRestartDeployment(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
-	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/restart/"), "/")
-	if len(parts) < 2 {
+	parts, err := parsePathParams(r.URL.Path, "/api/restart/", 2)
+	if err != nil {
 		actionErr(w, "usage: POST /api/restart/{namespace}/{deployment}", http.StatusBadRequest)
 		return
 	}
@@ -555,8 +555,8 @@ func handleScaleDeployment(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
-	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/scale/"), "/")
-	if len(parts) < 2 {
+	parts, err := parsePathParams(r.URL.Path, "/api/scale/", 2)
+	if err != nil {
 		actionErr(w, "usage: POST /api/scale/{namespace}/{deployment}", http.StatusBadRequest)
 		return
 	}
@@ -584,8 +584,8 @@ func handleDeletePod(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodDelete) {
 		return
 	}
-	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/pods/"), "/")
-	if len(parts) < 2 {
+	parts, err := parsePathParams(r.URL.Path, "/api/pods/", 2)
+	if err != nil {
 		actionErr(w, "usage: DELETE /api/pods/{namespace}/{pod}", http.StatusBadRequest)
 		return
 	}
@@ -806,7 +806,7 @@ func runDashboardSync(deployment, namespace, srcDir, dest, container string, res
 		activeSyncMu.Unlock()
 
 		if info != nil {
-			ctx := "kind-" + clusterName
+			ctx := kindContext()
 			if info.WasPatched && info.SavedRevision != "" {
 				step("♻️", fmt.Sprintf("Rolling back deployment/%s to revision %s", deployment, info.SavedRevision))
 				_ = run("kubectl", "rollout", "undo", fmt.Sprintf("deployment/%s", deployment),
@@ -1057,4 +1057,242 @@ func handleLoadAction(w http.ResponseWriter, r *http.Request) {
 	}
 
 	actionOK(w, strings.Join(outputs, "\n"))
+}
+
+// ── GET/POST/DELETE /api/intel ───────────────────────────────────
+// GET  → return intel status (active, disabled, files, last interaction)
+// POST → activate intel
+// DELETE → deactivate intel
+
+func handleIntel(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		handleIntelStatus(w, r)
+	case http.MethodPost:
+		handleIntelActivate(w, r)
+	case http.MethodDelete:
+		handleIntelDeactivate(w, r)
+	default:
+		actionErr(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func handleIntelStatus(w http.ResponseWriter, r *http.Request) {
+	type intelStatusResponse struct {
+		Status          string   `json:"status"` // "active", "disabled", "inactive"
+		Files           []string `json:"files,omitempty"`
+		LastInteraction string   `json:"last_interaction,omitempty"`
+		Timeout         string   `json:"timeout"`
+	}
+
+	repoRoot, err := findRepoRoot()
+	if err != nil {
+		jsonResponse(w, intelStatusResponse{Status: "inactive", Timeout: intelSessionTimeout.String()})
+		return
+	}
+
+	// Check disabled flag
+	if _, err := os.Stat(filepath.Join(repoRoot, intelDisabledFile)); err == nil {
+		jsonResponse(w, intelStatusResponse{Status: "disabled", Timeout: intelSessionTimeout.String()})
+		return
+	}
+
+	state, _ := loadIntelState(repoRoot)
+	if state != nil && state.Active {
+		resp := intelStatusResponse{
+			Status:          "active",
+			Files:           state.Written,
+			LastInteraction: state.LastInteraction,
+			Timeout:         intelSessionTimeout.String(),
+		}
+		jsonResponse(w, resp)
+		return
+	}
+
+	jsonResponse(w, intelStatusResponse{Status: "inactive", Timeout: intelSessionTimeout.String()})
+}
+
+func handleIntelActivate(w http.ResponseWriter, r *http.Request) {
+	repoRoot, err := findRepoRoot()
+	if err != nil {
+		actionErr(w, "cannot find repo root: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Clear disabled flag
+	os.Remove(filepath.Join(repoRoot, intelDisabledFile))
+
+	// Check if already active — just touch timestamp
+	state, _ := loadIntelState(repoRoot)
+	if state != nil && state.Active {
+		state.touchInteraction()
+		saveIntelState(repoRoot, state)
+		actionOK(w, "intel already active (timestamp refreshed)")
+		return
+	}
+
+	if err := activateIntel(repoRoot, false); err != nil {
+		actionErr(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	actionOK(w, "kindling intel activated")
+}
+
+func handleIntelDeactivate(w http.ResponseWriter, r *http.Request) {
+	repoRoot, err := findRepoRoot()
+	if err != nil {
+		actionErr(w, "cannot find repo root: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	state, _ := loadIntelState(repoRoot)
+	if state != nil && state.Active {
+		restoreIntel(repoRoot, state)
+	}
+	scrubKindlingFiles(repoRoot)
+	setIntelDisabled(repoRoot)
+	actionOK(w, "kindling intel deactivated")
+}
+
+// ── POST /api/generate ──────────────────────────────────────────
+// Streams ndjson progress, then returns the generated workflow.
+// Body: { "apiKey", "repoPath?", "provider?", "model?", "ciProvider?", "branch?", "dryRun?" }
+
+func handleGenerate(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) {
+		return
+	}
+
+	var body struct {
+		APIKey     string `json:"apiKey"`
+		RepoPath   string `json:"repoPath"`
+		Provider   string `json:"provider"`
+		Model      string `json:"model"`
+		CIProvider string `json:"ciProvider"`
+		Branch     string `json:"branch"`
+		DryRun     bool   `json:"dryRun"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		actionErr(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if body.APIKey == "" {
+		actionErr(w, "apiKey is required", http.StatusBadRequest)
+		return
+	}
+
+	flusher, canFlush := w.(http.Flusher)
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	w.Header().Set("Cache-Control", "no-cache")
+
+	send := func(msg string) {
+		json.NewEncoder(w).Encode(map[string]string{"status": msg})
+		if canFlush {
+			flusher.Flush()
+		}
+	}
+
+	// Defaults
+	repoPath := body.RepoPath
+	if repoPath == "" {
+		root, err := findRepoRoot()
+		if err != nil {
+			json.NewEncoder(w).Encode(actionResult{OK: false, Error: "cannot find repo root: " + err.Error()})
+			return
+		}
+		repoPath = root
+	} else {
+		abs, err := filepath.Abs(repoPath)
+		if err != nil {
+			json.NewEncoder(w).Encode(actionResult{OK: false, Error: "invalid repo path: " + err.Error()})
+			return
+		}
+		repoPath = abs
+	}
+
+	provider := body.Provider
+	if provider == "" {
+		provider = "openai"
+	}
+	model := body.Model
+	if model == "" {
+		switch provider {
+		case "anthropic":
+			model = "claude-sonnet-4-20250514"
+		default:
+			model = "o3"
+		}
+	}
+
+	ciProv, err := resolveProvider(body.CIProvider)
+	if err != nil {
+		json.NewEncoder(w).Encode(actionResult{OK: false, Error: err.Error()})
+		return
+	}
+
+	branch := body.Branch
+	if branch == "" {
+		out, err := runCapture("git", "-C", repoPath, "symbolic-ref", "--short", "HEAD")
+		if err == nil {
+			branch = strings.TrimSpace(out)
+		} else {
+			branch = "main"
+		}
+	}
+
+	// Scan
+	send("Scanning repository…")
+	repoCtx, err := scanRepo(repoPath)
+	if err != nil {
+		json.NewEncoder(w).Encode(actionResult{OK: false, Error: "repo scan failed: " + err.Error()})
+		return
+	}
+	repoCtx.branch = branch
+	send(fmt.Sprintf("Found %d Dockerfile(s), %d dependency manifest(s), %d source file(s)",
+		repoCtx.dockerfileCount, repoCtx.depFileCount, len(repoCtx.sourceSnippets)))
+
+	// Call AI
+	send(fmt.Sprintf("Calling %s (%s)…", provider, model))
+	systemPrompt, userPrompt := buildGeneratePrompt(repoCtx, ciProv)
+	workflow, err := callGenAI(provider, body.APIKey, model, systemPrompt, userPrompt)
+	if err != nil {
+		json.NewEncoder(w).Encode(actionResult{OK: false, Error: "AI generation failed: " + err.Error()})
+		return
+	}
+	workflow = cleanYAMLResponse(workflow)
+
+	if body.DryRun {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"ok":       true,
+			"output":   "Workflow generated (dry-run)",
+			"workflow": workflow,
+		})
+		return
+	}
+
+	// Write file
+	wfGen := ciProv.Workflow()
+	outputPath := filepath.Join(repoPath, wfGen.DefaultOutputPath())
+	outDir := filepath.Dir(outputPath)
+	if err := os.MkdirAll(outDir, 0755); err != nil {
+		json.NewEncoder(w).Encode(actionResult{OK: false, Error: "cannot create output directory: " + err.Error()})
+		return
+	}
+	if err := os.WriteFile(outputPath, []byte(workflow+"\n"), 0644); err != nil {
+		json.NewEncoder(w).Encode(actionResult{OK: false, Error: "cannot write workflow file: " + err.Error()})
+		return
+	}
+
+	relPath, _ := filepath.Rel(repoPath, outputPath)
+	if relPath == "" {
+		relPath = outputPath
+	}
+	send("Workflow written to " + relPath)
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok":       true,
+		"output":   "Workflow generated and written to " + relPath,
+		"workflow": workflow,
+		"path":     relPath,
+	})
 }

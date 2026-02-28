@@ -358,3 +358,12 @@ export interface ServiceDir {
   has_dockerfile: boolean;
   language: string;
 }
+
+// ── Intel Status ────────────────────────────────────────────────
+
+export interface IntelStatus {
+  status: 'active' | 'disabled' | 'inactive';
+  files?: string[];
+  last_interaction?: string;
+  timeout: string;
+}

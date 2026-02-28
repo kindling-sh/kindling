@@ -1,8 +1,8 @@
 import { useState } from 'react';
-import { useApi, streamInit } from '../api';
+import { useApi, streamInit, activateIntel, deactivateIntel } from '../api';
 import type { ActionResult } from '../api';
-import type { ClusterInfo, K8sList, K8sNode, K8sPod, K8sDeployment } from '../types';
-import { StatusBadge, DeploymentStatus } from './shared';
+import type { ClusterInfo, K8sList, K8sNode, K8sPod, K8sDeployment, IntelStatus } from '../types';
+import { StatusBadge, DeploymentStatus, TimeAgo } from './shared';
 import { ActionButton, ResultOutput, useToast } from './actions';
 
 export function OverviewPage() {
@@ -11,11 +11,13 @@ export function OverviewPage() {
   const { data: ingressPods } = useApi<K8sList<K8sPod>>('/api/ingress-controller');
   const { data: deployments } = useApi<K8sList<K8sDeployment>>('/api/deployments');
   const { data: allPods } = useApi<K8sList<K8sPod>>('/api/pods');
+  const { data: intel, refresh: refreshIntel } = useApi<IntelStatus>('/api/intel', 10000);
   const { toast } = useToast();
 
   const [initRunning, setInitRunning] = useState(false);
   const [initMessages, setInitMessages] = useState<string[]>([]);
   const [initResult, setInitResult] = useState<ActionResult | null>(null);
+  const [intelLoading, setIntelLoading] = useState(false);
 
   async function handleInit() {
     setInitRunning(true);
@@ -30,6 +32,21 @@ export function OverviewPage() {
     } else {
       toast(result.error || 'Init failed', 'error');
     }
+  }
+
+  async function handleIntelToggle() {
+    setIntelLoading(true);
+    if (intel?.status === 'active') {
+      const result = await deactivateIntel();
+      if (result.ok) toast('Intel deactivated', 'success');
+      else toast(result.error || 'Failed to deactivate intel', 'error');
+    } else {
+      const result = await activateIntel();
+      if (result.ok) toast('Intel activated', 'success');
+      else toast(result.error || 'Failed to activate intel', 'error');
+    }
+    refreshIntel();
+    setIntelLoading(false);
   }
 
   if (cl) return <div className="loading">Loading cluster info…</div>;
@@ -144,6 +161,51 @@ export function OverviewPage() {
           </div>
         </div>
       </div>
+
+      {/* Agent Intel */}
+      {intel && (
+        <div className="card" style={{ marginBottom: 20 }}>
+          <div className="card-header">
+            <span className="card-icon">⚡</span>
+            <h3>Agent Intel</h3>
+          </div>
+          <div className="card-body">
+            <div className="stat-row">
+              <span className="label">Status</span>
+              <StatusBadge
+                ok={intel.status === 'active'}
+                warn={intel.status === 'disabled'}
+                label={intel.status === 'active' ? 'Active' : intel.status === 'disabled' ? 'Disabled' : 'Inactive'}
+              />
+            </div>
+            {intel.status === 'active' && intel.last_interaction && (
+              <div className="stat-row">
+                <span className="label">Last interaction</span>
+                <TimeAgo timestamp={intel.last_interaction} />
+              </div>
+            )}
+            {intel.status === 'active' && intel.files && intel.files.length > 0 && (
+              <div style={{ marginTop: 8 }}>
+                <span className="label" style={{ display: 'block', marginBottom: 4 }}>Agent files</span>
+                <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                  {intel.files.map((f) => (
+                    <span key={f} className="tag">{f}</span>
+                  ))}
+                </div>
+              </div>
+            )}
+            <div style={{ marginTop: 12 }}>
+              <button
+                className={`btn btn-sm ${intel.status === 'active' ? 'btn-danger' : 'btn-primary'}`}
+                disabled={intelLoading}
+                onClick={handleIntelToggle}
+              >
+                {intelLoading ? '…' : intel.status === 'active' ? 'Deactivate' : 'Activate'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Nodes table */}
       {nodes?.items && nodes.items.length > 0 && (

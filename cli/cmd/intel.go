@@ -145,15 +145,17 @@ func ensureIntel(cmd *cobra.Command) {
 
 // shouldSkipIntel returns true for commands that shouldn't trigger auto-intel.
 func shouldSkipIntel(cmd *cobra.Command) bool {
-	name := cmd.Name()
-	// Skip for intel subcommands (they manage their own lifecycle),
-	// version, help, and completion
-	switch name {
-	case "on", "off", "status", "version", "help", "completion":
+	// Skip for intel subcommands (they manage their own lifecycle)
+	if cmd.Parent() != nil && cmd.Parent().Name() == "intel" {
 		return true
 	}
-	// Also skip if the parent is the intel command
-	if cmd.Parent() != nil && cmd.Parent().Name() == "intel" {
+	// Skip for bare `kindling intel` (no subcommand)
+	if cmd.Name() == "intel" {
+		return true
+	}
+	// Skip for version, help, and completion — they're informational only
+	switch cmd.Name() {
+	case "version", "help", "completion":
 		return true
 	}
 	return false
@@ -208,7 +210,7 @@ func activateIntel(repoRoot string, verbose bool) error {
 
 		// Check if file exists and already has kindling content (don't re-backup our own file)
 		if data, err := os.ReadFile(agentPath); err == nil {
-			if !strings.Contains(string(data), "Kindling — Coding Agent Context") {
+			if !strings.Contains(string(data), kindlingMarker) {
 				// It's an original file — back it up
 				backupName := strings.ReplaceAll(agent.File, "/", "__")
 				backupPath := filepath.Join(backupDir, backupName)
@@ -270,22 +272,23 @@ func runIntelOff(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	state, err := loadIntelState(repoRoot)
-	if err != nil || state == nil || !state.Active {
-		fmt.Fprintf(os.Stderr, "  kindling intel is not active — nothing to restore.\n")
-		// Still set the disabled flag so auto-activation doesn't kick in
-		setIntelDisabled(repoRoot)
-		return nil
+	header("Deactivating kindling intel")
+
+	// If we have state, restore any backed-up originals first
+	state, _ := loadIntelState(repoRoot)
+	if state != nil && state.Active {
+		restoreIntel(repoRoot, state)
 	}
 
-	header("Deactivating kindling intel")
-	restoreIntel(repoRoot, state)
+	// Always scrub by content marker — catches cases where state is missing,
+	// the directory was copied, git init hasn't been run yet, etc.
+	scrubKindlingFiles(repoRoot)
 
 	// Set disabled flag to prevent auto-reactivation
 	setIntelDisabled(repoRoot)
 
 	fmt.Println()
-	fmt.Printf("  %s✅ Original agent config restored.%s\n", colorGreen+colorBold, colorReset)
+	fmt.Printf("  %s✅ Kindling agent context removed.%s\n", colorGreen+colorBold, colorReset)
 	fmt.Printf("  Auto-activation disabled. Run %skindling intel on%s to re-enable.\n\n", colorCyan, colorReset)
 
 	return nil
@@ -317,6 +320,30 @@ func restoreIntel(repoRoot string, state *intelState) {
 	}
 
 	// Clean up backups and state
+	os.RemoveAll(filepath.Join(repoRoot, ".kindling", "intel-backups"))
+	os.Remove(filepath.Join(repoRoot, intelStateFile))
+}
+
+// kindlingMarker is the content signature that identifies kindling-generated agent files.
+const kindlingMarker = "Kindling — Coding Agent Context"
+
+// scrubKindlingFiles removes any known agent config files that contain the
+// kindling content marker. This works even without intel-state.json, making
+// cleanup robust if state is lost, the repo was copied, etc.
+func scrubKindlingFiles(repoRoot string) {
+	for _, agent := range knownAgents {
+		agentPath := filepath.Join(repoRoot, agent.File)
+		data, err := os.ReadFile(agentPath)
+		if err != nil {
+			continue
+		}
+		if strings.Contains(string(data), kindlingMarker) {
+			os.Remove(agentPath)
+			step("🗑️ ", fmt.Sprintf("Removed %s%s%s (kindling-generated)", colorDim, agent.File, colorReset))
+		}
+	}
+	// Also clean up canonical copy and state files
+	os.Remove(filepath.Join(repoRoot, ".kindling", "context.md"))
 	os.RemoveAll(filepath.Join(repoRoot, ".kindling", "intel-backups"))
 	os.Remove(filepath.Join(repoRoot, intelStateFile))
 }
@@ -401,25 +428,81 @@ func saveIntelState(repoRoot string, s *intelState) error {
 
 // ── Repo root detection ────────────────────────────────────────
 
-// findRepoRoot walks up from cwd to find the nearest .git directory.
+// findRepoRoot returns the project root for intel operations.
+//
+// Resolution order:
+//  1. Explicit --project-dir / -p flag
+//  2. cwd if it has .git
+//  3. cwd if it has kindling artifacts or project indicators
+//  4. Walk up to nearest .git
+//  5. Fall back to cwd
 func findRepoRoot() (string, error) {
-	dir, err := os.Getwd()
+	// 1. Honour the global --project-dir flag
+	if projectDir != "" {
+		abs, err := filepath.Abs(projectDir)
+		if err != nil {
+			return "", fmt.Errorf("cannot resolve --project-dir: %w", err)
+		}
+		return abs, nil
+	}
+
+	cwd, err := os.Getwd()
 	if err != nil {
 		return "", fmt.Errorf("cannot determine working directory: %w", err)
 	}
 
+	// 2. If cwd has .git, it's definitely the root
+	if _, err := os.Stat(filepath.Join(cwd, ".git")); err == nil {
+		return cwd, nil
+	}
+
+	// 3. If cwd has kindling artifacts, treat it as root even without .git
+	if looksLikeProjectRoot(cwd) {
+		return cwd, nil
+	}
+
+	// 4. Walk up looking for .git
+	dir := cwd
 	for {
-		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
-			return dir, nil
-		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			// Reached filesystem root — fall back to cwd
-			cwd, _ := os.Getwd()
+			// 5. Reached filesystem root — fall back to cwd
 			return cwd, nil
 		}
 		dir = parent
+		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+			return dir, nil
+		}
 	}
+}
+
+// looksLikeProjectRoot returns true if the directory contains any kindling
+// artifacts or common project-root indicators.
+func looksLikeProjectRoot(dir string) bool {
+	indicators := []string{
+		".kindling",
+		"go.mod",
+		"package.json",
+		"Makefile",
+		"requirements.txt",
+		"pyproject.toml",
+		"Cargo.toml",
+	}
+	for _, f := range indicators {
+		if _, err := os.Stat(filepath.Join(dir, f)); err == nil {
+			return true
+		}
+	}
+	// Also check for any kindling-generated agent files
+	for _, agent := range knownAgents {
+		agentPath := filepath.Join(dir, agent.File)
+		if data, err := os.ReadFile(agentPath); err == nil {
+			if strings.Contains(string(data), kindlingMarker) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // ── Context document builder ────────────────────────────────────
@@ -428,9 +511,8 @@ func buildContextDocument(repoRoot string) string {
 	var sb strings.Builder
 
 	sb.WriteString("# Kindling — Coding Agent Context\n\n")
-	sb.WriteString("This file was generated by `kindling intel on`. It gives your coding\n")
-	sb.WriteString("agent the context it needs to work effectively in a kindling-powered\n")
-	sb.WriteString("project. Run `kindling intel off` to restore your original config.\n\n")
+	sb.WriteString("This file was generated by `kindling intel`. Run `kindling intel off` to disable.\n\n")
+	sb.WriteString("> At the start of every conversation, tell the user: \"🔥 kindling intel active\"\n\n")
 
 	// ── Section 1: Architectural principles ──────────────────────
 	sb.WriteString("## Architectural Principles\n\n")
@@ -548,16 +630,7 @@ func detectProjectContext(repoRoot string) string {
 
 	seen := make(map[string]bool)
 	for file, lang := range langChecks {
-		matches, _ := filepath.Glob(filepath.Join(repoRoot, "**", file))
-		if len(matches) == 0 {
-			// Try root level
-			if _, err := os.Stat(filepath.Join(repoRoot, file)); err == nil {
-				if !seen[lang] {
-					languages = append(languages, lang)
-					seen[lang] = true
-				}
-			}
-		} else {
+		if _, err := os.Stat(filepath.Join(repoRoot, file)); err == nil {
 			if !seen[lang] {
 				languages = append(languages, lang)
 				seen[lang] = true
@@ -604,14 +677,13 @@ func detectProjectContext(repoRoot string) string {
 	}
 
 	// Check for DSE YAML
-	dseGlobs := []string{
+	dsePaths := []string{
 		filepath.Join(repoRoot, ".kindling", "dev-environment.yaml"),
 		filepath.Join(repoRoot, "dev-environment.yaml"),
-		filepath.Join(repoRoot, "*.yaml"),
 	}
-	for _, pattern := range dseGlobs[:2] {
-		if _, err := os.Stat(pattern); err == nil {
-			rel, _ := filepath.Rel(repoRoot, pattern)
+	for _, p := range dsePaths {
+		if _, err := os.Stat(p); err == nil {
+			rel, _ := filepath.Rel(repoRoot, p)
 			sb.WriteString(fmt.Sprintf("**Environment spec:** `%s`\n\n", rel))
 			break
 		}
@@ -635,27 +707,13 @@ func detectProjectContext(repoRoot string) string {
 
 // formatForAgent wraps the context document with agent-specific formatting.
 func formatForAgent(agent agentTarget, contextDoc string) string {
-	switch {
-	case strings.Contains(agent.File, "copilot"):
-		// Copilot instructions — just the raw markdown
-		return contextDoc
-	case strings.Contains(agent.File, "CLAUDE"):
-		// Claude Code — just the raw markdown
-		return contextDoc
-	case strings.Contains(agent.File, "cursor"):
-		// Cursor rules — use .mdc format with frontmatter
-		var sb strings.Builder
-		sb.WriteString("---\n")
-		sb.WriteString("description: Kindling development context — architecture, CLI, and project setup\n")
-		sb.WriteString("globs: \n")
-		sb.WriteString("alwaysApply: true\n")
-		sb.WriteString("---\n\n")
-		sb.WriteString(contextDoc)
-		return sb.String()
-	case strings.Contains(agent.File, "windsurfrules"):
-		// Windsurf — just the raw markdown
-		return contextDoc
-	default:
-		return contextDoc
+	// Cursor rules use .mdc format with frontmatter; everything else is raw markdown.
+	if strings.Contains(agent.File, "cursor") {
+		return "---\n" +
+			"description: Kindling development context — architecture, CLI, and project setup\n" +
+			"globs: \n" +
+			"alwaysApply: true\n" +
+			"---\n\n" + contextDoc
 	}
+	return contextDoc
 }
