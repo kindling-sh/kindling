@@ -67,16 +67,22 @@ use case. If `generate` doesn't understand agent architectures, users
 have to manually configure the most complex deployment topology — which
 is exactly the pain point kindling exists to eliminate.
 
-### Support concurrent `kindling sync` sessions
+### ✅ Concurrent `kindling sync` sessions
 
-The orchestrator-worker pattern means a developer (or their coding agent)
-might be editing 3 services simultaneously. Today `kindling sync` targets
-one deployment at a time. Add:
+Each `kindling sync -d <service>` process is fully independent — per-pod
+PID files, no global locks, no shared state. Running multiple syncs in
+parallel already works today:
 
-- `kindling sync --all` — watch and sync all services with Dockerfiles
-  in the repo
-- Multiple concurrent sync sessions without conflicts
-- Aggregated output showing which service got which file change
+```
+# Terminal 1 — primary service
+kindling sync -d orders --restart --src ./services/orders
+
+# Terminal 2 — debug a dependency
+kindling sync -d inventory --restart --src ./services/inventory
+```
+
+Added parallel-sync examples to the `sync` help text so this is
+discoverable.
 
 ### MCP server detection in `generate`
 
