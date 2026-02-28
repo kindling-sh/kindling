@@ -49,8 +49,8 @@ import (
 	"github.com/jeffvincent/kindling/pkg/ci"
 )
 
-// GithubActionRunnerPoolReconciler reconciles a GithubActionRunnerPool object.
-type GithubActionRunnerPoolReconciler struct {
+// CIRunnerPoolReconciler reconciles a CIRunnerPool object.
+type CIRunnerPoolReconciler struct {
 	client.Client
 	Scheme     *runtime.Scheme
 	Recorder   record.EventRecorder
@@ -59,7 +59,7 @@ type GithubActionRunnerPoolReconciler struct {
 
 // providerFor returns the CI provider for a given CR, reading spec.ciProvider.
 // Falls back to the reconciler-level CIProvider, then to ci.Default() (GitHub).
-func (r *GithubActionRunnerPoolReconciler) providerFor(cr *appsv1alpha1.GithubActionRunnerPool) ci.Provider {
+func (r *CIRunnerPoolReconciler) providerFor(cr *appsv1alpha1.CIRunnerPool) ci.Provider {
 	if cr.Spec.CIProvider != "" {
 		if p, err := ci.Get(cr.Spec.CIProvider); err == nil {
 			return p
@@ -72,7 +72,7 @@ func (r *GithubActionRunnerPoolReconciler) providerFor(cr *appsv1alpha1.GithubAc
 }
 
 // runnerFor is a convenience accessor for the provider's RunnerAdapter.
-func (r *GithubActionRunnerPoolReconciler) runnerFor(cr *appsv1alpha1.GithubActionRunnerPool) ci.RunnerAdapter {
+func (r *CIRunnerPoolReconciler) runnerFor(cr *appsv1alpha1.CIRunnerPool) ci.RunnerAdapter {
 	return r.providerFor(cr).Runner()
 }
 
@@ -97,9 +97,9 @@ func toK8sEnvVars(envVars []ci.ContainerEnvVar) []corev1.EnvVar {
 
 const runnerPoolHashAnnotation = "apps.example.com/runner-pool-spec-hash"
 
-//+kubebuilder:rbac:groups=apps.example.com,resources=githubactionrunnerpools,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=apps.example.com,resources=githubactionrunnerpools/status,verbs=get;update;patch
-//+kubebuilder:rbac:groups=apps.example.com,resources=githubactionrunnerpools/finalizers,verbs=update
+//+kubebuilder:rbac:groups=apps.example.com,resources=cirunnerpools,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=apps.example.com,resources=cirunnerpools/status,verbs=get;update;patch
+//+kubebuilder:rbac:groups=apps.example.com,resources=cirunnerpools/finalizers,verbs=update
 //+kubebuilder:rbac:groups=apps.example.com,resources=devstagingenvironments,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=apps,resources=replicasets;statefulsets,verbs=get;list;watch;create;update;patch;delete
@@ -111,20 +111,20 @@ const runnerPoolHashAnnotation = "apps.example.com/runner-pool-spec-hash"
 //+kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles;clusterrolebindings,verbs=get;list;watch;create;update;patch;delete;bind;escalate
 
-// Reconcile reads the state of the cluster for a GithubActionRunnerPool object and makes changes
+// Reconcile reads the state of the cluster for a CIRunnerPool object and makes changes
 // to bring the cluster state closer to the desired state.
 //
-// The controller creates a Deployment whose pods run the GitHub Actions runner image.
+// The controller creates a Deployment whose pods run the CI runner image.
 // Each pod is configured with the necessary environment variables to self-register with
-// the target GitHub repository or organization using the provided token.
-func (r *GithubActionRunnerPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+// the target repository or organization using the provided token.
+func (r *CIRunnerPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
 	// ── Step 1: Fetch the CR ───────────────────────────────────────────
-	cr := &appsv1alpha1.GithubActionRunnerPool{}
+	cr := &appsv1alpha1.CIRunnerPool{}
 	if err := r.Get(ctx, req.NamespacedName, cr); err != nil {
 		if errors.IsNotFound(err) {
-			logger.Info("GithubActionRunnerPool resource not found, likely deleted")
+			logger.Info("CIRunnerPool resource not found, likely deleted")
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err
@@ -205,7 +205,7 @@ func (r *GithubActionRunnerPoolReconciler) Reconcile(ctx context.Context, req ct
 // reconcileRunnerRBAC ensures the runner pod has a ServiceAccount with the
 // permissions it needs: creating Kaniko pods, applying DevStagingEnvironment
 // CRs, watching rollouts, port-forwarding, etc.
-func (r *GithubActionRunnerPoolReconciler) reconcileRunnerRBAC(ctx context.Context, cr *appsv1alpha1.GithubActionRunnerPool) error {
+func (r *CIRunnerPoolReconciler) reconcileRunnerRBAC(ctx context.Context, cr *appsv1alpha1.CIRunnerPool) error {
 	logger := log.FromContext(ctx)
 
 	username := ci.SanitizeDNS(cr.Spec.GitHubUsername)
@@ -262,7 +262,7 @@ func (r *GithubActionRunnerPoolReconciler) reconcileRunnerRBAC(ctx context.Conte
 			{
 				// DevStagingEnvironment CRs
 				APIGroups: []string{"apps.example.com"},
-				Resources: []string{"devstagingenvironments", "githubactionrunnerpools"},
+				Resources: []string{"devstagingenvironments", "cirunnerpools"},
 				Verbs:     []string{"get", "list", "watch", "create", "update", "patch", "delete"},
 			},
 			{
@@ -342,7 +342,7 @@ func (r *GithubActionRunnerPoolReconciler) reconcileRunnerRBAC(ctx context.Conte
 // Runner Deployment
 // ────────────────────────────────────────────────────────────────────────────
 
-func (r *GithubActionRunnerPoolReconciler) reconcileRunnerDeployment(ctx context.Context, cr *appsv1alpha1.GithubActionRunnerPool) error {
+func (r *CIRunnerPoolReconciler) reconcileRunnerDeployment(ctx context.Context, cr *appsv1alpha1.CIRunnerPool) error {
 	logger := log.FromContext(ctx)
 	desired := r.buildRunnerDeployment(cr)
 
@@ -377,7 +377,7 @@ func (r *GithubActionRunnerPoolReconciler) reconcileRunnerDeployment(ctx context
 	return r.Update(ctx, existing)
 }
 
-func (r *GithubActionRunnerPoolReconciler) buildRunnerDeployment(cr *appsv1alpha1.GithubActionRunnerPool) *appsv1.Deployment {
+func (r *CIRunnerPoolReconciler) buildRunnerDeployment(cr *appsv1alpha1.CIRunnerPool) *appsv1.Deployment {
 	runnerAdapter := r.runnerFor(cr)
 	username := ci.SanitizeDNS(cr.Spec.GitHubUsername)
 	labels := runnerAdapter.RunnerLabels(username, cr.Name)
@@ -623,7 +623,7 @@ done
 // Status
 // ────────────────────────────────────────────────────────────────────────────
 
-func (r *GithubActionRunnerPoolReconciler) updateRunnerPoolStatus(ctx context.Context, cr *appsv1alpha1.GithubActionRunnerPool) error {
+func (r *CIRunnerPoolReconciler) updateRunnerPoolStatus(ctx context.Context, cr *appsv1alpha1.CIRunnerPool) error {
 	deploy := &appsv1.Deployment{}
 	deployName := r.runnerFor(cr).DeploymentName(ci.SanitizeDNS(cr.Spec.GitHubUsername))
 	deployKey := types.NamespacedName{Name: deployName, Namespace: cr.Namespace}
@@ -704,17 +704,17 @@ func int64Ptr(v int64) *int64 {
 }
 
 // SetupWithManager sets up the controller with the Manager.
-// It watches GithubActionRunnerPool (primary) and Deployments that it owns.
-func (r *GithubActionRunnerPoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	r.Recorder = mgr.GetEventRecorderFor("githubactionrunnerpool-controller")
+// It watches CIRunnerPool (primary) and Deployments that it owns.
+func (r *CIRunnerPoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	r.Recorder = mgr.GetEventRecorderFor("cirunnerpool-controller")
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&appsv1alpha1.GithubActionRunnerPool{}).
+		For(&appsv1alpha1.CIRunnerPool{}).
 		Owns(&appsv1.Deployment{}).
 		Complete(r)
 }
 
 // recordEvent safely emits a Kubernetes Event on the CR.
-func (r *GithubActionRunnerPoolReconciler) recordEvent(cr *appsv1alpha1.GithubActionRunnerPool, eventType, reason, messageFmt string, args ...interface{}) {
+func (r *CIRunnerPoolReconciler) recordEvent(cr *appsv1alpha1.CIRunnerPool, eventType, reason, messageFmt string, args ...interface{}) {
 	if r.Recorder != nil {
 		r.Recorder.Eventf(cr, eventType, reason, messageFmt, args...)
 	}

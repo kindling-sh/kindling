@@ -179,7 +179,6 @@ func TestAllProvidersUseSharedPrompts(t *testing.T) {
 	providers := []WorkflowGenerator{
 		&GitHubWorkflowGenerator{},
 		&GitLabWorkflowGenerator{},
-		&CircleCIWorkflowGenerator{},
 	}
 
 	// Each shared prompt constant should appear in every provider's SystemPrompt
@@ -217,7 +216,6 @@ func TestAllProvidersHaveNonEmptyPromptContext(t *testing.T) {
 	}{
 		{"github", &GitHubWorkflowGenerator{}},
 		{"gitlab", &GitLabWorkflowGenerator{}},
-		{"circleci", &CircleCIWorkflowGenerator{}},
 	}
 
 	for _, p := range providers {
@@ -262,7 +260,6 @@ func TestAllProvidersReturnExampleWorkflows(t *testing.T) {
 	}{
 		{"github", &GitHubWorkflowGenerator{}},
 		{"gitlab", &GitLabWorkflowGenerator{}},
-		{"circleci", &CircleCIWorkflowGenerator{}},
 	}
 
 	for _, p := range providers {
@@ -292,7 +289,6 @@ func TestAllProvidersHaveDefaultOutputPath(t *testing.T) {
 	}{
 		{"github", &GitHubWorkflowGenerator{}},
 		{"gitlab", &GitLabWorkflowGenerator{}},
-		{"circleci", &CircleCIWorkflowGenerator{}},
 	}
 
 	for _, p := range providers {
@@ -317,7 +313,6 @@ func TestAllProvidersStripTemplateExpressions(t *testing.T) {
 	}{
 		{"github", &GitHubWorkflowGenerator{}},
 		{"gitlab", &GitLabWorkflowGenerator{}},
-		{"circleci", &CircleCIWorkflowGenerator{}},
 	}
 
 	for _, p := range providers {

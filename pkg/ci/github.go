@@ -31,8 +31,8 @@ func (g *GitHubProvider) CLILabels() CLILabels {
 		Repository:      "GitHub repository (owner/repo)",
 		Token:           "GitHub PAT (repo scope)",
 		SecretName:      "github-runner-token",
-		CRDKind:         "GithubActionRunnerPool",
-		CRDPlural:       "githubactionrunnerpools",
+		CRDKind:         "CIRunnerPool",
+		CRDPlural:       "cirunnerpools",
 		CRDListHeader:   "GitHub Actions Runner Pools",
 		RunnerComponent: "github-actions-runner",
 		ActionsURLFmt:   "https://github.com/%s/actions",
@@ -222,7 +222,7 @@ func (a *GitHubRunnerAdapter) RunnerLabels(username string, crName string) map[s
 	return map[string]string{
 		"app.kubernetes.io/name":           crName,
 		"app.kubernetes.io/component":      "github-actions-runner",
-		"app.kubernetes.io/managed-by":     "githubactionrunnerpool-operator",
+		"app.kubernetes.io/managed-by":     "cirunnerpool-operator",
 		"app.kubernetes.io/instance":       crName,
 		"apps.example.com/github-username": username,
 	}

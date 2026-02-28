@@ -22,31 +22,33 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// GithubActionRunnerPoolSpec defines the desired state of GithubActionRunnerPool.
+// CIRunnerPoolSpec defines the desired state of CIRunnerPool.
 //
-// Each GithubActionRunnerPool maps 1:1 to a developer. The operator and this CR
-// live inside the developer's local Kind cluster. The runner pod polls GitHub for
-// jobs triggered by the developer's pushes. Container images are built in-cluster
-// using Kaniko (no Docker daemon required) and pushed to an in-cluster registry.
-type GithubActionRunnerPoolSpec struct {
-	// GitHubUsername is the GitHub handle of the developer who owns this runner pool.
+// Each CIRunnerPool maps 1:1 to a developer. The operator and this CR
+// live inside the developer's local Kind cluster. The runner pod polls the
+// CI platform for jobs triggered by the developer's pushes. Container images
+// are built in-cluster using Kaniko (no Docker daemon required) and pushed to
+// an in-cluster registry.
+type CIRunnerPoolSpec struct {
+	// GitHubUsername is the CI platform username of the developer who owns this runner pool.
 	// The username is added as a runner label so the CI workflow can route jobs to the
-	// correct developer's local Kind cluster using `runs-on: [self-hosted, <username>]`.
+	// correct developer's local Kind cluster.
 	//+kubebuilder:validation:MinLength=1
 	GitHubUsername string `json:"githubUsername"`
 
-	// Repository is the full GitHub repository slug (e.g. "myorg/myrepo").
+	// Repository is the full repository slug (e.g. "myorg/myrepo" or "group/project").
 	//+kubebuilder:validation:MinLength=1
 	Repository string `json:"repository"`
 
-	// GitHubURL is the base URL for GitHub API requests.
-	// Defaults to "https://github.com" for github.com. Set this for GitHub Enterprise Server.
+	// GitHubURL is the base URL for CI platform API requests.
+	// Defaults to "https://github.com" for github.com. Set to your platform's URL
+	// for self-hosted instances (GitHub Enterprise, self-managed GitLab, etc.).
 	//+kubebuilder:default="https://github.com"
 	//+optional
 	GitHubURL string `json:"githubURL,omitempty"`
 
-	// TokenSecretRef is a reference to a Secret containing the GitHub PAT or App token
-	// used to register self-hosted runners. The Secret must contain a key named "github-token".
+	// TokenSecretRef is a reference to a Secret containing the CI platform token
+	// used to register self-hosted runners.
 	TokenSecretRef SecretKeyRef `json:"tokenSecretRef"`
 
 	// Replicas is the number of runner pods in the pool.
@@ -55,14 +57,14 @@ type GithubActionRunnerPoolSpec struct {
 	//+kubebuilder:default=1
 	Replicas *int32 `json:"replicas,omitempty"`
 
-	// RunnerImage is the container image for the GitHub Actions runner.
+	// RunnerImage is the container image for the CI runner.
 	//+kubebuilder:default="ghcr.io/actions/actions-runner:latest"
 	//+optional
 	RunnerImage string `json:"runnerImage,omitempty"`
 
-	// Labels are additional runner labels passed to the GitHub runner during registration.
-	// The GitHubUsername is always appended automatically so workflows can target
-	// this developer's cluster with `runs-on: [self-hosted, <username>]`.
+	// Labels are additional runner labels passed to the CI runner during registration.
+	// The username is always appended automatically so workflows can target
+	// this developer's cluster.
 	//+optional
 	Labels []string `json:"labels,omitempty"`
 
@@ -88,7 +90,6 @@ type GithubActionRunnerPoolSpec struct {
 	// WorkDir is the working directory mount path inside the runner container.
 	// If empty, the controller uses the CI provider's default:
 	//   GitHub Actions: /home/runner/_work
-	//   CircleCI:       /tmp/_work
 	//   GitLab:         /builds
 	//+optional
 	WorkDir string `json:"workDir,omitempty"`
@@ -101,11 +102,11 @@ type GithubActionRunnerPoolSpec struct {
 	//+optional
 	Volumes []corev1.Volume `json:"volumes,omitempty"`
 
-	// CIProvider is the CI platform name ("github", "gitlab", "circleci").
+	// CIProvider is the CI platform name ("github", "gitlab").
 	// The controller uses this to select the correct runner adapter, startup
 	// script, environment variables, and token exchange logic.
 	// Defaults to "github" when empty.
-	//+kubebuilder:validation:Enum=github;gitlab;circleci;""
+	//+kubebuilder:validation:Enum=github;gitlab;""
 	//+optional
 	CIProvider string `json:"ciProvider,omitempty"`
 }
@@ -139,18 +140,18 @@ type RunnerResourceRequirements struct {
 	MemoryLimit *resource.Quantity `json:"memoryLimit,omitempty"`
 }
 
-// GithubActionRunnerPoolStatus defines the observed state of GithubActionRunnerPool.
-type GithubActionRunnerPoolStatus struct {
+// CIRunnerPoolStatus defines the observed state of CIRunnerPool.
+type CIRunnerPoolStatus struct {
 	// Replicas is the desired number of runner replicas.
 	Replicas int32 `json:"replicas,omitempty"`
 
 	// ReadyRunners is the number of runner pods that are ready and polling for jobs.
 	ReadyRunners int32 `json:"readyRunners,omitempty"`
 
-	// RunnerRegistered indicates whether the runner has successfully registered with GitHub.
+	// RunnerRegistered indicates whether the runner has successfully registered with the CI platform.
 	RunnerRegistered bool `json:"runnerRegistered,omitempty"`
 
-	// ActiveJob is the name/ID of the GitHub Actions workflow job currently being executed,
+	// ActiveJob is the name/ID of the CI job currently being executed,
 	// or empty if the runner is idle and waiting.
 	//+optional
 	ActiveJob string `json:"activeJob,omitempty"`
@@ -178,28 +179,29 @@ type GithubActionRunnerPoolStatus struct {
 //+kubebuilder:printcolumn:name="DevEnv",type=string,JSONPath=`.status.devEnvironmentRef`,priority=1
 //+kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
-// GithubActionRunnerPool is the Schema for the githubactionrunnerpools API.
-// It runs on a developer's local Kind cluster. The runner pod registers with GitHub
-// as a self-hosted runner labelled with the developer's username, polls for CI jobs
-// triggered by that developer's pushes, and uses Kaniko + an in-cluster registry to
-// build container images without requiring a Docker daemon.
-type GithubActionRunnerPool struct {
+// CIRunnerPool is the Schema for the cirunnerpools API.
+// It runs on a developer's local Kind cluster. The runner pod registers with
+// the configured CI platform as a self-hosted runner labelled with the developer's
+// username, polls for CI jobs triggered by that developer's pushes, and uses
+// Kaniko + an in-cluster registry to build container images without requiring
+// a Docker daemon.
+type CIRunnerPool struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   GithubActionRunnerPoolSpec   `json:"spec,omitempty"`
-	Status GithubActionRunnerPoolStatus `json:"status,omitempty"`
+	Spec   CIRunnerPoolSpec   `json:"spec,omitempty"`
+	Status CIRunnerPoolStatus `json:"status,omitempty"`
 }
 
 //+kubebuilder:object:root=true
 
-// GithubActionRunnerPoolList contains a list of GithubActionRunnerPool.
-type GithubActionRunnerPoolList struct {
+// CIRunnerPoolList contains a list of CIRunnerPool.
+type CIRunnerPoolList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
-	Items           []GithubActionRunnerPool `json:"items"`
+	Items           []CIRunnerPool `json:"items"`
 }
 
 func init() {
-	SchemeBuilder.Register(&GithubActionRunnerPool{}, &GithubActionRunnerPoolList{})
+	SchemeBuilder.Register(&CIRunnerPool{}, &CIRunnerPoolList{})
 }

@@ -10,17 +10,6 @@ touch first → remove friction → reach new audiences → deepen the product.
 These are the things that stop someone from going from "that looks cool" to
 "I have it running" in under 3 minutes.
 
-### Homebrew formula
-
-`brew install kindling` — single command, no curl gymnastics. This is table
-stakes for any CLI tool targeting macOS developers. File a Homebrew core
-formula PR or host a tap (`kindling-sh/homebrew-tap`).
-
-```bash
-brew tap kindling-sh/tap
-brew install kindling
-```
-
 ### One-liner install script
 
 For Linux and CI environments:
@@ -91,6 +80,150 @@ services and let the developer pick.
 
 For non-interactive / CI usage, add a `--ingress-all` flag that wires up every
 service with a default ingress route.
+
+### Agent context file (`kindling generate` → agent config files)
+
+`kindling generate` already scans the repo and knows its languages, services,
+dependencies, ports, and config files. It already writes files into the repo
+(workflow YAML, DSE YAML). This extends that: emit a personalized context file
+that coding agents (Copilot, Cursor, Cline, Claude Code, Windsurf, etc.)
+automatically pick up, so the agent knows how to develop against kindling
+without the user explaining the setup.
+
+**What gets generated — three sections:**
+
+1. **Architectural principles** — development guidelines the agent must follow:
+   - Deploy with `kindling deploy`, not `kubectl apply` or raw manifests
+   - Builds use Kaniko inside the runner sidecar, not `docker build` — never
+     generate Dockerfiles or docker-compose for the dev environment
+   - Dependencies (Postgres, Redis, etc.) go in `spec.dependencies[]` in the
+     DSE YAML, not in Docker Compose or Helm charts
+   - The in-cluster registry is `localhost:5001` — no DockerHub/ECR push needed
+   - Secrets go through `kindling secrets set KEY=VALUE`, which creates K8s
+     secrets referenced via `secretKeyRef` in the workflow — never hardcode
+     secrets in YAML or env files
+   - Environment variables go through `kindling env set KEY=VALUE` or
+     `spec.env[]` in the DSE YAML
+   - To expose a service externally, use `kindling expose`, not raw Ingress
+   - To check status, use `kindling status` and `kindling logs`, not raw
+     `kubectl` commands
+   - When adding a new service to the repo, add it to the DSE YAML as a new
+     entry in `spec.services[]` — the CI workflow will build and deploy it
+
+2. **Reference card** — quick-reference for the CLI and file locations:
+   - Where the CI workflow lives (`.github/workflows/dev-deploy.yml`)
+   - Where the environment spec lives (`.kindling/dev-environment.yaml`) and
+     what the fields mean
+   - Key CLI commands: `kindling deploy`, `kindling env set`, `kindling expose`,
+     `kindling secrets set`, `kindling status`, `kindling logs`
+   - How secrets flow: CLI → K8s Secret → `secretKeyRef` in workflow
+   - The sidecar build protocol (tarball → Kaniko → in-cluster registry)
+
+3. **Personalized project context** (from repo scan):
+
+   ```markdown
+   ## This Project
+
+   This repo runs a FastAPI service on port 8000 with Postgres and Redis.
+   The DSE at `.kindling/dev-environment.yaml` provisions both databases.
+   To add a new dependency (e.g. Elasticsearch), add it to
+   `spec.dependencies[]` in that file and push.
+
+   CI workflow: `.github/workflows/dev-deploy.yml`
+   Build action: `kindling-build` (Kaniko, not Docker)
+   Deploy action: `kindling-deploy` (applies DSE to cluster)
+   ```
+
+**Agent detection (in priority order):**
+
+1. **Explicit flag**: `kindling generate --agents copilot,cursor,claude`
+   (non-interactive, for CI or scripting)
+2. **Existing config files**: if `.github/copilot-instructions.md`, `.cursor/`,
+   `.cursorrules`, `CLAUDE.md`, or `.windsurfrules` already exist, target those
+3. **LLM token prefix as default**: the API key passed to `kindling generate`
+   has a detectable prefix that reveals the likely coding agent:
+   - `sk-ant-...` (Anthropic) → default to **Claude Code** → `CLAUDE.md`
+   - `sk-...` (OpenAI) → default to **Copilot** →
+     `.github/copilot-instructions.md`
+   This is a *default*, not definitive — a user may have an Anthropic key but
+   use Copilot. So the CLI shows the inference and asks for confirmation:
+   `"Detected Anthropic key → will write CLAUDE.md. Also write to: [copilot/cursor/all/none]?"`
+4. **Interactive prompt** (if no signal): "Which coding assistant do you use?
+   [copilot/cursor/claude/windsurf/all/none]"
+
+**File placement & safe injection:**
+
+| Agent | Target file |
+|---|---|
+| Copilot | `.github/copilot-instructions.md` (append fenced section) |
+| Cursor | `.cursor/rules/kindling.md` (standalone file, no markers needed) |
+| Claude Code | `CLAUDE.md` (append fenced section) |
+| Windsurf | `.windsurfrules` (append fenced section) |
+| Always | `.kindling/context.md` (canonical copy, kindling-owned) |
+
+For shared files (copilot-instructions.md, CLAUDE.md, .windsurfrules), use
+`<!-- kindling:start -->` / `<!-- kindling:end -->` markers so that
+`kindling generate` can re-run and update the kindling section without
+clobbering user content outside the markers. For Cursor, we own the file
+(`.cursor/rules/kindling.md`) so no markers needed.
+
+The canonical copy at `.kindling/context.md` is always written regardless of
+agent selection — it serves as the source of truth and works with any agent
+that supports workspace-level context files.
+
+The user commits these files alongside their workflow and DSE YAML. Their
+coding agent immediately knows the architectural principles, CLI commands,
+file locations, and project-specific setup — zero manual explanation needed.
+
+### Generate rules reference (`.kindling/generate-rules.md`)
+
+The system prompt that `kindling generate` sends to the AI lives in
+`pkg/ci/prompt.go` — ~370 lines of hard-won rules about Kaniko patching,
+dependency detection, env var auto-injection, health checks, build timeouts,
+Docker Compose handling, and dev staging philosophy. Right now that knowledge
+is trapped inside the Go binary. If a developer later asks their coding agent
+to "add Kafka to my pipeline" or "fix my Dockerfile for kindling," the agent
+has no idea about any of this.
+
+**Solution:** during `kindling generate`, also emit
+`.kindling/generate-rules.md` — the full generate ruleset rendered as a
+readable Markdown reference. The agent context file (section 1 above) links
+to it: *"For detailed CI generation rules, see `.kindling/generate-rules.md`."*
+
+**What goes in the rules file:**
+
+| Section | Source (prompt.go const) | What the agent learns |
+|---|---|---|
+| Kaniko compatibility | `PromptKanakoPatching` | BuildKit ARGs break Kaniko; when and how to patch Dockerfiles (platform ARGs, Go VCS, Poetry --no-root, npm cache) |
+| Dependency detection | `PromptDependencyDetection` | Library-to-dependency mapping for 12+ languages; cloud SDK exclusions |
+| Auto-injected env vars | `PromptDependencyAutoInjection` | Declaring `postgres` auto-injects `DATABASE_URL` — never duplicate it in env |
+| Dev staging philosophy | `PromptDevStagingPhilosophy` | Random hex for app secrets, omit optional integrations, never use secretKeyRef for cloud SDKs |
+| Build & deploy inputs | `PromptBuildInputs`, `PromptDeployInputs` | Every input to kindling-build and kindling-deploy with types and defaults |
+| Health checks | `PromptHealthChecks` | gRPC detection heuristics, Spring Boot actuator, when to use "none" |
+| Build timeouts | `PromptBuildTimeout` | Rust/Java/C#/Elixir need 900s; default 300s is fine for Go/Node/Python |
+| Docker Compose | `PromptDockerCompose` | Compose file is source of truth for build context, depends_on → deps, env var names |
+| Dockerfile existence | `PromptDockerfileExistence` | Never generate a build step without a real Dockerfile; skip monorepo services that need pre-build steps |
+| OAuth handling | `PromptOAuth` | When to suggest `kindling expose` for OAuth callbacks |
+
+**Implementation:**
+
+1. At build time, `go:embed` the rendered Markdown from `pkg/ci/prompt.go`
+   constants (or render at runtime — the constants are already strings).
+2. After writing the workflow YAML, write `.kindling/generate-rules.md`
+   alongside it. Always overwrite — this is kindling-owned, not user content.
+3. The agent context file (`.kindling/context.md` and the per-agent copies)
+   includes a one-liner pointing to it.
+4. On `kindling generate --cleanup` (or just re-running generate), the rules
+   file gets refreshed to match the current CLI version's rules.
+
+**Why a local file, not a hosted URL:**
+
+- Coding agents can read local workspace files instantly; fetching a URL
+  requires tool use, network access, and may be blocked in air-gapped setups.
+- The rules match the *installed CLI version*, not whatever's on the website.
+  If a user is on kindling v0.4 and the docs are at v0.6, the rules would be
+  wrong. The local file is always version-correct.
+- It's one more committed file (~5 KB) — trivial cost, massive agent value.
 
 ---
 
@@ -378,14 +511,14 @@ actions. Discoverability in the marketplace is free distribution.
 
 ## P5 — Multi-platform CI support (break vendor lock-in)
 
-Kindling is currently GitHub-only (Actions runners, GitHub PATs, GitHub-specific
-composite actions). Expanding to other platforms unlocks the majority of
-developers who aren't on GitHub Actions.
+~~Kindling is currently GitHub-only (Actions runners, GitHub PATs, GitHub-specific
+composite actions).~~ **GitHub Actions and GitLab CI are now fully supported.**
+Expanding to additional platforms unlocks even more developers.
 
 ### Git platforms
 
-- **GitLab** — support GitLab repos, GitLab runner registration, and
-  `.gitlab-ci.yml` generation via `kindling generate`
+- ✅ **GitHub** — GitHub Actions runners, GitHub PATs, `.github/workflows/` generation
+- ✅ **GitLab** — GitLab runner registration, `.gitlab-ci.yml` generation via `kindling generate`
 - **Bitbucket** — Bitbucket Pipelines runner registration and
   `bitbucket-pipelines.yml` generation
 - **Gitea / Forgejo** — self-hosted Git; register Gitea Actions runners (Gitea
@@ -393,43 +526,35 @@ developers who aren't on GitHub Actions.
 
 ### CI systems
 
-- **GitLab CI** — generate `.gitlab-ci.yml` with Kaniko build + kubectl deploy
-  stages; register a GitLab Runner in the Kind cluster
-- **CircleCI** — generate `.circleci/config.yml`; self-hosted runner support
+- ✅ **GitHub Actions** — composite actions (`kindling-build`, `kindling-deploy`),
+  self-hosted runner registration, AI workflow generation
+- ✅ **GitLab CI** — `.gitlab-ci.yml` with Kaniko build + kubectl deploy
+  stages; GitLab Runner registration in the Kind cluster
 - **Jenkins** — generate `Jenkinsfile`; deploy a Jenkins agent pod in-cluster
 - **Drone / Woodpecker** — lightweight self-hosted CI; generate `.drone.yml` /
   `.woodpecker.yml`
 
 ### Implementation approach
 
-1. Abstract the runner pool CRD — add a `spec.platform` field
-   (`github | gitlab | gitea | ...`) so the operator provisions the correct
-   runner type
-2. `kindling runners --platform gitlab` creates a GitLab Runner registration
+1. ✅ Abstract the runner pool CRD — `spec.ciProvider` field
+   (`github | gitlab`) so the operator provisions the correct runner type
+2. ✅ `kindling runners --provider gitlab` creates a GitLab Runner registration
    instead of a GitHub Actions runner
-3. `kindling generate` detects the remote origin to infer the platform, or
-   accepts `--platform` explicitly
-4. Factor composite actions into platform-agnostic build/deploy steps that emit
+3. ✅ `kindling generate` detects the remote origin to infer the platform, or
+   accepts `--provider` explicitly
+4. ✅ Factor composite actions into platform-agnostic build/deploy steps that emit
    the right CI config format per platform
-5. Keep GitHub as the default — zero breaking changes for existing users
+5. ✅ Keep GitHub as the default — zero breaking changes for existing users
 
 ### Provider abstractions (code layer)
 
-Before adding any new platform, introduce Go interfaces that decouple
-the core logic from GitHub and Kind specifically. This is the prerequisite
-engineering work that makes P5 features possible without shotgun surgery.
+> **CI provider interface — DONE.** The `pkg/ci/` package implements
+> `Provider`, `RunnerAdapter`, `WorkflowGenerator` interfaces with a
+> `ProviderRegistry` and two implementations (GitHub, GitLab).
+> CRD renamed from `GithubActionRunnerPool` to `CIRunnerPool`.
+> CircleCI removed (< 5% market share, persistent timeout issues).
 
-**CI provider interface** (`core/providers/ci.go`):
-
-```go
-type CIProvider interface {
-    Name() string                                    // "github", "gitlab", etc.
-    CreateRunnerPool(cfg RunnerPoolConfig) error      // provision runner in cluster
-    DeleteRunnerPool(name string) error
-    GenerateWorkflow(ctx GenerateContext) ([]byte, error) // emit platform-native CI config
-    DetectFromRemote(remoteURL string) bool           // "is this repo on my platform?"
-}
-```
+The remaining prerequisite is the **cluster provider** abstraction:
 
 **Cluster provider interface** (`core/providers/cluster.go`):
 
@@ -444,16 +569,14 @@ type ClusterProvider interface {
 }
 ```
 
-**Migration path:**
-1. Define the interfaces
-2. Implement `GitHubProvider` and `KindProvider` as the defaults — wrapping
-   exactly the logic that exists today in `core/` and the operator
-3. Wire them through a `ProviderRegistry` so CLI commands and the operator
-   resolve the active provider at startup
-4. Second providers (GitLab, k3d) validate the abstraction
-5. Existing behavior is unchanged — `kindling init` still means Kind,
-   `kindling runners` still means GitHub, unless `--platform` / `--cluster-provider`
-   is passed
+**Remaining migration steps:**
+1. Implement `KindProvider` as the default — wrapping
+   exactly the logic that exists today in `core/`
+2. Wire through a `ProviderRegistry` so CLI commands resolve the active
+   cluster provider at startup
+3. A second provider (k3d) validates the abstraction
+4. Existing behavior is unchanged — `kindling init` still means Kind
+   unless `--cluster-provider` is passed
 
 ---
 
@@ -491,7 +614,7 @@ K8s primitives:
 Everything kindling-specific or Kind-specific that doesn't belong in
 production:
 
-- `DevStagingEnvironment` and `GithubActionRunnerPool` CRs
+- `DevStagingEnvironment` and `CIRunnerPool` CRs
 - The kindling operator Deployment, ServiceAccount, RBAC
 - Runner pods and runner-related Secrets (PAT token, etc.)
 - `kindling-tunnel` ConfigMap and tunnel annotations
@@ -631,4 +754,3 @@ kindling add view --remove /api
 - `CODE_OF_CONDUCT.md` (Contributor Covenant v2.1)
 - Issue & PR templates (`.github/ISSUE_TEMPLATE/`, PR template)
 - Dynamic README badges (CI status, release, Go Report Card, coverage)
-- MkDocs Material docs site + GitHub Pages deploy workflow

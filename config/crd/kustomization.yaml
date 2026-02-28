@@ -3,7 +3,7 @@
 # It should be run by config/default
 resources:
 - bases/apps.example.com_devstagingenvironments.yaml
-- bases/apps.example.com_githubactionrunnerpools.yaml
+- bases/apps.example.com_cirunnerpools.yaml
 #+kubebuilder:scaffold:crdkustomizeresource
 
 patches:

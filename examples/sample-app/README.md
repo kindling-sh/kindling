@@ -42,7 +42,7 @@ sample-app/
 ### Prerequisites
 
 - Local Kind cluster with **kindling** operator deployed ([Getting Started](../../README.md#getting-started))
-- `GithubActionRunnerPool` CR applied with your GitHub username
+- `CIRunnerPool` CR applied with your CI username (GitHub or GitLab)
 
 ### Option A — Push to GitHub (CI flow)
 

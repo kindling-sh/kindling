@@ -22,7 +22,7 @@ var statusCmd = &cobra.Command{
 var statusProvider string
 
 func init() {
-	statusCmd.Flags().StringVar(&statusProvider, "provider", "", "CI provider (github, gitlab, circleci)")
+	statusCmd.Flags().StringVar(&statusProvider, "provider", "", "CI provider (github, gitlab)")
 	rootCmd.AddCommand(statusCmd)
 }
 

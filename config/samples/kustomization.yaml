@@ -1,5 +1,5 @@
 ## Append samples of your project ##
 resources:
 - apps_v1alpha1_devstagingenvironment.yaml
-- apps_v1alpha1_githubactionrunnerpool.yaml
+- apps_v1alpha1_cirunnerpool.yaml
 #+kubebuilder:scaffold:manifestskustomizesamples

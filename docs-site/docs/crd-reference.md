@@ -1,7 +1,7 @@
 ---
 sidebar_position: 6
 title: CRD Reference
-description: Full spec reference for DevStagingEnvironment and GithubActionRunnerPool custom resources.
+description: Full spec reference for DevStagingEnvironment and CIRunnerPool custom resources.
 ---
 
 # CRD Reference
@@ -202,23 +202,24 @@ spec:
 
 ---
 
-## GithubActionRunnerPool
+## CIRunnerPool
 
-Declares a pool of self-hosted CI runners. The current implementation
-registers GitHub Actions runners with a specific repository.
+Declares a pool of self-hosted CI runners. Supports **GitHub Actions**
+and **GitLab CI** via the `spec.ciProvider` field (defaults to `github`).
 
 **API version:** `apps.example.com/v1alpha1`  
-**Kind:** `GithubActionRunnerPool`  
+**Kind:** `CIRunnerPool`  
 **Scope:** Namespaced
 
 ### Full spec
 
 ```yaml
 apiVersion: apps.example.com/v1alpha1
-kind: GithubActionRunnerPool
+kind: CIRunnerPool
 metadata:
   name: myuser-runner-pool
 spec:
+  ciProvider: github              # "github" or "gitlab"
   githubUsername: "myuser"
   repository: "myorg/myrepo"
   tokenSecretRef:
@@ -235,10 +236,11 @@ spec:
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `githubUsername` | string | ✅ | — | GitHub handle (added as runner label) |
-| `repository` | string | ✅ | — | Full repo slug (`owner/repo`) |
-| `tokenSecretRef` | SecretKeyRef | ✅ | — | Reference to PAT Secret |
-| `githubURL` | string | ❌ | `https://github.com` | Base URL (for GHE) |
+| `ciProvider` | string | ✅ | `""` | CI platform: `github` or `gitlab` |
+| `githubUsername` | string | ✅ | — | Developer handle (added as runner label) |
+| `repository` | string | ✅ | — | Repo slug — `owner/repo` (GitHub) or `group/project` (GitLab) |
+| `tokenSecretRef` | SecretKeyRef | ✅ | — | Reference to CI token Secret |
+| `githubURL` | string | ❌ | `https://github.com` | Base URL (for GHE or custom GitLab instance) |
 | `replicas` | *int32 | ❌ | `1` | Number of runner pods |
 | `runnerImage` | string | ❌ | `ghcr.io/actions/actions-runner:latest` | Runner container image |
 | `labels` | []string | ❌ | — | Extra runner labels |
@@ -249,7 +251,7 @@ Each runner pod created by the operator contains:
 
 | Container | Image | Purpose |
 |---|---|---|
-| `runner` | Runner image | Registers with GitHub, executes workflow jobs |
+| `runner` | Platform-specific runner image | Registers with CI platform (GitHub or GitLab), executes workflow jobs |
 | `build-agent` | Kaniko executor | Builds container images from signal files |
 
 Shared volume: `emptyDir` at `/builds/` for signal-file communication.

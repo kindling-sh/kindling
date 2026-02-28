@@ -96,11 +96,11 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "DevStagingEnvironment")
 		os.Exit(1)
 	}
-	if err = (&controller.GithubActionRunnerPoolReconciler{
+	if err = (&controller.CIRunnerPoolReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "GithubActionRunnerPool")
+		setupLog.Error(err, "unable to create controller", "controller", "CIRunnerPool")
 		os.Exit(1)
 	}
 	//+kubebuilder:scaffold:builder

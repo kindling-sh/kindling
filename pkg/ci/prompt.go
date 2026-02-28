@@ -1,6 +1,6 @@
 // Package ci — shared prompt building blocks for AI-assisted workflow generation.
 //
-// Every CI provider (GitHub Actions, GitLab CI, CircleCI) uses the same
+// Every CI provider (GitHub Actions, GitLab CI) uses the same
 // Kaniko-based build mechanism, dependency injection, and deploy philosophy.
 // This file holds the platform-agnostic knowledge as const strings that each
 // provider's SystemPrompt() method assembles together with its CI-specific

@@ -512,21 +512,21 @@ else
 fi
 
 TESTS=$((TESTS + 1))
-POOL_CR=$(kctl get githubactionrunnerpools -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || echo "")
+POOL_CR=$(kctl get cirunnerpools -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || echo "")
 if echo "$POOL_CR" | grep -q "e2e-test-user-runner-pool"; then
-  pass "GithubActionRunnerPool CR created"
+  pass "CIRunnerPool CR created"
 else
-  fail "GithubActionRunnerPool CR not found (got: '$POOL_CR')"
+  fail "CIRunnerPool CR not found (got: '$POOL_CR')"
 fi
 
-RUNNER_LABELS=$(kctl get githubactionrunnerpool e2e-test-user-runner-pool \
+RUNNER_LABELS=$(kctl get cirunnerpool e2e-test-user-runner-pool \
   -o jsonpath='{.spec.labels[*]}' 2>/dev/null || echo "")
 assert_contains "Runner pool has 'kindling' label" "kindling" "$RUNNER_LABELS"
 
 "$KINDLING" reset -y --cluster "$CLUSTER_NAME" 2>/dev/null || true
 
 TESTS=$((TESTS + 1))
-POOL_AFTER=$(kctl get githubactionrunnerpools --no-headers 2>/dev/null | wc -l | tr -d ' ')
+POOL_AFTER=$(kctl get cirunnerpools --no-headers 2>/dev/null | wc -l | tr -d ' ')
 if [ "$POOL_AFTER" = "0" ]; then
   pass "All runner pools removed by reset"
 else

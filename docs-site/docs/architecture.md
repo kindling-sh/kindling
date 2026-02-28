@@ -68,7 +68,7 @@ flowchart TB
     style registry fill:#F7931E,stroke:#F7931E,color:#fff
     style ingress_ctrl fill:#FF6B35,stroke:#FF6B35,color:#fff
     style dev fill:#6e40c9,stroke:#6e40c9,color:#fff
-    style gh fill:#24292f,stroke:#e0e0e0,color:#fff
+    style ci fill:#24292f,stroke:#e0e0e0,color:#fff
     style app fill:#326CE5,stroke:#326CE5,color:#fff
     style svc fill:#F7931E,stroke:#F7931E,color:#fff
     style ing fill:#FF6B35,stroke:#FF6B35,color:#fff
@@ -99,7 +99,7 @@ runs in the `kindling-system` namespace. It watches two CRDs:
 | CRD | Purpose |
 |---|---|
 | `DevStagingEnvironment` | Declares an app + its backing services |
-| `GithubActionRunnerPool` | Declares a self-hosted GitHub Actions runner |
+| `CIRunnerPool` | Declares a self-hosted CI runner pool (GitHub Actions or GitLab CI) |
 
 **Reconcile loop for DevStagingEnvironment:**
 
@@ -121,11 +121,11 @@ prevents unnecessary writes and reconcile loops.
 
 ### 3. CI Runner Pod
 
-Created by the `GithubActionRunnerPool` controller. Each runner pod has:
+Created by the `CIRunnerPool` controller. Each runner pod has:
 
 | Container | Image | Purpose |
 |---|---|---|
-| **runner** | `ghcr.io/actions/actions-runner:latest` | Registers with GitHub, polls for jobs |
+| **runner** | Platform-specific runner image | Registers with CI platform (GitHub or GitLab), polls for jobs |
 | **build-agent** | `bitnami/kubectl` | Watches `/builds/` for build requests, launches Kaniko pods |
 
 The two containers share an `emptyDir` volume mounted at `/builds/`.
@@ -373,19 +373,20 @@ Kubernetes' garbage collector automatically deletes all child resources.
 
 ---
 
-## CI Provider Abstraction *(upcoming)*
+## CI Provider Abstraction
 
-kindling is decoupling all CI/CD-platform-specific code behind a
-provider interface layer in `pkg/ci`. Today the only implementation is
-GitHub Actions, but the interfaces are designed so that a GitLab CI,
-Bitbucket Pipelines, or other provider can be added without touching
-the operator or CLI code.
+kindling has decoupled all CI/CD-platform-specific code behind a
+provider interface layer in `pkg/ci`. Two implementations are shipped:
+**GitHub Actions** and **GitLab CI**. The interfaces are designed so
+that additional providers (Bitbucket Pipelines, Gitea Actions, etc.)
+can be added without touching the operator or CLI code.
 
 ### Provider registry
 
 Providers register themselves at init-time via `ci.Register()`. All
-consumers call `ci.Default()` to get the active provider — today that
-returns the GitHub Actions provider.
+consumers call `ci.Default()` to get the active provider — by default
+that returns the GitHub Actions provider. Use `ci.Get("gitlab")` or
+the `--provider gitlab` CLI flag to select GitLab.
 
 ```go
 provider := ci.Default()              // → GitHubProvider
@@ -487,8 +488,8 @@ and resource naming.
 | `Repository` | `string` | `"GitHub repository (owner/repo)"` |
 | `Token` | `string` | `"GitHub PAT (repo scope)"` |
 | `SecretName` | `string` | `"github-runner-token"` |
-| `CRDKind` | `string` | `"GithubActionRunnerPool"` |
-| `CRDPlural` | `string` | `"githubactionrunnerpools"` |
+| `CRDKind` | `string` | `"CIRunnerPool"` |
+| `CRDPlural` | `string` | `"cirunnerpools"` |
 | `CRDListHeader` | `string` | `"GitHub Actions Runner Pools"` |
 | `RunnerComponent` | `string` | `"github-actions-runner"` |
 | `ActionsURLFmt` | `string` | `"https://github.com/%s/actions"` |
@@ -512,16 +513,17 @@ To add support for a new CI platform (e.g. GitLab CI):
 kindling/
 ├── api/v1alpha1/                   # CRD type definitions
 │   ├── devstagingenvironment_types.go
-│   ├── githubactionrunnerpool_types.go
+│   ├── cirunnerpool_types.go
 │   └── groupversion_info.go
 ├── internal/controller/            # Reconcile logic
 │   ├── devstagingenvironment_controller.go
-│   └── githubactionrunnerpool_controller.go
+│   └── cirunnerpool_controller.go
 ├── cmd/main.go                     # Operator entrypoint
-├── pkg/ci/                         # CI provider abstraction (upcoming)
+├── pkg/ci/                         # CI provider abstraction
 │   ├── types.go                    # Provider, RunnerAdapter, WorkflowGenerator interfaces
 │   ├── registry.go                 # Provider registry (Register, Default, Get)
-│   └── github.go                   # GitHub Actions implementation
+│   ├── github.go                   # GitHub Actions implementation
+│   └── gitlab.go                   # GitLab CI implementation
 ├── cli/                            # CLI tool (separate Go module)
 │   ├── cmd/
 │   │   ├── root.go

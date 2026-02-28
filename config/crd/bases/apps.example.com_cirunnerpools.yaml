@@ -4,14 +4,14 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.20.1
-  name: githubactionrunnerpools.apps.example.com
+  name: cirunnerpools.apps.example.com
 spec:
   group: apps.example.com
   names:
-    kind: GithubActionRunnerPool
-    listKind: GithubActionRunnerPoolList
-    plural: githubactionrunnerpools
-    singular: githubactionrunnerpool
+    kind: CIRunnerPool
+    listKind: CIRunnerPoolList
+    plural: cirunnerpools
+    singular: cirunnerpool
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
@@ -42,11 +42,12 @@ spec:
     schema:
       openAPIV3Schema:
         description: |-
-          GithubActionRunnerPool is the Schema for the githubactionrunnerpools API.
-          It runs on a developer's local Kind cluster. The runner pod registers with GitHub
-          as a self-hosted runner labelled with the developer's username, polls for CI jobs
-          triggered by that developer's pushes, and uses Kaniko + an in-cluster registry to
-          build container images without requiring a Docker daemon.
+          CIRunnerPool is the Schema for the cirunnerpools API.
+          It runs on a developer's local Kind cluster. The runner pod registers with
+          the configured CI platform as a self-hosted runner labelled with the developer's
+          username, polls for CI jobs triggered by that developer's pushes, and uses
+          Kaniko + an in-cluster registry to build container images without requiring
+          a Docker daemon.
         properties:
           apiVersion:
             description: |-
@@ -67,23 +68,23 @@ spec:
             type: object
           spec:
             description: |-
-              GithubActionRunnerPoolSpec defines the desired state of GithubActionRunnerPool.
+              CIRunnerPoolSpec defines the desired state of CIRunnerPool.
 
-              Each GithubActionRunnerPool maps 1:1 to a developer. The operator and this CR
-              live inside the developer's local Kind cluster. The runner pod polls GitHub for
-              jobs triggered by the developer's pushes. Container images are built in-cluster
-              using Kaniko (no Docker daemon required) and pushed to an in-cluster registry.
+              Each CIRunnerPool maps 1:1 to a developer. The operator and this CR
+              live inside the developer's local Kind cluster. The runner pod polls the
+              CI platform for jobs triggered by the developer's pushes. Container images
+              are built in-cluster using Kaniko (no Docker daemon required) and pushed to
+              an in-cluster registry.
             properties:
               ciProvider:
                 description: |-
-                  CIProvider is the CI platform name ("github", "gitlab", "circleci").
+                  CIProvider is the CI platform name ("github", "gitlab").
                   The controller uses this to select the correct runner adapter, startup
                   script, environment variables, and token exchange logic.
                   Defaults to "github" when empty.
                 enum:
                 - github
                 - gitlab
-                - circleci
                 - ""
                 type: string
               env:
@@ -247,21 +248,22 @@ spec:
               githubURL:
                 default: https://github.com
                 description: |-
-                  GitHubURL is the base URL for GitHub API requests.
-                  Defaults to "https://github.com" for github.com. Set this for GitHub Enterprise Server.
+                  GitHubURL is the base URL for CI platform API requests.
+                  Defaults to "https://github.com" for github.com. Set to your platform's URL
+                  for self-hosted instances (GitHub Enterprise, self-managed GitLab, etc.).
                 type: string
               githubUsername:
                 description: |-
-                  GitHubUsername is the GitHub handle of the developer who owns this runner pool.
+                  GitHubUsername is the CI platform username of the developer who owns this runner pool.
                   The username is added as a runner label so the CI workflow can route jobs to the
-                  correct developer's local Kind cluster using `runs-on: [self-hosted, <username>]`.
+                  correct developer's local Kind cluster.
                 minLength: 1
                 type: string
               labels:
                 description: |-
-                  Labels are additional runner labels passed to the GitHub runner during registration.
-                  The GitHubUsername is always appended automatically so workflows can target
-                  this developer's cluster with `runs-on: [self-hosted, <username>]`.
+                  Labels are additional runner labels passed to the CI runner during registration.
+                  The username is always appended automatically so workflows can target
+                  this developer's cluster.
                 items:
                   type: string
                 type: array
@@ -274,7 +276,8 @@ spec:
                 minimum: 1
                 type: integer
               repository:
-                description: Repository is the full GitHub repository slug (e.g. "myorg/myrepo").
+                description: Repository is the full repository slug (e.g. "myorg/myrepo"
+                  or "group/project").
                 minLength: 1
                 type: string
               resources:
@@ -317,8 +320,7 @@ spec:
                 type: string
               runnerImage:
                 default: ghcr.io/actions/actions-runner:latest
-                description: RunnerImage is the container image for the GitHub Actions
-                  runner.
+                description: RunnerImage is the container image for the CI runner.
                 type: string
               serviceAccountName:
                 description: |-
@@ -328,8 +330,8 @@ spec:
                 type: string
               tokenSecretRef:
                 description: |-
-                  TokenSecretRef is a reference to a Secret containing the GitHub PAT or App token
-                  used to register self-hosted runners. The Secret must contain a key named "github-token".
+                  TokenSecretRef is a reference to a Secret containing the CI platform token
+                  used to register self-hosted runners.
                 properties:
                   key:
                     default: github-token
@@ -2313,7 +2315,6 @@ spec:
                   WorkDir is the working directory mount path inside the runner container.
                   If empty, the controller uses the CI provider's default:
                     GitHub Actions: /home/runner/_work
-                    CircleCI:       /tmp/_work
                     GitLab:         /builds
                 type: string
             required:
@@ -2322,12 +2323,11 @@ spec:
             - tokenSecretRef
             type: object
           status:
-            description: GithubActionRunnerPoolStatus defines the observed state of
-              GithubActionRunnerPool.
+            description: CIRunnerPoolStatus defines the observed state of CIRunnerPool.
             properties:
               activeJob:
                 description: |-
-                  ActiveJob is the name/ID of the GitHub Actions workflow job currently being executed,
+                  ActiveJob is the name/ID of the CI job currently being executed,
                   or empty if the runner is idle and waiting.
                 type: string
               conditions:
@@ -2408,7 +2408,7 @@ spec:
                 type: integer
               runnerRegistered:
                 description: RunnerRegistered indicates whether the runner has successfully
-                  registered with GitHub.
+                  registered with the CI platform.
                 type: boolean
             type: object
         type: object

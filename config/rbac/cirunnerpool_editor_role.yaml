@@ -1,20 +1,20 @@
-# permissions for end users to edit githubactionrunnerpools.
+# permissions for end users to edit cirunnerpools.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   labels:
     app.kubernetes.io/name: clusterrole
-    app.kubernetes.io/instance: githubactionrunnerpool-editor-role
+    app.kubernetes.io/instance: cirunnerpool-editor-role
     app.kubernetes.io/component: rbac
     app.kubernetes.io/created-by: kindling
     app.kubernetes.io/part-of: kindling
     app.kubernetes.io/managed-by: kustomize
-  name: githubactionrunnerpool-editor-role
+  name: cirunnerpool-editor-role
 rules:
 - apiGroups:
   - apps.example.com
   resources:
-  - githubactionrunnerpools
+  - cirunnerpools
   verbs:
   - create
   - delete
@@ -26,6 +26,6 @@ rules:
 - apiGroups:
   - apps.example.com
   resources:
-  - githubactionrunnerpools/status
+  - cirunnerpools/status
   verbs:
   - get

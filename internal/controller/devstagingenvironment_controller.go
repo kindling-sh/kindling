@@ -1435,4 +1435,3 @@ func generatePassword(length int) string {
 	}
 	return string(b)
 }
-

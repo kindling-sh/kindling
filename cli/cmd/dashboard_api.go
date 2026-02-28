@@ -133,7 +133,7 @@ func handleDSEs(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, out)
 }
 
-// ── /api/runners — GithubActionRunnerPools ──────────────────────
+// ── /api/runners — CIRunnerPools ──────────────────────
 
 func handleRunners(w http.ResponseWriter, r *http.Request) {
 	prov := ci.Default()

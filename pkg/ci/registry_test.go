@@ -10,10 +10,10 @@ import (
 // Registry — Get, Default, Names
 // ────────────────────────────────────────────────────────────────────────────
 
-// The three providers auto-register via init(), so they must be present.
+// The providers auto-register via init(), so they must be present.
 
 func TestGetKnownProviders(t *testing.T) {
-	for _, name := range []string{"github", "gitlab", "circleci"} {
+	for _, name := range []string{"github", "gitlab"} {
 		t.Run(name, func(t *testing.T) {
 			p, err := Get(name)
 			if err != nil {
@@ -47,7 +47,7 @@ func TestNamesContainsAll(t *testing.T) {
 	names := Names()
 	sort.Strings(names)
 
-	expected := []string{"circleci", "github", "gitlab"}
+	expected := []string{"github", "gitlab"}
 	if len(names) != len(expected) {
 		t.Fatalf("Names() = %v, want %v", names, expected)
 	}

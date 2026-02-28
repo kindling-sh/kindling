@@ -14,7 +14,7 @@ type RunnerPoolConfig struct {
 	Repo        string
 	Token       string
 	Namespace   string // defaults to "default"
-	Provider    string // ci provider name ("github", "gitlab", "circleci"); empty = default
+	Provider    string // ci provider name ("github", "gitlab"); empty = default
 }
 
 func (c *RunnerPoolConfig) namespace() string {
@@ -69,8 +69,6 @@ func CreateRunnerPool(cfg RunnerPoolConfig) ([]string, error) {
 	switch provider.Name() {
 	case "gitlab":
 		platformURL = "https://gitlab.com"
-	case "circleci":
-		platformURL = "https://circleci.com"
 	}
 
 	// Sanitize the username for use in K8s resource names (RFC 1123).
@@ -106,7 +104,7 @@ spec:
 	return outputs, nil
 }
 
-// ResetRunners deletes all GithubActionRunnerPool CRs and the token secret.
+// ResetRunners deletes all CIRunnerPool CRs and the CI token secret.
 // Returns a slice of output messages.
 func ResetRunners(clusterName, namespace, providerName string) ([]string, error) {
 	if namespace == "" {

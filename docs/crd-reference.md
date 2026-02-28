@@ -271,24 +271,25 @@ spec:
 
 ---
 
-## GithubActionRunnerPool
+## CIRunnerPool
 
-Declares a pool of self-hosted CI runners. The current implementation
-registers GitHub Actions runners with a specific repository.
+Declares a pool of self-hosted CI runners. Supports **GitHub Actions**
+and **GitLab CI** via the `spec.ciProvider` field (defaults to `github`).
 
 **API version:** `apps.example.com/v1alpha1`  
-**Kind:** `GithubActionRunnerPool`  
+**Kind:** `CIRunnerPool`  
 **Scope:** Namespaced
 
-### Full spec
+### Full spec (GitHub Actions)
 
 ```yaml
 apiVersion: apps.example.com/v1alpha1
-kind: GithubActionRunnerPool
+kind: CIRunnerPool
 metadata:
   name: myuser-runner-pool
 spec:
-  githubUsername: "myuser"         # Required — GitHub handle
+  ciProvider: github                  # Required — "github" or "gitlab"
+  githubUsername: "myuser"         # Required — developer handle
   repository: "myorg/myrepo"      # Required — full repo slug
   tokenSecretRef:                  # Required — reference to PAT secret
     name: github-runner-token
@@ -318,9 +319,10 @@ spec:
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `githubUsername` | string | ✅ | — | GitHub handle (added as runner label) |
-| `repository` | string | ✅ | — | Full repo slug (`owner/repo`) |
-| `tokenSecretRef` | SecretKeyRef | ✅ | — | Reference to PAT Secret |
+| `ciProvider` | string | ✅ | `""` | CI platform: `github` or `gitlab` |
+| `githubUsername` | string | ✅ | — | Developer handle (added as runner label) |
+| `repository` | string | ✅ | — | Repo slug — `owner/repo` (GitHub) or `group/project` (GitLab) |
+| `tokenSecretRef` | SecretKeyRef | ✅ | — | Reference to CI token Secret |
 | `githubURL` | string | ❌ | `https://github.com` | Base URL (for GHE) |
 | `replicas` | *int32 | ❌ | `1` | Number of runner pods |
 | `runnerImage` | string | ❌ | `ghcr.io/actions/actions-runner:latest` | Runner container image |
@@ -374,7 +376,7 @@ Each runner pod created by the operator contains:
 
 | Container | Image | Purpose |
 |---|---|---|
-| `runner` | Runner image | Registers with GitHub, executes workflow jobs |
+| `runner` | Platform-specific runner image | Registers with CI platform (GitHub or GitLab), executes workflow jobs |
 | `build-agent` | Kaniko executor | Builds container images from signal files |
 
 Shared volume: `emptyDir` at `/builds/` for signal-file communication.
@@ -393,7 +395,7 @@ runs-on: [self-hosted, "<username>"]
 
 ```yaml
 apiVersion: apps.example.com/v1alpha1
-kind: GithubActionRunnerPool
+kind: CIRunnerPool
 metadata:
   name: alice-runner-pool
 spec:

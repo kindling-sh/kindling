@@ -15,16 +15,20 @@
 [![GitHub Release](https://img.shields.io/github/v/release/kindling-sh/kindling?style=for-the-badge&logo=github&label=Latest)](https://github.com/kindling-sh/kindling/releases/latest)
 [![Install](https://img.shields.io/badge/brew_install-kindling-FBB040?style=for-the-badge&logo=homebrew&logoColor=white)](https://github.com/kindling-sh/homebrew-tap)
 
+### Supported CI Platforms
+
+<a href="#cirunnepool"><img src="https://img.shields.io/badge/GitHub_Actions-2088FF?style=for-the-badge&logo=githubactions&logoColor=white" alt="GitHub Actions" /></a>&nbsp;&nbsp;<a href="#cirunnerpool"><img src="https://img.shields.io/badge/GitLab_CI-FC6D26?style=for-the-badge&logo=gitlab&logoColor=white" alt="GitLab CI" /></a>
+
 </div>
 
-`kindling` gives you a **dev-in-CI** workflow — a loop within a loop. The **outer loop** runs real GitHub Actions on your laptop via a local Kind cluster: push code, build containers, deploy staging environments. The **inner loop** skips all of that: edit a file, sync it into the running container, see the result instantly. A built-in web dashboard ties it all together.
+`kindling` gives you a **dev-in-CI** workflow — a loop within a loop. The **outer loop** runs real CI pipelines (**GitHub Actions** or **GitLab CI**) on your laptop via a local Kind cluster: push code, build containers, deploy staging environments. The **inner loop** skips all of that: edit a file, sync it into the running container, see the result instantly. A built-in web dashboard ties it all together.
 
 ```
  ┌──────────────────────────────────────────────────────────────┐
  │                    OUTER LOOP (CI)                           │
  │                                                              │
- │   git push ──► GitHub Actions ──► Self-hosted runner         │
- │                                   on your laptop             │
+ │   git push ──► CI Platform ──► Self-hosted runner            │
+ │                (GitHub/GitLab)  on your laptop               │
  │                    │                                         │
  │                    ▼                                         │
  │              Kaniko build ──► registry:5000                  │
@@ -59,13 +63,14 @@ Zero cloud CI minutes. Sub-second iteration. Full Kubernetes fidelity.
 
 ### Outer Loop — CI on your laptop
 
-Every `git push` triggers a real GitHub Actions workflow. But instead of running on GitHub's cloud runners, the job is routed back to a self-hosted runner inside a Kind cluster **on your machine**. Kaniko builds the container, pushes it to an in-cluster registry, and the kindling operator deploys a complete staging environment — Deployment, Service, Ingress, and up to 15 types of auto-provisioned dependencies.
+Every `git push` triggers a real CI pipeline — **GitHub Actions** or **GitLab CI**. But instead of running on cloud runners, the job is routed back to a self-hosted runner inside a Kind cluster **on your machine**. Kaniko builds the container, pushes it to an in-cluster registry, and the kindling operator deploys a complete staging environment — Deployment, Service, Ingress, and up to 15 types of auto-provisioned dependencies.
 
 This is your CI/CD pipeline, but it's free, instant, and local.
 
 ```bash
 kindling init                                        # bootstrap cluster + operator
-kindling runners -u <user> -r <org/repo> -t <pat>   # register runner with GitHub
+kindling runners -u <user> -r <org/repo> -t <pat>   # register runner (GitHub)
+kindling runners --provider gitlab -u <user> -r <group/project> -t <token>  # or GitLab
 kindling generate -k <api-key> -r /path/to/app       # AI-generate workflow
 git push                                              # triggers build + deploy
 ```
@@ -111,8 +116,9 @@ kindling dashboard --port 8080                        # custom port
 # 1. Bootstrap the local cluster
 kindling init
 
-# 2. Register a GitHub Actions runner
-kindling runners -u alice -r acme/myapp -t ghp_xxxxx
+# 2. Register a CI runner (GitHub or GitLab)
+kindling runners -u alice -r acme/myapp -t ghp_xxxxx             # GitHub
+kindling runners --provider gitlab -u alice -r group/myapp -t glpat_xxxxx  # GitLab
 
 # 3. AI-generate a workflow for your app
 kindling generate -k sk-... -r /path/to/myapp
@@ -161,8 +167,8 @@ flowchart TB
         sync -. "kubectl cp +\nrestart" .-> staging
     end
 
-    dev -- "git push" --> gh("🐙 GitHub")
-    gh -- "runs-on: self-hosted" --> runner
+    dev -- "git push" --> ci("🔄 CI Platform\n<i>GitHub / GitLab</i>")
+    ci -- "self-hosted runner" --> runner
     staging -. "localhost:80" .-> dev
     dev -- "edit files" --> sync
     dev -- "browser" --> dashboard
@@ -174,12 +180,12 @@ flowchart TB
     style registry fill:#F7931E,stroke:#F7931E,color:#fff
     style staging fill:#326CE5,stroke:#326CE5,color:#fff
     style dev fill:#6e40c9,stroke:#6e40c9,color:#fff
-    style gh fill:#24292f,stroke:#e0e0e0,color:#fff
+    style ci fill:#24292f,stroke:#e0e0e0,color:#fff
     style dashboard fill:#FFD23F,stroke:#FFD23F,color:#000
     style sync fill:#e040fb,stroke:#e040fb,color:#fff
 ```
 
-**Outer loop:** `git push` → GitHub dispatches job → self-hosted runner builds via Kaniko → operator deploys staging environment → accessible at `localhost`.
+**Outer loop:** `git push` → CI platform (GitHub Actions or GitLab CI) dispatches job → self-hosted runner builds via Kaniko → operator deploys staging environment → accessible at `localhost`.
 
 **Inner loop:** Edit a file → `kindling sync` copies it into the container → auto-detected restart strategy → see changes instantly → stop sync → deployment rolls back.
 
@@ -274,7 +280,7 @@ The kindling dashboard is a React/TypeScript single-page app embedded in the CLI
 | **Ingresses** | View routing rules and hostnames |
 | **Events** | Kubernetes events stream for debugging |
 | **Secrets** | Create and manage kindling secrets |
-| **Runners** | View and create GitHub Actions runner pools |
+| **Runners** | View and create CI runner pools (GitHub Actions / GitLab CI) |
 | **Deploy** | Apply DevStagingEnvironment YAML directly |
 | **Env Vars** | Set/unset environment variables on deployments |
 | **Scale** | Scale deployments up or down |
@@ -296,19 +302,21 @@ kindling dashboard
 
 The operator manages two CRDs in the `apps.example.com/v1alpha1` group:
 
-### `GithubActionRunnerPool`
+### `CIRunnerPool`
 
-Declares a self-hosted runner pool bound to a developer and a GitHub repository. The operator creates a Deployment with two containers:
+Declares a self-hosted CI runner pool bound to a developer and repository. Supports **GitHub Actions** and **GitLab CI** via the `spec.ciProvider` field. The operator creates a Deployment with two containers:
 
-1. **Runner** — the [official GitHub Actions runner](https://github.com/actions/runner), registered with your PAT
+1. **Runner** — the official CI runner for your platform ([GitHub Actions](https://github.com/actions/runner) or [GitLab Runner](https://docs.gitlab.com/runner/)), registered with your token
 2. **Build-agent sidecar** — watches `/builds` for build and deploy requests, runs Kaniko pods and `kubectl apply`
 
+**GitHub Actions:**
 ```yaml
 apiVersion: apps.example.com/v1alpha1
-kind: GithubActionRunnerPool
+kind: CIRunnerPool
 metadata:
   name: jeff-runner-pool
 spec:
+  ciProvider: github
   githubUsername: "jeff-vincent"
   repository: "jeff-vincent/demo-kindling"
   tokenSecretRef:
@@ -316,14 +324,30 @@ spec:
   replicas: 1
 ```
 
+**GitLab CI:**
+```yaml
+apiVersion: apps.example.com/v1alpha1
+kind: CIRunnerPool
+metadata:
+  name: jeff-runner-pool
+spec:
+  ciProvider: gitlab
+  githubUsername: "jeff-vincent"
+  repository: "my-group/demo-kindling"
+  tokenSecretRef:
+    name: gitlab-runner-token
+  replicas: 1
+```
+
 <details>
-<summary><strong>Full GithubActionRunnerPool spec reference</strong></summary>
+<summary><strong>Full CIRunnerPool spec reference</strong></summary>
 
 | Field | Default | Description |
 |---|---|---|
-| `githubUsername` | *(required)* | Developer's GitHub handle — auto-added as a runner label |
-| `repository` | *(required)* | GitHub repo slug (`org/repo`) |
-| `tokenSecretRef` | *(required)* | Reference to a Secret holding a GitHub PAT (`repo` scope) |
+| `ciProvider` | `""` | CI platform: `github`, `gitlab`, or `""` (defaults to github) |
+| `githubUsername` | *(required)* | Developer's handle — auto-added as a runner label |
+| `repository` | *(required)* | Repo slug — `org/repo` (GitHub) or `group/project` (GitLab) |
+| `tokenSecretRef` | *(required)* | Reference to a Secret holding a CI token (GitHub PAT or GitLab runner token) |
 | `replicas` | `1` | Number of runner pods |
 | `runnerImage` | `ghcr.io/actions/actions-runner:latest` | Runner container image |
 | `labels` | `[]` | Extra runner labels (`self-hosted` + username always added) |
@@ -331,7 +355,7 @@ spec:
 | `resources` | `nil` | CPU/memory requests and limits |
 | `serviceAccountName` | `""` | SA for the runner pod (auto-created if empty) |
 | `workDir` | `/home/runner/_work` | Runner working directory |
-| `githubURL` | `https://github.com` | Override for GitHub Enterprise Server |
+| `githubURL` | `https://github.com` | Override for GitHub Enterprise Server or custom GitLab instance |
 | `env` | `[]` | Extra environment variables |
 | `volumeMounts` | `[]` | Additional volume mounts |
 | `volumes` | `[]` | Additional volumes |
@@ -427,7 +451,9 @@ spec:
 
 ---
 
-## Reusable GitHub Actions
+## Reusable CI Actions
+
+### GitHub Actions
 
 Two composite actions eliminate workflow boilerplate:
 
@@ -481,6 +507,10 @@ Generates and applies a `DevStagingEnvironment` CR:
 | `wait-timeout` | | `180s` | Rollout timeout |
 
 </details>
+
+### GitLab CI
+
+For GitLab, `kindling generate` produces a `.gitlab-ci.yml` with equivalent Kaniko build + deploy stages. The GitLab runner registers with your project automatically — no composite actions needed, just standard CI/CD pipeline stages.
 
 ---
 
@@ -542,7 +572,7 @@ sudo mv bin/kindling /usr/local/bin/
 
 ## Smart Workflow Generation
 
-`kindling generate` scans your repository and uses AI (OpenAI or Anthropic) to produce a complete GitHub Actions workflow:
+`kindling generate` scans your repository and uses AI (OpenAI or Anthropic) to produce a complete CI workflow — **GitHub Actions** (`.github/workflows/dev-deploy.yml`) or **GitLab CI** (`.gitlab-ci.yml`):
 
 ```bash
 kindling generate -k <api-key> -r /path/to/my-app
@@ -614,8 +644,8 @@ Go API + React dashboard with Postgres, Redis, Elasticsearch, Kafka, and Vault.
 | Command | Description |
 |---|---|
 | `kindling init` | Bootstrap Kind cluster + operator + registry + ingress |
-| `kindling runners` | Register GitHub Actions self-hosted runner |
-| `kindling generate` | AI-generate a GitHub Actions workflow |
+| `kindling runners` | Register a CI runner (GitHub Actions or GitLab CI) |
+| `kindling generate` | AI-generate a CI workflow (GitHub Actions or GitLab CI) |
 | `kindling deploy` | Apply a DevStagingEnvironment from YAML |
 | `kindling sync` | **Live-sync files + hot reload (inner loop)** |
 | `kindling dashboard` | **Launch the web dashboard** |
@@ -678,7 +708,7 @@ make docker-build IMG=controller:dev
 
 ## Roadmap
 
-- [x] Local CI — self-hosted GitHub Actions runners in Kind
+- [x] Multi-platform CI — GitHub Actions and GitLab CI runners in Kind
 - [x] 15 auto-provisioned dependency types (Postgres, Redis, Kafka, etc.)
 - [x] Kaniko container builds (no Docker daemon)
 - [x] Reusable GitHub Actions (`kindling-build` + `kindling-deploy`)

@@ -31,8 +31,8 @@ func (g *GitLabProvider) CLILabels() CLILabels {
 		Repository:      "GitLab project (group/project)",
 		Token:           "GitLab PAT (create_runner scope)",
 		SecretName:      "gitlab-runner-token",
-		CRDKind:         "GithubActionRunnerPool",
-		CRDPlural:       "githubactionrunnerpools",
+		CRDKind:         "CIRunnerPool",
+		CRDPlural:       "cirunnerpools",
 		CRDListHeader:   "GitLab CI Runner Pools",
 		RunnerComponent: "gitlab-ci-runner",
 		ActionsURLFmt:   "https://gitlab.com/%s/-/pipelines",
@@ -250,7 +250,7 @@ func (a *GitLabRunnerAdapter) RunnerLabels(username string, crName string) map[s
 	return map[string]string{
 		"app.kubernetes.io/name":           crName,
 		"app.kubernetes.io/component":      "gitlab-ci-runner",
-		"app.kubernetes.io/managed-by":     "githubactionrunnerpool-operator",
+		"app.kubernetes.io/managed-by":     "cirunnerpool-operator",
 		"app.kubernetes.io/instance":       crName,
 		"apps.example.com/gitlab-username": username,
 	}

@@ -41,7 +41,6 @@ type RunnerAdapter interface {
 	// DefaultWorkDir returns the default working directory inside the runner
 	// container. Each CI platform image has different filesystem layouts:
 	//   GitHub Actions: "/home/runner/_work"  (runner user owns /home/runner)
-	//   CircleCI:       "/tmp/_work"          (no /home/runner in the image)
 	//   GitLab:         "/builds"             (gitlab-runner convention)
 	DefaultWorkDir() string
 
@@ -213,11 +212,11 @@ type CLILabels struct {
 	SecretName string
 
 	// CRDKind is the CustomResourceDefinition kind name.
-	// Example: "GithubActionRunnerPool"
+	// Example: "CIRunnerPool"
 	CRDKind string
 
 	// CRDPlural is the CRD plural resource name for kubectl.
-	// Example: "githubactionrunnerpools"
+	// Example: "cirunnerpools"
 	CRDPlural string
 
 	// CRDListHeader is the display header for listing runner pools.

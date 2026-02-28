@@ -26,7 +26,7 @@ dev-deploy workflow that uses the reusable kindling-build and
 kindling-deploy composite actions.
 
 Supports OpenAI-compatible and Anthropic APIs.
-Supports GitHub Actions, GitLab CI, and CircleCI via --ci-provider.
+Supports GitHub Actions and GitLab CI via --ci-provider.
 
 Examples:
   kindling generate --api-key sk-... --repo-path /path/to/my-app
@@ -56,7 +56,7 @@ func init() {
 	generateCmd.Flags().StringVarP(&genOutput, "output", "o", "", "Output path (default: <repo-path>/.github/workflows/dev-deploy.yml)")
 	generateCmd.Flags().StringVarP(&genBranch, "branch", "b", "", "Branch to trigger on (default: auto-detect from git, fallback to 'main')")
 	generateCmd.Flags().BoolVar(&genDryRun, "dry-run", false, "Print the generated workflow to stdout instead of writing a file")
-	generateCmd.Flags().StringVar(&genCIProvider, "ci-provider", "", "CI platform to generate for (github, gitlab, circleci; default: github)")
+	generateCmd.Flags().StringVar(&genCIProvider, "ci-provider", "", "CI platform to generate for (github, gitlab; default: github)")
 	_ = generateCmd.MarkFlagRequired("api-key")
 	rootCmd.AddCommand(generateCmd)
 }
@@ -85,7 +85,7 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 	if genCIProvider != "" {
 		p, err := ci.Get(genCIProvider)
 		if err != nil {
-			return fmt.Errorf("unknown CI provider %q (available: github, gitlab, circleci)", genCIProvider)
+			return fmt.Errorf("unknown CI provider %q (available: github, gitlab)", genCIProvider)
 		}
 		ciProv = p
 	}

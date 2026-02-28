@@ -30,7 +30,7 @@ var (
 
 func init() {
 	resetCmd.Flags().BoolVarP(&resetForce, "force", "y", false, "Skip confirmation prompt")
-	resetCmd.Flags().StringVar(&resetProvider, "provider", "", "CI provider (github, gitlab, circleci)")
+	resetCmd.Flags().StringVar(&resetProvider, "provider", "", "CI provider (github, gitlab)")
 	rootCmd.AddCommand(resetCmd)
 }
 
@@ -47,7 +47,7 @@ func runReset(cmd *cobra.Command, args []string) error {
 	if resetProvider != "" {
 		p, err := ci.Get(resetProvider)
 		if err != nil {
-			return fmt.Errorf("unknown provider %q (available: github, gitlab, circleci)", resetProvider)
+			return fmt.Errorf("unknown provider %q (available: github, gitlab)", resetProvider)
 		}
 		provider = p
 	}
