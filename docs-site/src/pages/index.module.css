@@ -137,6 +137,29 @@
   border-color: rgba(255, 107, 53, 0.3);
 }
 
+/* Platform banner */
+.platformBanner {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1rem;
+  padding: 0;
+  max-width: fit-content;
+}
+
+.platformBannerItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: #c8c0d8;
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+
+.platformBannerItem[data-platform="gitlab"] {
+  color: #fc6d26;
+}
+
 .heroButtons {
   display: flex;
   gap: 1rem;
