@@ -81,101 +81,88 @@ services and let the developer pick.
 For non-interactive / CI usage, add a `--ingress-all` flag that wires up every
 service with a default ingress route.
 
-### Agent context file (`kindling generate` → agent config files)
+### ✅ Agent context — `kindling intel`
 
-`kindling generate` already scans the repo and knows its languages, services,
-dependencies, ports, and config files. It already writes files into the repo
-(workflow YAML, DSE YAML). This extends that: emit a personalized context file
-that coding agents (Copilot, Cursor, Cline, Claude Code, Windsurf, etc.)
-automatically pick up, so the agent knows how to develop against kindling
-without the user explaining the setup.
+**Status: Implemented in v0.7.1**
 
-**What gets generated — three sections:**
+`kindling generate` scans the repo and knows its languages, services,
+dependencies, ports, and config files. `kindling intel` extends that: it
+temporarily replaces coding agent config files with a focused kindling
+context document so the agent knows how to develop against kindling without
+the user explaining the setup.
 
-1. **Architectural principles** — development guidelines the agent must follow:
-   - Deploy with `kindling deploy`, not `kubectl apply` or raw manifests
-   - Builds use Kaniko inside the runner sidecar, not `docker build` — never
-     generate Dockerfiles or docker-compose for the dev environment
-   - Dependencies (Postgres, Redis, etc.) go in `spec.dependencies[]` in the
-     DSE YAML, not in Docker Compose or Helm charts
-   - The in-cluster registry is `localhost:5001` — no DockerHub/ECR push needed
-   - Secrets go through `kindling secrets set KEY=VALUE`, which creates K8s
-     secrets referenced via `secretKeyRef` in the workflow — never hardcode
-     secrets in YAML or env files
-   - Environment variables go through `kindling env set KEY=VALUE` or
-     `spec.env[]` in the DSE YAML
-   - To expose a service externally, use `kindling expose`, not raw Ingress
-   - To check status, use `kindling status` and `kindling logs`, not raw
-     `kubectl` commands
-   - When adding a new service to the repo, add it to the DSE YAML as a new
-     entry in `spec.services[]` — the CI workflow will build and deploy it
+**The problem:** most developers' copilot/agent instructions are a pile of
+unstructured randomness. Appending kindling context to that means the agent
+gets a long, noisy prompt where kindling competes with everything else.
+And since kindling is new, no agent has been trained on it.
 
-2. **Reference card** — quick-reference for the CLI and file locations:
-   - Where the CI workflow lives (`.github/workflows/dev-deploy.yml`)
-   - Where the environment spec lives (`.kindling/dev-environment.yaml`) and
-     what the fields mean
-   - Key CLI commands: `kindling deploy`, `kindling env set`, `kindling expose`,
-     `kindling secrets set`, `kindling status`, `kindling logs`
-   - How secrets flow: CLI → K8s Secret → `secretKeyRef` in workflow
-   - The sidecar build protocol (tarball → Kaniko → in-cluster registry)
+**The solution: automatic lifecycle management.** Intel activates
+automatically on any kindling command and restores your original agent
+config after an hour of inactivity. No manual on/off needed.
 
-3. **Personalized project context** (from repo scan):
+**How it works:**
 
-   ```markdown
-   ## This Project
+1. **Auto-activate:** Every kindling command (deploy, generate, sync, etc.)
+   checks whether intel is active. If not, it backs up existing agent configs
+   and writes the kindling context document — silently, no user action needed.
 
-   This repo runs a FastAPI service on port 8000 with Postgres and Redis.
-   The DSE at `.kindling/dev-environment.yaml` provisions both databases.
-   To add a new dependency (e.g. Elasticsearch), add it to
-   `spec.dependencies[]` in that file and push.
+2. **Session tracking:** Each kindling interaction updates a last-interaction
+   timestamp in `.kindling/intel-state.json`.
 
-   CI workflow: `.github/workflows/dev-deploy.yml`
-   Build action: `kindling-build` (Kaniko, not Docker)
-   Deploy action: `kindling-deploy` (applies DSE to cluster)
-   ```
+3. **Auto-restore:** If the last kindling interaction was more than 1 hour ago,
+   the next kindling command first restores the originals (cleanup from the
+   previous session), then re-activates with a fresh backup.
 
-**Agent detection (in priority order):**
+4. **Manual override:** `kindling intel off` restores originals immediately
+   and sets a disabled flag to prevent auto-reactivation. `kindling intel on`
+   clears the disabled flag and re-activates.
 
-1. **Explicit flag**: `kindling generate --agents copilot,cursor,claude`
-   (non-interactive, for CI or scripting)
-2. **Existing config files**: if `.github/copilot-instructions.md`, `.cursor/`,
-   `.cursorrules`, `CLAUDE.md`, or `.windsurfrules` already exist, target those
-3. **LLM token prefix as default**: the API key passed to `kindling generate`
-   has a detectable prefix that reveals the likely coding agent:
-   - `sk-ant-...` (Anthropic) → default to **Claude Code** → `CLAUDE.md`
-   - `sk-...` (OpenAI) → default to **Copilot** →
-     `.github/copilot-instructions.md`
-   This is a *default*, not definitive — a user may have an Anthropic key but
-   use Copilot. So the CLI shows the inference and asks for confirmation:
-   `"Detected Anthropic key → will write CLAUDE.md. Also write to: [copilot/cursor/all/none]?"`
-4. **Interactive prompt** (if no signal): "Which coding assistant do you use?
-   [copilot/cursor/claude/windsurf/all/none]"
+**What the context document contains — four sections:**
 
-**File placement & safe injection:**
+1. **Architectural principles** — deploy with `kindling deploy`, builds use
+   Kaniko, dependencies go in `spec.dependencies[]`, secrets via
+   `kindling secrets set`, etc.
 
-| Agent | Target file |
+2. **CLI reference card** — every command, key files, secrets flow, build
+   protocol.
+
+3. **Personalized project context** — dynamically detected from the repo:
+   languages, Dockerfiles, existing CI workflows, DSE specs, compose files.
+
+4. **Kaniko compatibility notes** — no BuildKit ARGs, Go needs
+   `-buildvcs=false`, Poetry needs `--no-root`, npm needs cache redirect.
+
+**Commands:**
+
+```
+kindling intel on       # clear disabled flag, activate now
+kindling intel off      # restore originals, disable auto-activation
+kindling intel status   # show state, last interaction, timeout
+```
+
+**Agent files managed:**
+
+| Agent | File |
 |---|---|
-| Copilot | `.github/copilot-instructions.md` (append fenced section) |
-| Cursor | `.cursor/rules/kindling.md` (standalone file, no markers needed) |
-| Claude Code | `CLAUDE.md` (append fenced section) |
-| Windsurf | `.windsurfrules` (append fenced section) |
-| Always | `.kindling/context.md` (canonical copy, kindling-owned) |
+| GitHub Copilot | `.github/copilot-instructions.md` |
+| Claude Code | `CLAUDE.md` |
+| Cursor | `.cursor/rules/kindling.mdc` |
+| Windsurf | `.windsurfrules` |
+| Always | `.kindling/context.md` (canonical copy) |
 
-For shared files (copilot-instructions.md, CLAUDE.md, .windsurfrules), use
-`<!-- kindling:start -->` / `<!-- kindling:end -->` markers so that
-`kindling generate` can re-run and update the kindling section without
-clobbering user content outside the markers. For Cursor, we own the file
-(`.cursor/rules/kindling.md`) so no markers needed.
+**Lifecycle files:**
+- Originals backed up to `.kindling/intel-backups/`
+- State tracked in `.kindling/intel-state.json` (includes timestamp)
+- Disabled flag: `.kindling/intel-disabled` (prevents auto-activation)
+- Backup deduplication: won't back up files that already have kindling content
+- `kindling status` shows intel state and disabled status
 
-The canonical copy at `.kindling/context.md` is always written regardless of
-agent selection — it serves as the source of truth and works with any agent
-that supports workspace-level context files.
-
-The user commits these files alongside their workflow and DSE YAML. Their
-coding agent immediately knows the architectural principles, CLI commands,
-file locations, and project-specific setup — zero manual explanation needed.
+**Integration with `kindling generate`:**
+- `generate` now writes `.kindling/context.md` alongside the workflow
+- Next steps output suggests `kindling intel on`
 
 ### Generate rules reference (`.kindling/generate-rules.md`)
+
 
 The system prompt that `kindling generate` sends to the AI lives in
 `pkg/ci/prompt.go` — ~370 lines of hard-won rules about Kaniko patching,

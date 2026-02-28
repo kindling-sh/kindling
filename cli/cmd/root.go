@@ -17,6 +17,9 @@ var (
 var rootCmd = &cobra.Command{
 	Use:   "kindling",
 	Short: "kindling — set up CI in minutes, stay for everything else",
+	PersistentPreRun: func(cmd *cobra.Command, args []string) {
+		ensureIntel(cmd)
+	},
 	Long: `kindling is a development engine that wires up your CI pipeline
 in minutes — then keeps working for you. It bootstraps a local Kind
 cluster with an operator, in-cluster registry, and CI runners, then

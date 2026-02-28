@@ -180,11 +180,22 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 	}
 	success(fmt.Sprintf("Workflow written to %s", relPath))
 
+	// ── Write canonical agent context ───────────────────────────
+	contextDoc := buildContextDocument(repoPath)
+	kindlingDir := filepath.Join(repoPath, ".kindling")
+	if err := os.MkdirAll(kindlingDir, 0755); err == nil {
+		contextPath := filepath.Join(kindlingDir, "context.md")
+		if err := os.WriteFile(contextPath, []byte(contextDoc), 0644); err == nil {
+			step("📄", fmt.Sprintf("Wrote %s.kindling/context.md%s (agent context)", colorCyan, colorReset))
+		}
+	}
+
 	fmt.Println()
 	fmt.Printf("  %sNext steps:%s\n", colorBold, colorReset)
 	fmt.Printf("    1. Review the generated workflow at %s%s%s\n", colorCyan, relPath, colorReset)
-	fmt.Printf("    2. Commit and push to trigger a deploy\n")
-	fmt.Printf("    3. Access your app at %shttp://<username>-<app>.localhost%s\n", colorCyan, colorReset)
+	fmt.Printf("    2. Run %skindling intel on%s to give your coding agent full kindling context\n", colorCyan, colorReset)
+	fmt.Printf("    3. Commit and push to trigger a deploy\n")
+	fmt.Printf("    4. Access your app at %shttp://<username>-<app>.localhost%s\n", colorCyan, colorReset)
 	fmt.Println()
 
 	return nil
