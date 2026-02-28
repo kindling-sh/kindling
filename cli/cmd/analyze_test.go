@@ -103,6 +103,129 @@ func TestCheckKanikoCompat_Clean(t *testing.T) {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// checkBuildContext
+// ────────────────────────────────────────────────────────────────────────────
+
+func TestCheckBuildContext_SubdirCopyOutside(t *testing.T) {
+	// agent/Dockerfile that copies from tools/ and shared/ — should warn
+	df := "FROM python:3.12\nCOPY tools/ tools/\nCOPY shared/utils.py .\nCMD [\"python\", \"app.py\"]"
+	results := checkBuildContext("agent/Dockerfile", df)
+	if len(results) == 0 {
+		t.Fatal("expected warnings for COPY outside Dockerfile dir")
+	}
+
+	// Should contain the warning about outside paths
+	found := false
+	for _, r := range results {
+		if r.status == checkWarn && strings.Contains(r.message, "copies from outside") {
+			found = true
+			if !strings.Contains(r.message, "tools/") {
+				t.Errorf("warning should mention tools/, got: %s", r.message)
+			}
+		}
+	}
+	if !found {
+		t.Error("expected a warning result about copying from outside")
+	}
+
+	// Should contain fix guidance
+	foundInfo := false
+	for _, r := range results {
+		if r.status == checkInfo && strings.Contains(r.message, "repo root") {
+			foundInfo = true
+		}
+	}
+	if !foundInfo {
+		t.Error("expected info result about using repo root as context")
+	}
+}
+
+func TestCheckBuildContext_SubdirLocalOnly(t *testing.T) {
+	// agent/Dockerfile that only copies local files — no warning
+	df := "FROM python:3.12\nCOPY requirements.txt .\nCOPY . .\nCMD [\"python\", \"app.py\"]"
+	results := checkBuildContext("agent/Dockerfile", df)
+	if len(results) != 0 {
+		t.Errorf("expected no warnings for local-only COPY, got %d: %v", len(results), results)
+	}
+}
+
+func TestCheckBuildContext_RootDockerfile(t *testing.T) {
+	// Dockerfile at repo root — always fine, never warns
+	df := "FROM python:3.12\nCOPY config.py .\nCOPY agent/ agent/\nCMD [\"python\", \"app.py\"]"
+	results := checkBuildContext("Dockerfile", df)
+	if len(results) != 0 {
+		t.Errorf("expected no warnings for root Dockerfile, got %d", len(results))
+	}
+}
+
+func TestCheckBuildContext_MultiStageFromIgnored(t *testing.T) {
+	// COPY --from=builder should be ignored — it copies from a build stage, not the context
+	df := "FROM golang:1.22 AS builder\nRUN go build -o app .\nFROM alpine:3.19\nCOPY --from=builder /app /app\nCMD [\"/app\"]"
+	results := checkBuildContext("service/Dockerfile", df)
+	if len(results) != 0 {
+		t.Errorf("expected no warnings for COPY --from=, got %d: %v", len(results), results)
+	}
+}
+
+func TestCheckBuildContext_MultipleOutsidePaths(t *testing.T) {
+	// agent/Dockerfile referencing multiple outside directory paths — all should appear
+	df := "FROM python:3.12\nCOPY tools/ tools/\nCOPY shared/utils.py .\nCOPY lib/common.py .\nCMD [\"python\", \"app.py\"]"
+	results := checkBuildContext("agent/Dockerfile", df)
+	if len(results) == 0 {
+		t.Fatal("expected warnings for multiple outside paths")
+	}
+
+	for _, r := range results {
+		if r.status == checkWarn {
+			for _, expected := range []string{"tools/", "shared/utils.py", "lib/common.py"} {
+				if !strings.Contains(r.message, expected) {
+					t.Errorf("warning should mention %q, got: %s", expected, r.message)
+				}
+			}
+		}
+	}
+}
+
+func TestCheckBuildContext_ADDOutside(t *testing.T) {
+	// ADD instruction should also be checked, not just COPY
+	df := "FROM python:3.12\nADD common/config.tar.gz /app/\nCMD [\"python\", \"app.py\"]"
+	results := checkBuildContext("service/Dockerfile", df)
+	if len(results) == 0 {
+		t.Fatal("expected warning for ADD from outside Dockerfile dir")
+	}
+}
+
+func TestCheckBuildContext_CopyWithFlags(t *testing.T) {
+	// COPY with --chown flag — should still detect outside paths
+	df := "FROM python:3.12\nCOPY --chown=app:app shared/config.py .\nCMD [\"python\", \"app.py\"]"
+	results := checkBuildContext("agent/Dockerfile", df)
+	if len(results) == 0 {
+		t.Fatal("expected warning for COPY --chown from outside dir")
+	}
+}
+
+func TestCheckBuildContext_SameNameSubdir(t *testing.T) {
+	// agent/Dockerfile copying agent/ — paths prefixed with the Dockerfile's own dir
+	// are treated as self-referential (repo-root context pointing back into the service dir)
+	df := "FROM python:3.12\nCOPY agent/requirements.txt .\nCOPY agent/ agent/\nCMD [\"python\", \"app.py\"]"
+	results := checkBuildContext("agent/Dockerfile", df)
+	// agent/requirements.txt -> srcDir="agent" == dir="agent" -> not flagged
+	if len(results) != 0 {
+		t.Errorf("expected no warnings when COPY paths match Dockerfile dir, got %d: %v", len(results), results)
+	}
+}
+
+func TestCheckBuildContext_BareFilenameIgnored(t *testing.T) {
+	// Bare filenames without directory components are ambiguous — could be local
+	// to whichever build context is set. Should not trigger a warning.
+	df := "FROM python:3.12\nCOPY config.py .\nCOPY requirements.txt .\nCMD [\"python\", \"app.py\"]"
+	results := checkBuildContext("agent/Dockerfile", df)
+	if len(results) != 0 {
+		t.Errorf("expected no warnings for bare filenames, got %d: %v", len(results), results)
+	}
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // inferFrameworkSecrets
 // ────────────────────────────────────────────────────────────────────────────
 

@@ -195,6 +195,11 @@ func checkDockerfiles(repoPath string, ctx *repoContext) []checkResult {
 		for path, content := range ctx.dockerfiles {
 			issues := checkKanikoCompat(path, content)
 			results = append(results, issues...)
+
+			// Check for build context mismatch — Dockerfiles in subdirectories
+			// that COPY from outside their directory
+			issues = checkBuildContext(path, content)
+			results = append(results, issues...)
 		}
 	}
 
@@ -282,6 +287,16 @@ func checkProjectStructure(repoPath string, ctx *repoContext) []checkResult {
 		// Build the suggested structure
 		lang := detectPrimaryLanguage(ctx)
 		suggestion := buildStructureSuggestion(entryPoints, lang, ctx)
+
+		// Derive service names for shared module detection
+		var svcNames []string
+		for _, ep := range entryPoints {
+			name := strings.TrimSuffix(filepath.Base(ep), filepath.Ext(ep))
+			name = strings.TrimSuffix(name, " (Procfile)")
+			svcNames = append(svcNames, name)
+		}
+		sharedModules := detectSharedModules(ctx, svcNames)
+
 		results = append(results, checkResult{
 			status:  checkInfo,
 			message: "Suggested project structure:",
@@ -298,6 +313,22 @@ func checkProjectStructure(repoPath string, ctx *repoContext) []checkResult {
 			status: checkInfo,
 			message: "Benefits: independent scaling, isolated failures, faster rebuilds, rolling updates per service",
 		})
+
+		// Shared code guidance
+		if len(sharedModules) > 0 {
+			results = append(results, checkResult{
+				status: checkInfo,
+				message: fmt.Sprintf("Note: %d shared module(s) detected — each Dockerfile must COPY from the repo root", len(sharedModules)),
+			})
+			results = append(results, checkResult{
+				status: checkInfo,
+				message: "Each Dockerfile should use paths relative to repo root (e.g. COPY shared/ shared/)",
+			})
+			results = append(results, checkResult{
+				status: checkInfo,
+				message: "CI build context must be the repo root, with 'dockerfile: <svc>/Dockerfile'",
+			})
+		}
 
 		results = append(results, checkResult{
 			status: checkWarn,
@@ -872,6 +903,94 @@ func checkKanikoCompat(path, content string) []checkResult {
 		results = append(results, checkResult{
 			status:  checkWarn,
 			message: fmt.Sprintf("%s has 'go build' without -buildvcs=false — kindling will auto-patch for Kaniko", path),
+		})
+	}
+
+	return results
+}
+
+// checkBuildContext detects Dockerfiles in subdirectories that COPY from
+// outside their own directory. This is the #1 cause of "no such file"
+// build failures: the CI context is set to the subdirectory but the
+// Dockerfile expects the repo root.
+func checkBuildContext(dockerfilePath, content string) []checkResult {
+	var results []checkResult
+
+	// Only relevant for Dockerfiles in subdirectories
+	dir := filepath.Dir(dockerfilePath)
+	if dir == "." || dir == "" {
+		return results
+	}
+
+	// Parse COPY/ADD instructions and check if they reference paths
+	// outside the Dockerfile's directory
+	var outsidePaths []string
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+		// Skip comments and empty lines
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+
+		// Match COPY and ADD instructions (not --from= which is multi-stage)
+		upper := strings.ToUpper(trimmed)
+		if !strings.HasPrefix(upper, "COPY ") && !strings.HasPrefix(upper, "ADD ") {
+			continue
+		}
+		if strings.Contains(trimmed, "--from=") {
+			continue
+		}
+
+		// Extract the source path(s) — everything between the instruction and the last arg
+		parts := strings.Fields(trimmed)
+		if len(parts) < 3 {
+			continue
+		}
+
+		// Skip flags like --chown=, --chmod=
+		srcParts := []string{}
+		for _, p := range parts[1 : len(parts)-1] {
+			if !strings.HasPrefix(p, "--") {
+				srcParts = append(srcParts, p)
+			}
+		}
+
+		for _, src := range srcParts {
+			// Check if the source path references a directory outside the Dockerfile's dir.
+			// Bare filenames (no "/") are ambiguous — they could be local to the
+			// build context, so we only flag paths that contain a directory prefix
+			// pointing somewhere other than the Dockerfile's own directory.
+			// e.g. Dockerfile in agent/ that does "COPY tools/ tools/" — tools/ is at root
+			// or "COPY agent/requirements.txt ." — references agent/ from repo root context
+			srcClean := strings.TrimPrefix(src, "./")
+			if srcClean == "." || srcClean == "" {
+				continue
+			}
+
+			// Only flag if the source contains a path separator (references a
+			// specific directory) and that directory differs from the Dockerfile's dir
+			if !strings.Contains(srcClean, "/") {
+				// Bare filename like "requirements.txt" or "config.py" — ambiguous,
+				// could be local to the build context. Skip.
+				continue
+			}
+
+			srcDir := strings.SplitN(srcClean, "/", 2)[0]
+			if srcDir != dir && !strings.HasPrefix(srcClean, dir+"/") {
+				outsidePaths = append(outsidePaths, src)
+			}
+		}
+	}
+
+	if len(outsidePaths) > 0 {
+		results = append(results, checkResult{
+			status: checkWarn,
+			message: fmt.Sprintf("%s copies from outside its directory: %s",
+				dockerfilePath, strings.Join(outsidePaths, ", ")),
+		})
+		results = append(results, checkResult{
+			status: checkInfo,
+			message: fmt.Sprintf("CI build context must be repo root with 'dockerfile: %s'", dockerfilePath),
 		})
 	}
 

@@ -52,7 +52,31 @@ const PromptBuildInputs = `kindling-build inputs:
   image (required) — Full image reference (registry/name:tag)
   exclude — tar --exclude patterns (space-separated, e.g. './ui ./.git')
   dockerfile — Path to Dockerfile relative to context (default: Dockerfile)
-  timeout — Max seconds to wait for the build to complete (default: 300)`
+  timeout — Max seconds to wait for the build to complete (default: 300)
+
+CRITICAL — build context and Dockerfile COPY paths:
+  The "context" determines the root directory sent to Kaniko. Every COPY and ADD
+  path in the Dockerfile is relative to this context root. Get this wrong and
+  the build will fail with "no such file or directory".
+
+  Rule: if a Dockerfile COPYs files from OUTSIDE its own directory (e.g. a shared/
+  directory, a root-level config file, or another service's code), the context MUST
+  be the repo root (${{ github.workspace }}), NOT the service subdirectory. Use the
+  "dockerfile" input to point to the service's Dockerfile:
+
+    # WRONG — context is agent/ but Dockerfile does COPY shared/ tools/ config.py
+    context: ${{ github.workspace }}/agent
+
+    # RIGHT — context is repo root, dockerfile points to service Dockerfile
+    context: ${{ github.workspace }}
+    dockerfile: agent/Dockerfile
+
+  Only use a subdirectory as context when the service is fully self-contained:
+  its Dockerfile only COPYs files from within that subdirectory.
+
+  When examining a Dockerfile, check every COPY and ADD instruction. If ANY path
+  references a directory or file that is not inside the Dockerfile's parent directory,
+  set context to the repo root and set dockerfile accordingly.`
 
 // PromptHealthChecks is shared guidance on health check configuration.
 const PromptHealthChecks = `Health check guidance:
@@ -345,6 +369,25 @@ WRONG format (this will cause a CRD validation error):
 
 If any secretKeyRef IS used, those secrets are managed by
 "kindling secrets set <NAME> <VALUE>" and stored as Kubernetes Secrets.
+CRITICAL: kindling stores secrets with a "kindling-secret-" prefix in kebab-case.
+For example, "kindling secrets set OPENAI_API_KEY sk-..." creates a K8s Secret
+named "kindling-secret-openai-api-key" with key "OPENAI_API_KEY".
+So your secretKeyRef MUST use the prefixed name:
+
+CORRECT:
+  - name: OPENAI_API_KEY
+    valueFrom:
+      secretKeyRef:
+        name: kindling-secret-openai-api-key
+        key: OPENAI_API_KEY
+
+WRONG (secret will not be found):
+  - name: OPENAI_API_KEY
+    valueFrom:
+      secretKeyRef:
+        name: openai-api-key        # ← missing kindling-secret- prefix!
+        key: OPENAI_API_KEY
+
 Include a comment noting which secrets need to be set.`
 
 // PromptOAuth is the shared OAuth/public exposure guidance.
@@ -421,8 +464,10 @@ const PromptFinalValidation = `FINAL VALIDATION — before outputting the YAML, 
      in its dependencies. Every step using $(REDIS_URL) MUST have "- type: redis".
      Every step using $(DATABASE_URL) MUST have "- type: postgres" (or mysql).
      A $(VAR) reference without the matching dependency will cause a runtime crash.
-  2. Every build step's "context" matches the docker-compose "build.context" for that
-     service. If context is "." or the repo root, use the workspace root path.
+  2. For EVERY build step, trace each COPY/ADD instruction in the Dockerfile.
+     If ANY copied path lives outside the Dockerfile's parent directory, the
+     context MUST be the repo root (${{ github.workspace }}) with "dockerfile"
+     pointing to the service's Dockerfile. This is the #1 build failure.
 
 Return ONLY the raw YAML content of the workflow file. No markdown code fences,
 no explanation text, no commentary. Just the YAML.`

@@ -265,6 +265,209 @@ to it: *"For detailed CI generation rules, see `.kindling/generate-rules.md`."*
 
 ---
 
+## P0.5 — Prescriptive guidance engine
+
+Kindling knows enough about the user's app to prescribe secure, performant
+patterns — not just deploy what they give us, but tell them when something
+is wrong. Three layers, increasing depth:
+
+### Layer 1: `kindling lint` (static DSE/workflow analysis)
+
+New command that validates a DSE YAML or generated workflow before deploy.
+Pure YAML parsing — no cluster needed, fast, can run in CI too.
+
+**Checks to implement:**
+
+| Check | Severity | Description |
+|---|---|---|
+| Hardcoded secrets | error | API keys as plain `value:` instead of `secretKeyRef` |
+| Duplicate auto-injected env | error | `DATABASE_URL` in env when postgres is a dependency |
+| Missing dependency | warning | Env references `REDIS_URL` but no redis dependency declared |
+| Missing health check | warning | No `health-check-path` on an HTTP service |
+| No resource limits | info | No CPU/memory limits (acceptable for dev, flag anyway) |
+| API key in YAML | error | Regex for key-shaped values in plain `value:` fields |
+
+### Layer 2: Deploy-time warnings (enhance `kindling deploy`)
+
+When `kindling deploy -f dse.yaml` runs, call the lint engine automatically.
+Warnings print before applying — deploy still proceeds, but the user sees:
+
+```
+  ⚠️  OPENAI_API_KEY is set as a plain value — use 'kindling secrets set' instead
+  ⚠️  No health-check-path on service 'api' — pods may not restart on failure
+  ⚠️  DATABASE_URL in env block will conflict with auto-injected postgres URL
+```
+
+### Layer 3: Agent-facing patterns (enhance `kindling intel`)
+
+Add a "Secure & Performant Patterns" section to the intel context document.
+App-level guidance that agents consume during development:
+
+- Store API keys with `kindling secrets set`, never in YAML or committed files
+- Use connection pooling for database connections in multi-worker setups
+- MCP servers should validate tool inputs before execution
+- Background workers need graceful shutdown handlers for SIGTERM
+- Use `health-check-type: none` only for workers, never for HTTP services
+
+---
+
+## P0.5 — Dashboard: real-time fix-it UX
+
+The topology view already plans real-time cluster scanning. The next step
+is making it actionable — "see a red service, enter the missing value, see
+it turn green."
+
+### Interactive service health resolution
+
+When the dashboard detects a failing service (CrashLoopBackOff,
+CreateContainerConfigError, ImagePullBackOff, etc.), it should:
+
+1. **Diagnose** — parse pod events and container logs to identify the root
+   cause (missing env var, missing secret, image not found, port conflict)
+2. **Surface the fix inline** — show an input field or action button right
+   on the red service node in the topology view
+3. **Apply the fix** — user enters the missing value or clicks the action,
+   kindling patches the deployment live, pod restarts, service goes green
+
+**Fix actions by failure type:**
+
+| Failure | Diagnosis signal | Inline action |
+|---|---|---|
+| Missing secret | `CreateContainerConfigError` + secret name in event | Text input: "Enter value for OPENAI_API_KEY" → `kindling secrets set` |
+| Missing env var | App crash log with "KeyError" / "undefined" | Text input: "Set FOO_BAR" → patch deployment env |
+| CrashLoopBackOff | Exit code + last log lines | Show logs + "Restart" / "Edit env" buttons |
+| ImagePullBackOff | Image name in event | "Rebuild" button → triggers `kindling load` |
+| Port conflict | bind error in logs | "Change port" input → patch deployment |
+
+### The UX loop
+
+```
+Topology view: [api ✅] → [orders 🔴] → [inventory ✅]
+                              │
+                    ┌─────────┴──────────┐
+                    │ Missing secret:     │
+                    │ OPENAI_API_KEY      │
+                    │ [Enter value...] [✓]│
+                    └─────────────────────┘
+                              │
+                         (user enters key)
+                              │
+Topology view: [api ✅] → [orders ✅] → [inventory ✅]
+```
+
+This is the "no Kubernetes knowledge needed" moment — the user never
+touches kubectl, never reads pod events, never debugs YAML. They just
+see what's broken and fix it.
+
+---
+
+## P0.5 — `kindling promote`: dev → production in one command
+
+Everything above is about making the dev environment perfect. This is
+about what happens next: the app works locally, now ship it to a real
+cluster with real DNS and real TLS. The name "promote" signals graduation
+— this isn't sync, this is shipping.
+
+### The UX
+
+```
+$ kindling promote
+
+  📦 Scanning dev cluster for deployable services...
+
+  Services found:
+    api        (port 3000, postgres, redis)
+    orders     (port 3001, postgres, rabbitmq)
+    worker     (port -, rabbitmq)    # no ingress, background worker
+    mcp-tools  (port 8080)
+
+  🌐 Ingress services: api, orders, mcp-tools
+
+  Set your DNS records:
+    api.myapp.com        → <cluster-ip>
+    orders.myapp.com     → <cluster-ip>
+    mcp-tools.myapp.com  → <cluster-ip>
+
+  Enter kube context for target cluster: prod-cluster
+  Domain for TLS [myapp.com]: myapp.com
+
+  🔒 Installing cert-manager (if not present)...
+  📦 Pushing images to registry...
+  🚀 Deploying with TLS certificates...
+  ✅ Live at:
+     https://api.myapp.com
+     https://orders.myapp.com
+     https://mcp-tools.myapp.com
+```
+
+### Core features
+
+**1. Cluster state export — `kindling promote --export helm`**
+
+Read the current dev cluster state (deployments, services, configmaps,
+secrets structure) and produce a production-ready Helm chart:
+
+- Extract all DSE-managed deployments, services, ingress rules
+- Template secrets as `{{ .Values.secrets.OPENAI_API_KEY }}`
+- Template image tags as `{{ .Values.image.tag }}`
+- Generate `values.yaml` with sensible prod defaults
+- Include cert-manager `Certificate` resources for TLS
+- Output to `./charts/<app-name>/`
+
+This gives users a Helm chart they can commit, customize, and use with
+any GitOps tool (ArgoCD, Flux, etc.) — kindling gets them started, then
+gets out of the way.
+
+**2. Direct deploy — `kindling promote --context <kube-context>`**
+
+Skip Helm, deploy directly to a remote cluster:
+
+- Switch to the target kube context
+- Push images to the target registry (flag: `--registry`)
+- Apply manifests with production-appropriate settings
+- Install cert-manager if not present, issue Let's Encrypt certs
+- Wait for rollout + cert issuance, report live URLs
+
+**3. TLS auto-configuration**
+
+Under the hood, kindling handles cert-manager:
+
+- Detect if cert-manager is installed, install if not
+- Create a `ClusterIssuer` for Let's Encrypt (staging or prod)
+- Generate `Certificate` resources for each ingress service
+- Update ingress annotations for TLS termination
+- Flag: `--tls-issuer` to use an existing issuer
+- Flag: `--no-tls` to skip (e.g., behind a load balancer that terminates)
+
+**4. DNS guidance**
+
+Before deploying, `promote` tells the user exactly what DNS records to
+set. After deploy, it verifies DNS resolution and warns if records are
+missing or propagating.
+
+### What `promote` reads from the dev cluster
+
+| Source | What it extracts |
+|---|---|
+| DSE CRs | Services, ports, dependencies, env vars, ingress hosts |
+| Deployments | Container images, resource limits, replicas |
+| Services | Port mappings, service types |
+| Secrets | Secret names + keys (NOT values — user re-enters for prod) |
+| ConfigMaps | Non-secret configuration |
+| Ingress | Host rules, paths, TLS config |
+
+### Subcommands
+
+```
+kindling promote                          # Interactive: walks through everything
+kindling promote --export helm            # Export Helm chart from cluster state
+kindling promote --export kustomize       # Export Kustomize overlay
+kindling promote --context prod --registry ghcr.io/myorg  # Direct deploy
+kindling promote --dry-run                # Show what would be deployed
+```
+
+---
+
 ## P1 — Content & visibility (get in front of developers)
 
 The tool can be perfect and nobody will use it if they don't know it exists.

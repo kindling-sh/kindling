@@ -178,13 +178,17 @@ func checkWorkflowSecrets() []string {
 		return nil
 	}
 
-	// Check which exist in the cluster
+	// Check which exist in the cluster — look for both the bare name
+	// (e.g. openai-api-key) and the kindling-prefixed form
+	// (kindling-secret-openai-api-key), since users create secrets via
+	// `kindling secrets set` which adds the prefix.
 	clusterSecrets := listClusterSecrets()
 	var missing []string
 	for _, name := range requiredSecrets {
-		if !clusterSecrets[name] {
-			missing = append(missing, name)
+		if clusterSecrets[name] || clusterSecrets["kindling-secret-"+name] {
+			continue
 		}
+		missing = append(missing, name)
 	}
 	return missing
 }
