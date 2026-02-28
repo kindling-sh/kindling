@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import type { RuntimeInfo, SyncStatus, ServiceDir } from './types';
+import type { RuntimeInfo, SyncStatus, ServiceDir, IntelStatus } from './types';
 
 const API_BASE = '';
 
@@ -116,4 +116,59 @@ export async function fetchSyncStatus(): Promise<SyncStatus> {
 
 export async function fetchServiceDirs(): Promise<ServiceDir[]> {
   return apiFetch<ServiceDir[]>('/api/load-context');
+}
+
+// ── Intel helpers ────────────────────────────────────────────────
+
+export async function fetchIntelStatus(): Promise<IntelStatus> {
+  return apiFetch<IntelStatus>('/api/intel');
+}
+
+export async function activateIntel(): Promise<ActionResult> {
+  return apiPost('/api/intel');
+}
+
+export async function deactivateIntel(): Promise<ActionResult> {
+  return apiDelete('/api/intel');
+}
+
+// ── Generate helper (ndjson stream) ──────────────────────────────
+
+export interface GenerateResult extends ActionResult {
+  workflow?: string;
+  path?: string;
+}
+
+export async function streamGenerate(
+  body: { apiKey: string; repoPath?: string; provider?: string; model?: string; ciProvider?: string; branch?: string; dryRun?: boolean },
+  onMessage: (msg: string) => void,
+): Promise<GenerateResult> {
+  const res = await fetch(`${API_BASE}/api/generate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const reader = res.body?.getReader();
+  if (!reader) return { ok: false, error: 'no response body' };
+
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let lastResult: GenerateResult = { ok: false, error: 'no result' };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        const parsed = JSON.parse(line);
+        if (parsed.status) onMessage(parsed.status);
+        if (parsed.ok !== undefined) lastResult = parsed;
+      } catch { /* skip malformed */ }
+    }
+  }
+  return lastResult;
 }

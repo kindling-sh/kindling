@@ -506,10 +506,6 @@ Expanding to additional platforms unlocks even more developers.
 
 - ✅ **GitHub** — GitHub Actions runners, GitHub PATs, `.github/workflows/` generation
 - ✅ **GitLab** — GitLab runner registration, `.gitlab-ci.yml` generation via `kindling generate`
-- **Bitbucket** — Bitbucket Pipelines runner registration and
-  `bitbucket-pipelines.yml` generation
-- **Gitea / Forgejo** — self-hosted Git; register Gitea Actions runners (Gitea
-  Actions is Act-compatible, so much of the GitHub Actions plumbing carries over)
 
 ### CI systems
 
@@ -517,18 +513,15 @@ Expanding to additional platforms unlocks even more developers.
   self-hosted runner registration, AI workflow generation
 - ✅ **GitLab CI** — `.gitlab-ci.yml` with Kaniko build + kubectl deploy
   stages; GitLab Runner registration in the Kind cluster
-- **Jenkins** — generate `Jenkinsfile`; deploy a Jenkins agent pod in-cluster
-- **Drone / Woodpecker** — lightweight self-hosted CI; generate `.drone.yml` /
-  `.woodpecker.yml`
 
 ### Implementation approach
 
 1. ✅ Abstract the runner pool CRD — `spec.ciProvider` field
    (`github | gitlab`) so the operator provisions the correct runner type
-2. ✅ `kindling runners --provider gitlab` creates a GitLab Runner registration
+2. ✅ `kindling runners --ci-provider gitlab` creates a GitLab Runner registration
    instead of a GitHub Actions runner
 3. ✅ `kindling generate` detects the remote origin to infer the platform, or
-   accepts `--provider` explicitly
+   accepts `--ci-provider` explicitly
 4. ✅ Factor composite actions into platform-agnostic build/deploy steps that emit
    the right CI config format per platform
 5. ✅ Keep GitHub as the default — zero breaking changes for existing users

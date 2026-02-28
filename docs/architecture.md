@@ -504,7 +504,7 @@ can be added without touching the operator or CLI code.
 Providers register themselves at init-time via `ci.Register()`. All
 consumers call `ci.Default()` to get the active provider — by default
 that returns the GitHub Actions provider. Use `ci.Get("gitlab")` or
-the `--provider gitlab` CLI flag to select GitLab.
+the `--ci-provider gitlab` CLI flag to select GitLab.
 
 ```go
 provider := ci.Default()              // → GitHubProvider

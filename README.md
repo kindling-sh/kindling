@@ -21,7 +21,7 @@
 
 </div>
 
-`kindling` gives you a **dev-in-CI** workflow — a loop within a loop. The **outer loop** runs real CI pipelines (**GitHub Actions** or **GitLab CI**) on your laptop via a local Kind cluster: push code, build containers, deploy staging environments. The **inner loop** skips all of that: edit a file, sync it into the running container, see the result instantly. A built-in web dashboard ties it all together.
+`kindling` gives you a **dev-in-CI** workflow — a loop within a loop. The **outer loop** runs real CI pipelines (**GitHub Actions** or **GitLab CI**) on your laptop via a local Kind cluster: push code, build containers, deploy staging environments. The **inner loop** skips all of that: edit a file, sync it into the running container, see the result instantly. **Agent Intel** auto-configures your coding agent (Copilot, Claude Code, Cursor, Windsurf) with full project context. A built-in web dashboard ties it all together.
 
 ```
  ┌──────────────────────────────────────────────────────────────┐
@@ -70,7 +70,7 @@ This is your CI/CD pipeline, but it's free, instant, and local.
 ```bash
 kindling init                                        # bootstrap cluster + operator
 kindling runners -u <user> -r <org/repo> -t <pat>   # register runner (GitHub)
-kindling runners --provider gitlab -u <user> -r <group/project> -t <token>  # or GitLab
+kindling runners --ci-provider gitlab -u <user> -r <group/project> -t <token>  # or GitLab
 kindling generate -k <api-key> -r /path/to/app       # AI-generate workflow
 git push                                              # triggers build + deploy
 ```
@@ -102,11 +102,25 @@ When you stop syncing, the deployment **automatically rolls back** to its origin
 - **Sync** — Detects the runtime, starts live file sync with the right restart strategy, shows sync count and status in real time
 - **Load** — Rebuilds the container image locally via `docker build`, loads it into Kind, and triggers a rolling update
 - **Runtime badges** — Each service shows its detected runtime (Node.js, Python, Go, etc.) so you know exactly what restart strategy will be used
+- **Agent Intel** — Toggle coding agent context on/off, see which agents are configured
+- **Generate Workflow** — Stream AI workflow generation from the command menu (⌘K)
 
 ```bash
 kindling dashboard                                    # open at localhost:9090
 kindling dashboard --port 8080                        # custom port
 ```
+
+### Agent Intel — Context for your coding agent
+
+`kindling intel` auto-configures GitHub Copilot, Claude Code, Cursor, and Windsurf with full project context — CLI commands, dependency injection tables, build protocol, secrets flow, and Kaniko compatibility. It activates on any `kindling` command and restores your original agent configs after an hour of inactivity.
+
+```bash
+kindling intel on                                     # activate now
+kindling intel status                                  # check what's active
+kindling intel off                                     # restore originals + disable
+```
+
+→ [docs/intel.md](docs/intel.md)
 
 ---
 
@@ -118,7 +132,7 @@ kindling init
 
 # 2. Register a CI runner (GitHub or GitLab)
 kindling runners -u alice -r acme/myapp -t ghp_xxxxx             # GitHub
-kindling runners --provider gitlab -u alice -r group/myapp -t glpat_xxxxx  # GitLab
+kindling runners --ci-provider gitlab -u alice -r group/myapp -t glpat_xxxxx  # GitLab
 
 # 3. AI-generate a workflow for your app
 kindling generate -k sk-... -r /path/to/myapp
@@ -590,7 +604,7 @@ Supports OpenAI reasoning models (`o3`, `o3-mini`) for complex multi-service pro
 
 ```bash
 kindling generate -k sk-... -r . --model o3            # maximum accuracy
-kindling generate -k sk-... -r . --provider anthropic   # use Anthropic
+kindling generate -k sk-... -r . --ai-provider anthropic   # use Anthropic
 kindling generate -k sk-... -r . --dry-run              # preview without writing
 ```
 
@@ -645,6 +659,7 @@ Go API + React dashboard with Postgres, Redis, Elasticsearch, Kafka, and Vault.
 |---|---|
 | `kindling init` | Bootstrap Kind cluster + operator + registry + ingress |
 | `kindling runners` | Register a CI runner (GitHub Actions or GitLab CI) |
+| `kindling intel` | **Auto-configure coding agents with kindling context** |
 | `kindling generate` | AI-generate a CI workflow (GitHub Actions or GitLab CI) |
 | `kindling deploy` | Apply a DevStagingEnvironment from YAML |
 | `kindling sync` | **Live-sync files + hot reload (inner loop)** |
@@ -673,6 +688,7 @@ Go API + React dashboard with Postgres, Redis, Elasticsearch, Kafka, and Vault.
 │   │   ├── dashboard_api.go             # Dashboard read-only API handlers
 │   │   ├── dashboard_actions.go         # Dashboard mutation API (sync, load, deploy)
 │   │   ├── dashboard-ui/               # React/TypeScript dashboard SPA
+│   │   ├── intel.go                      # Agent Intel (auto-lifecycle context)
 │   │   ├── generate.go                  # AI workflow generation
 │   │   ├── secrets.go                   # Secret management
 │   │   ├── expose.go                    # HTTPS tunnels
@@ -722,6 +738,7 @@ make docker-build IMG=controller:dev
 - [x] Public HTTPS tunnels for OAuth (cloudflared/ngrok)
 - [x] Live env var management without redeploying
 - [x] Crash log diagnostics in `kindling status`
+- [x] `kindling intel` — auto-configure coding agents (Copilot, Claude Code, Cursor, Windsurf)
 - [ ] `kindling export` — generate production-ready Helm chart from cluster state
 - [ ] `kindling diagnose` — LLM-powered error remediation
 - [ ] Stable callback URL relay for OAuth across tunnel reconnections

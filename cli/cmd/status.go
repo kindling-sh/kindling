@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/jeffvincent/kindling/pkg/ci"
 	"github.com/spf13/cobra"
 )
 
@@ -24,7 +23,7 @@ var statusCmd = &cobra.Command{
 var statusProvider string
 
 func init() {
-	statusCmd.Flags().StringVar(&statusProvider, "provider", "", "CI provider (github, gitlab)")
+	statusCmd.Flags().StringVar(&statusProvider, "ci-provider", "", "CI provider (github, gitlab)")
 	rootCmd.AddCommand(statusCmd)
 }
 
@@ -99,12 +98,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	}
 
 	// ── Runner Pools ────────────────────────────────────────────
-	statusProviderObj := ci.Default()
-	if statusProvider != "" {
-		if p, err := ci.Get(statusProvider); err == nil {
-			statusProviderObj = p
-		}
-	}
+	statusProviderObj, _ := resolveProvider(statusProvider)
 	labels := statusProviderObj.CLILabels()
 	header(labels.CRDListHeader)
 
@@ -229,7 +223,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-// ── Agent Intel ─────────────────────────────────────────────
+	// ── Agent Intel ─────────────────────────────────────────────
 	header("Agent Intel")
 
 	repoRoot, repoErr := findRepoRoot()

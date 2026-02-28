@@ -3,7 +3,7 @@
 summarize.py — Generate a GitHub Actions step summary from fuzz results.
 
 Usage:
-  python3 summarize.py <results-dir> [--mode MODE] [--provider PROVIDER]
+  python3 summarize.py <results-dir> [--mode MODE] [--ai-provider PROVIDER]
 
 Writes Markdown to stdout (pipe into $GITHUB_STEP_SUMMARY).
 """

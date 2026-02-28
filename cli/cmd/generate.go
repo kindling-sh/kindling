@@ -30,9 +30,9 @@ Supports GitHub Actions and GitLab CI via --ci-provider.
 
 Examples:
   kindling generate --api-key sk-... --repo-path /path/to/my-app
-  kindling generate -k sk-... -r . --provider openai --model o3
+  kindling generate -k sk-... -r . --ai-provider openai --model o3
   kindling generate -k sk-... -r . --ci-provider gitlab
-  kindling generate -k sk-ant-... -r . --provider anthropic
+  kindling generate -k sk-ant-... -r . --ai-provider anthropic
   kindling generate -k sk-... -r . --dry-run`,
 	RunE: runGenerate,
 }
@@ -51,7 +51,7 @@ var (
 func init() {
 	generateCmd.Flags().StringVarP(&genAPIKey, "api-key", "k", "", "GenAI API key (required)")
 	generateCmd.Flags().StringVarP(&genRepoPath, "repo-path", "r", ".", "Path to the local repository to analyze")
-	generateCmd.Flags().StringVar(&genProvider, "provider", "openai", "AI provider: openai or anthropic")
+	generateCmd.Flags().StringVar(&genProvider, "ai-provider", "openai", "AI provider: openai or anthropic")
 	generateCmd.Flags().StringVar(&genModel, "model", "", "Model name (default: o3 for openai, claude-sonnet-4-20250514 for anthropic)")
 	generateCmd.Flags().StringVarP(&genOutput, "output", "o", "", "Output path (default: <repo-path>/.github/workflows/dev-deploy.yml)")
 	generateCmd.Flags().StringVarP(&genBranch, "branch", "b", "", "Branch to trigger on (default: auto-detect from git, fallback to 'main')")
@@ -81,13 +81,9 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 	}
 
 	// ── Resolve CI provider ──────────────────────────────────────
-	ciProv := ci.Default()
-	if genCIProvider != "" {
-		p, err := ci.Get(genCIProvider)
-		if err != nil {
-			return fmt.Errorf("unknown CI provider %q (available: github, gitlab)", genCIProvider)
-		}
-		ciProv = p
+	ciProv, err := resolveProvider(genCIProvider)
+	if err != nil {
+		return err
 	}
 
 	if genOutput == "" {
@@ -223,43 +219,8 @@ type repoContext struct {
 	hostArch          string   // host CPU architecture (arm64, amd64)
 }
 
-// Directories to skip during scanning.
-var scanSkipDirs = map[string]bool{
-	".git":         true,
-	"node_modules": true,
-	"vendor":       true,
-	"__pycache__":  true,
-	".venv":        true,
-	"venv":         true,
-	"env":          true,
-	".tox":         true,
-	".mypy_cache":  true,
-	".ruff_cache":  true,
-	"dist":         true,
-	"build":        true,
-	".next":        true,
-	".nuxt":        true,
-	".svelte-kit":  true,
-	"target":       true, // Rust, Java/Maven
-	".terraform":   true,
-	".idea":        true,
-	".vscode":      true,
-	".github":      true, // don't confuse the AI with existing workflows
-	"bin":          true,
-	"obj":          true, // .NET build output
-	"_output":      true,
-	".cache":       true,
-	"_build":       true, // Elixir/Mix
-	"deps":         true, // Elixir/Mix
-	"zig-cache":    true,
-	"zig-out":      true,
-	".gradle":      true,
-	".m2":          true,
-	".elixir_ls":   true,
-	"coverage":     true,
-	".nyc_output":  true,
-	"htmlcov":      true,
-}
+// Directories to skip during scanning (built from the shared skip list).
+var scanSkipDirs = skipDirSet()
 
 // Dependency manifests worth reading.
 var scanDepFiles = map[string]bool{

@@ -117,5 +117,5 @@ callback URLs accordingly, or use ngrok with a reserved subdomain for a
 stable URL:
 
 ```bash
-kindling expose --provider ngrok
+kindling expose --tunnel ngrok
 ```

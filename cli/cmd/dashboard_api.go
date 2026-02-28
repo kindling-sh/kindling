@@ -7,8 +7,84 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+)
 
-	"github.com/jeffvincent/kindling/pkg/ci"
+// ── Generic resource handlers ───────────────────────────────────
+
+// resourceHandler returns an http.HandlerFunc that fetches a Kubernetes
+// resource type via kubectl. Options control namespace filtering and error
+// behaviour. This replaces 13 near-identical handler functions.
+type resourceOpts struct {
+	// If true, reads ?namespace from the query and scopes to it, otherwise
+	// uses --all-namespaces. Cluster-scoped resources leave this false.
+	namespaced bool
+	// If true, also reads ?selector for label filtering.
+	selectable bool
+	// Extra args appended before -o json (e.g. "--sort-by=.lastTimestamp").
+	extraArgs []string
+	// If true, return {"items":[]} on error instead of a 500.
+	emptyOnError bool
+}
+
+func resourceHandler(resource string, opts resourceOpts) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		args := []string{"get", resource}
+		args = append(args, opts.extraArgs...)
+		args = append(args, "-o", "json")
+
+		if opts.namespaced {
+			if ns := r.URL.Query().Get("namespace"); ns != "" {
+				args = append(args, "-n", ns)
+			} else {
+				args = append(args, "--all-namespaces")
+			}
+		}
+		if opts.selectable {
+			if sel := r.URL.Query().Get("selector"); sel != "" {
+				args = append(args, "-l", sel)
+			}
+		}
+
+		out, err := kubectlJSON(args...)
+		if err != nil {
+			if opts.emptyOnError {
+				jsonResponse(w, map[string]interface{}{"items": []interface{}{}})
+			} else {
+				jsonError(w, "failed to get "+resource+": "+err.Error(), 500)
+			}
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, out)
+	}
+}
+
+// parsePathParams extracts path segments after a prefix.
+// e.g. parsePathParams("/api/logs/default/my-pod", "/api/logs/", 2)
+// returns ["default", "my-pod"], nil.
+func parsePathParams(path, prefix string, minCount int) ([]string, error) {
+	parts := strings.Split(strings.TrimPrefix(path, prefix), "/")
+	if len(parts) < minCount {
+		return nil, fmt.Errorf("expected at least %d path segments", minCount)
+	}
+	return parts, nil
+}
+
+// Convenience constructors used by the route table in dashboard.go.
+var (
+	handleNodes               = resourceHandler("nodes", resourceOpts{})
+	handleNamespaces          = resourceHandler("namespaces", resourceOpts{})
+	handleClusterRoles        = resourceHandler("clusterroles", resourceOpts{emptyOnError: true})
+	handleClusterRoleBindings = resourceHandler("clusterrolebindings", resourceOpts{emptyOnError: true})
+	handleDeployments         = resourceHandler("deployments", resourceOpts{namespaced: true})
+	handleServices            = resourceHandler("services", resourceOpts{namespaced: true})
+	handleIngresses           = resourceHandler("ingresses", resourceOpts{namespaced: true})
+	handleServiceAccounts     = resourceHandler("serviceaccounts", resourceOpts{namespaced: true})
+	handleRoles               = resourceHandler("roles", resourceOpts{namespaced: true, emptyOnError: true})
+	handleRoleBindings        = resourceHandler("rolebindings", resourceOpts{namespaced: true, emptyOnError: true})
+	handleReplicaSets         = resourceHandler("replicasets", resourceOpts{namespaced: true, selectable: true})
+	handlePods                = resourceHandler("pods", resourceOpts{namespaced: true, selectable: true})
+	handleEvents              = resourceHandler("events", resourceOpts{namespaced: true, emptyOnError: true, extraArgs: []string{"--sort-by=.lastTimestamp"}})
 )
 
 // ── /api/cluster — cluster overview ─────────────────────────────
@@ -24,7 +100,7 @@ func handleCluster(w http.ResponseWriter, r *http.Request) {
 
 	info := clusterInfo{
 		Name:    clusterName,
-		Context: "kind-" + clusterName,
+		Context: kindContext(),
 	}
 
 	// Check cluster exists
@@ -62,18 +138,6 @@ func handleCluster(w http.ResponseWriter, r *http.Request) {
 	}
 
 	jsonResponse(w, info)
-}
-
-// ── /api/nodes ──────────────────────────────────────────────────
-
-func handleNodes(w http.ResponseWriter, r *http.Request) {
-	out, err := kubectlJSON("get", "nodes", "-o", "json")
-	if err != nil {
-		jsonError(w, "failed to get nodes: "+err.Error(), 500)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	fmt.Fprint(w, out)
 }
 
 // ── /api/operator ───────────────────────────────────────────────
@@ -136,126 +200,11 @@ func handleDSEs(w http.ResponseWriter, r *http.Request) {
 // ── /api/runners — CIRunnerPools ──────────────────────
 
 func handleRunners(w http.ResponseWriter, r *http.Request) {
-	prov := ci.Default()
-	if pName := r.URL.Query().Get("provider"); pName != "" {
-		if p, err := ci.Get(pName); err == nil {
-			prov = p
-		}
-	}
+	prov, _ := resolveProvider(r.URL.Query().Get("ci-provider"))
 	labels := prov.CLILabels()
 	out, err := kubectlJSON("get", labels.CRDPlural, "-o", "json")
 	if err != nil {
 		jsonResponse(w, map[string]interface{}{"items": []interface{}{}})
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	fmt.Fprint(w, out)
-}
-
-// ── /api/deployments ────────────────────────────────────────────
-
-func handleDeployments(w http.ResponseWriter, r *http.Request) {
-	ns := r.URL.Query().Get("namespace")
-	args := []string{"get", "deployments", "-o", "json"}
-	if ns != "" {
-		args = append(args, "-n", ns)
-	} else {
-		args = append(args, "--all-namespaces")
-	}
-
-	out, err := kubectlJSON(args...)
-	if err != nil {
-		jsonError(w, "failed to get deployments: "+err.Error(), 500)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	fmt.Fprint(w, out)
-}
-
-// ── /api/replicasets ─────────────────────────────────────────────
-
-func handleReplicaSets(w http.ResponseWriter, r *http.Request) {
-	ns := r.URL.Query().Get("namespace")
-	labelSelector := r.URL.Query().Get("selector")
-	args := []string{"get", "replicasets", "-o", "json"}
-
-	if ns != "" {
-		args = append(args, "-n", ns)
-	} else {
-		args = append(args, "--all-namespaces")
-	}
-	if labelSelector != "" {
-		args = append(args, "-l", labelSelector)
-	}
-
-	out, err := kubectlJSON(args...)
-	if err != nil {
-		jsonError(w, "failed to get replicasets: "+err.Error(), 500)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	fmt.Fprint(w, out)
-}
-
-// ── /api/pods ───────────────────────────────────────────────────
-
-func handlePods(w http.ResponseWriter, r *http.Request) {
-	ns := r.URL.Query().Get("namespace")
-	labelSelector := r.URL.Query().Get("selector")
-	args := []string{"get", "pods", "-o", "json"}
-
-	if ns != "" {
-		args = append(args, "-n", ns)
-	} else {
-		args = append(args, "--all-namespaces")
-	}
-	if labelSelector != "" {
-		args = append(args, "-l", labelSelector)
-	}
-
-	out, err := kubectlJSON(args...)
-	if err != nil {
-		jsonError(w, "failed to get pods: "+err.Error(), 500)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	fmt.Fprint(w, out)
-}
-
-// ── /api/services ───────────────────────────────────────────────
-
-func handleServices(w http.ResponseWriter, r *http.Request) {
-	ns := r.URL.Query().Get("namespace")
-	args := []string{"get", "services", "-o", "json"}
-	if ns != "" {
-		args = append(args, "-n", ns)
-	} else {
-		args = append(args, "--all-namespaces")
-	}
-
-	out, err := kubectlJSON(args...)
-	if err != nil {
-		jsonError(w, "failed to get services: "+err.Error(), 500)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	fmt.Fprint(w, out)
-}
-
-// ── /api/ingresses ──────────────────────────────────────────────
-
-func handleIngresses(w http.ResponseWriter, r *http.Request) {
-	ns := r.URL.Query().Get("namespace")
-	args := []string{"get", "ingresses", "-o", "json"}
-	if ns != "" {
-		args = append(args, "-n", ns)
-	} else {
-		args = append(args, "--all-namespaces")
-	}
-
-	out, err := kubectlJSON(args...)
-	if err != nil {
-		jsonError(w, "failed to get ingresses: "+err.Error(), 500)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -294,133 +243,15 @@ func handleSecrets(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, secretList)
 }
 
-// ── /api/events ─────────────────────────────────────────────────
-
-func handleEvents(w http.ResponseWriter, r *http.Request) {
-	ns := r.URL.Query().Get("namespace")
-	args := []string{"get", "events", "--sort-by=.lastTimestamp", "-o", "json"}
-	if ns != "" {
-		args = append(args, "-n", ns)
-	} else {
-		args = append(args, "--all-namespaces")
-	}
-
-	out, err := kubectlJSON(args...)
-	if err != nil {
-		jsonResponse(w, map[string]interface{}{"items": []interface{}{}})
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	fmt.Fprint(w, out)
-}
-
-// ── /api/namespaces ─────────────────────────────────────────────
-
-func handleNamespaces(w http.ResponseWriter, r *http.Request) {
-	out, err := kubectlJSON("get", "namespaces", "-o", "json")
-	if err != nil {
-		jsonError(w, "failed to get namespaces: "+err.Error(), 500)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	fmt.Fprint(w, out)
-}
-
-// ── /api/serviceaccounts ────────────────────────────────────────
-
-func handleServiceAccounts(w http.ResponseWriter, r *http.Request) {
-	ns := r.URL.Query().Get("namespace")
-	args := []string{"get", "serviceaccounts", "-o", "json"}
-	if ns != "" {
-		args = append(args, "-n", ns)
-	} else {
-		args = append(args, "--all-namespaces")
-	}
-
-	out, err := kubectlJSON(args...)
-	if err != nil {
-		jsonError(w, "failed to get serviceaccounts: "+err.Error(), 500)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	fmt.Fprint(w, out)
-}
-
-// ── /api/roles ──────────────────────────────────────────────────
-
-func handleRoles(w http.ResponseWriter, r *http.Request) {
-	ns := r.URL.Query().Get("namespace")
-	args := []string{"get", "roles", "-o", "json"}
-	if ns != "" {
-		args = append(args, "-n", ns)
-	} else {
-		args = append(args, "--all-namespaces")
-	}
-
-	out, err := kubectlJSON(args...)
-	if err != nil {
-		jsonResponse(w, map[string]interface{}{"items": []interface{}{}})
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	fmt.Fprint(w, out)
-}
-
-// ── /api/rolebindings ───────────────────────────────────────────
-
-func handleRoleBindings(w http.ResponseWriter, r *http.Request) {
-	ns := r.URL.Query().Get("namespace")
-	args := []string{"get", "rolebindings", "-o", "json"}
-	if ns != "" {
-		args = append(args, "-n", ns)
-	} else {
-		args = append(args, "--all-namespaces")
-	}
-
-	out, err := kubectlJSON(args...)
-	if err != nil {
-		jsonResponse(w, map[string]interface{}{"items": []interface{}{}})
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	fmt.Fprint(w, out)
-}
-
-// ── /api/clusterroles ───────────────────────────────────────────
-
-func handleClusterRoles(w http.ResponseWriter, r *http.Request) {
-	out, err := kubectlJSON("get", "clusterroles", "-o", "json")
-	if err != nil {
-		jsonResponse(w, map[string]interface{}{"items": []interface{}{}})
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	fmt.Fprint(w, out)
-}
-
-// ── /api/clusterrolebindings ────────────────────────────────────
-
-func handleClusterRoleBindings(w http.ResponseWriter, r *http.Request) {
-	out, err := kubectlJSON("get", "clusterrolebindings", "-o", "json")
-	if err != nil {
-		jsonResponse(w, map[string]interface{}{"items": []interface{}{}})
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	fmt.Fprint(w, out)
-}
-
 // ── /api/logs/{namespace}/{pod} ─────────────────────────────────
 
 func handleLogs(w http.ResponseWriter, r *http.Request) {
-	// URL format: /api/logs/{namespace}/{pod}
-	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/logs/"), "/")
-	if len(parts) < 2 {
+	parts, err := parsePathParams(r.URL.Path, "/api/logs/", 2)
+	if err != nil {
 		jsonError(w, "usage: /api/logs/{namespace}/{pod}", 400)
 		return
 	}
-	ns := parts[0]
-	pod := parts[1]
+	ns, pod := parts[0], parts[1]
 	container := r.URL.Query().Get("container")
 	tail := r.URL.Query().Get("tail")
 	if tail == "" {
@@ -446,8 +277,8 @@ func handleLogs(w http.ResponseWriter, r *http.Request) {
 // container and returns whether hot-sync is supported.
 
 func handleRuntimeDetect(w http.ResponseWriter, r *http.Request) {
-	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/runtime/"), "/")
-	if len(parts) < 2 {
+	parts, err := parsePathParams(r.URL.Path, "/api/runtime/", 2)
+	if err != nil {
 		jsonError(w, "usage: /api/runtime/{namespace}/{deployment}", 400)
 		return
 	}

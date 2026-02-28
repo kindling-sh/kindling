@@ -128,7 +128,7 @@ The only custom env vars are inter-service references:
 
 The included workflow uses the **reusable kindling actions** — each
 build step is a single `uses:` call. For GitLab, run
-`kindling generate --provider gitlab` to produce an equivalent `.gitlab-ci.yml`.
+`kindling generate --ci-provider gitlab` to produce an equivalent `.gitlab-ci.yml`.
 
 ```yaml
 # Simplified — see .github/workflows/dev-deploy.yml for the full file

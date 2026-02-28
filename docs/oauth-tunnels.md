@@ -163,12 +163,12 @@ The AI also adds a comment to the generated workflow:
 
 | Flag | Default | Description |
 |---|---|---|
-| `--provider` | auto-detect | `cloudflared` or `ngrok` |
+| `--tunnel` | auto-detect | `cloudflared` or `ngrok` |
 | `--port` | `80` | Local port to expose |
 
 ### Auto-detection priority
 
-If `--provider` is not specified, kindling checks for available binaries:
+If `--tunnel` is not specified, kindling checks for available binaries:
 1. `cloudflared` (preferred — free, no account)
 2. `ngrok`
 

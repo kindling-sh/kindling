@@ -54,7 +54,8 @@ function HeroSection() {
           <p className={styles.heroDescription}>
             A free and open-source Kubernetes operator that turns your laptop into a personal CI/CD
             environment. Push to GitHub or GitLab, build locally via Kaniko, deploy
-            ephemeral staging environments — all on localhost, in seconds.
+            ephemeral staging environments — all on localhost, in seconds. Agent Intel
+            auto-configures your coding agent with full project context.
           </p>
           <InstallCommand />
           <div className={styles.heroButtons}>
@@ -93,6 +94,13 @@ function HeroSection() {
                 {"  "}✅ Controller is running{"\n"}
                 {"\n"}
                 {"  "}🎉 kindling is ready!
+              </span>
+              {"\n\n"}
+              <span className={styles.termPrompt}>$</span> kindling intel on
+              {"\n"}
+              <span className={styles.termDim}>
+                {"  "}🧠 Agent intel activated{"\n"}
+                {"  "}✅ GitHub Copilot, Claude Code, Cursor, Windsurf
               </span>
               {"\n\n"}
               <span className={styles.termPrompt}>$</span> kindling generate -k
@@ -138,6 +146,12 @@ const features: FeatureItem[] = [
     title: "AI-Generated Workflows",
     description:
       "Point kindling generate at any repo. It scans Dockerfiles, docker-compose, Helm charts, and source code, then produces a complete GitHub Actions or GitLab CI workflow.",
+  },
+  {
+    emoji: "🧠",
+    title: "Agent Intel",
+    description:
+      "kindling intel auto-configures GitHub Copilot, Claude Code, Cursor, and Windsurf with full project context. Activates on any command, restores originals when you're done.",
   },
   {
     emoji: "📦",
@@ -265,7 +279,7 @@ kindling init
 # Register a CI runner (GitHub or GitLab)
 kindling runners -u <user> \\
   -r <owner/repo> -t <pat>
-# or: kindling runners --provider gitlab \\
+# or: kindling runners --ci-provider gitlab \\
 #   -u <user> -r <group/project> -t <token>
 
 # AI-generate a workflow for your app

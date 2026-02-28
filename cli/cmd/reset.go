@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/jeffvincent/kindling/cli/core"
-	"github.com/jeffvincent/kindling/pkg/ci"
 	"github.com/spf13/cobra"
 )
 
@@ -30,7 +29,7 @@ var (
 
 func init() {
 	resetCmd.Flags().BoolVarP(&resetForce, "force", "y", false, "Skip confirmation prompt")
-	resetCmd.Flags().StringVar(&resetProvider, "provider", "", "CI provider (github, gitlab)")
+	resetCmd.Flags().StringVar(&resetProvider, "ci-provider", "", "CI provider (github, gitlab)")
 	rootCmd.AddCommand(resetCmd)
 }
 
@@ -43,13 +42,9 @@ func runReset(cmd *cobra.Command, args []string) error {
 	}
 
 	// ── Resolve provider ─────────────────────────────────────────
-	provider := ci.Default()
-	if resetProvider != "" {
-		p, err := ci.Get(resetProvider)
-		if err != nil {
-			return fmt.Errorf("unknown provider %q (available: github, gitlab)", resetProvider)
-		}
-		provider = p
+	provider, err := resolveProvider(resetProvider)
+	if err != nil {
+		return err
 	}
 	labels := provider.CLILabels()
 

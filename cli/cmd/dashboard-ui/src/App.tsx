@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react';
 import type { ReactNode } from 'react';
 import { ToastProvider, ActionModal, ConfirmDialog, useToast, ResultOutput } from './pages/actions';
-import { useApi, apiPost, apiDelete, fetchExposeStatus, streamInit } from './api';
-import type { ActionResult } from './api';
+import { useApi, apiPost, apiDelete, fetchExposeStatus, streamInit, streamGenerate } from './api';
+import type { ActionResult, GenerateResult } from './api';
 import { OverviewPage } from './pages/OverviewPage';
 import { DSEPage } from './pages/DSEPage';
 import { RunnersPage } from './pages/RunnersPage';
@@ -158,6 +158,13 @@ function CommandMenu({ onClose, onAction }: {
               <div className="cmd-item-desc">Run kubectl apply with raw YAML</div>
             </span>
           </button>
+          <button className="cmd-item" onClick={() => onAction('generate')}>
+            <span className="cmd-item-icon i-cyan">✦</span>
+            <span className="cmd-item-text">
+              <div className="cmd-item-label">Generate Workflow</div>
+              <div className="cmd-item-desc">AI-generate a CI workflow from your repo</div>
+            </span>
+          </button>
         </div>
 
         <div className="cmd-menu-group">
@@ -290,6 +297,13 @@ function AppSidebar({ activePage, setActivePage }: { activePage: Page; setActive
 
   // ── expose / tunnel ───────────────────────────────
   const [tunnelStatus, setTunnelStatus] = useState<{ running: boolean; url?: string; dns_ready?: boolean } | null>(null);
+
+  // ── generate workflow ─────────────────────────────
+  const [showGenerate, setShowGenerate] = useState(false);
+  const [generateRunning, setGenerateRunning] = useState(false);
+  const [generateMessages, setGenerateMessages] = useState<string[]>([]);
+  const [generateResult, setGenerateResult] = useState<GenerateResult | null>(null);
+  const [generateForm, setGenerateForm] = useState({ apiKey: '', provider: 'openai', model: '', ciProvider: 'github', branch: '' });
   useEffect(() => {
     fetchExposeStatus().then(setTunnelStatus).catch(() => {});
     const interval = setInterval(() => {
@@ -320,6 +334,7 @@ function AppSidebar({ activePage, setActivePage }: { activePage: Page; setActive
       case 'expose': setShowExpose(true); break;
       case 'secret': setShowSecret(true); break;
       case 'runner': setShowRunner(true); break;
+      case 'generate': setShowGenerate(true); break;
     }
   }
 
@@ -412,6 +427,26 @@ function AppSidebar({ activePage, setActivePage }: { activePage: Page; setActive
     const result = await apiDelete('/api/cluster/destroy');
     if (result.ok) toast('Cluster destroyed', 'success');
     else toast(result.error || 'Destroy failed', 'error');
+  }
+
+  async function handleGenerate() {
+    setGenerateRunning(true);
+    setGenerateMessages([]);
+    setGenerateResult(null);
+    const result = await streamGenerate(
+      {
+        apiKey: generateForm.apiKey,
+        provider: generateForm.provider || undefined,
+        model: generateForm.model || undefined,
+        ciProvider: generateForm.ciProvider || undefined,
+        branch: generateForm.branch || undefined,
+      },
+      (msg) => setGenerateMessages((m) => [...m, msg]),
+    );
+    setGenerateResult(result);
+    setGenerateRunning(false);
+    if (result.ok) toast(result.output || 'Workflow generated', 'success');
+    else toast(result.error || 'Generation failed', 'error');
   }
 
   return (
@@ -542,6 +577,87 @@ function AppSidebar({ activePage, setActivePage }: { activePage: Page; setActive
           <label className="form-label">GitHub PAT</label>
           <input className="form-input" type="password" placeholder="ghp_..." value={runnerForm.token} onChange={(e) => setRunnerForm({ ...runnerForm, token: e.target.value })} />
         </ActionModal>
+      )}
+
+      {/* ── Generate Workflow modal ────── */}
+      {showGenerate && (
+        <div className="modal-overlay" onClick={generateRunning ? undefined : () => setShowGenerate(false)}>
+          <div className="modal modal-wide" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Generate CI Workflow</h3>
+              {!generateRunning && <button className="panel-close" onClick={() => setShowGenerate(false)}>✕</button>}
+            </div>
+            <div className="modal-body">
+              {!generateRunning && !generateResult && (
+                <>
+                  <label className="form-label">API Key <span style={{ color: 'var(--danger)' }}>*</span></label>
+                  <input className="form-input" type="password" placeholder="sk-..." value={generateForm.apiKey} onChange={(e) => setGenerateForm({ ...generateForm, apiKey: e.target.value })} />
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 4 }}>
+                    <div>
+                      <label className="form-label">AI Provider</label>
+                      <select className="form-input" value={generateForm.provider} onChange={(e) => setGenerateForm({ ...generateForm, provider: e.target.value })}>
+                        <option value="openai">OpenAI</option>
+                        <option value="anthropic">Anthropic</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="form-label">Model <span style={{ color: 'var(--text-tertiary)', fontSize: 11 }}>(optional)</span></label>
+                      <input className="form-input" placeholder={generateForm.provider === 'anthropic' ? 'claude-sonnet-4-20250514' : 'o3'} value={generateForm.model} onChange={(e) => setGenerateForm({ ...generateForm, model: e.target.value })} />
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 4 }}>
+                    <div>
+                      <label className="form-label">CI Provider</label>
+                      <select className="form-input" value={generateForm.ciProvider} onChange={(e) => setGenerateForm({ ...generateForm, ciProvider: e.target.value })}>
+                        <option value="github">GitHub Actions</option>
+                        <option value="gitlab">GitLab CI</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="form-label">Branch <span style={{ color: 'var(--text-tertiary)', fontSize: 11 }}>(auto-detect)</span></label>
+                      <input className="form-input" placeholder="main" value={generateForm.branch} onChange={(e) => setGenerateForm({ ...generateForm, branch: e.target.value })} />
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {(generateMessages.length > 0 || generateResult) && (
+                <div style={{ marginTop: generateRunning || generateResult ? 0 : 12 }}>
+                  <div className="log-viewer" style={{ marginBottom: 12 }}>
+                    <pre className="log-output">{generateMessages.map((m, i) => <div key={i}>{m}</div>)}</pre>
+                  </div>
+                  <ResultOutput result={generateResult} />
+                  {generateResult?.workflow && (
+                    <details style={{ marginTop: 8 }}>
+                      <summary style={{ cursor: 'pointer', color: 'var(--text-secondary)', fontSize: 13 }}>View generated workflow</summary>
+                      <pre className="log-output" style={{ marginTop: 8, maxHeight: 300, overflow: 'auto', fontSize: 11 }}>{generateResult.workflow}</pre>
+                    </details>
+                  )}
+                </div>
+              )}
+
+              {generateRunning && generateMessages.length === 0 && (
+                <p style={{ color: 'var(--text-tertiary)' }}>Scanning repository…</p>
+              )}
+            </div>
+            <div className="modal-footer">
+              {!generateRunning && !generateResult && (
+                <button className="btn btn-primary" disabled={!generateForm.apiKey} onClick={handleGenerate}>Generate</button>
+              )}
+              {!generateRunning && (
+                <button className="btn" onClick={() => {
+                  setShowGenerate(false);
+                  setGenerateMessages([]);
+                  setGenerateResult(null);
+                }}>
+                  {generateResult ? 'Close' : 'Cancel'}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
       )}
 
       {/* ── Init progress modal ──────────── */}

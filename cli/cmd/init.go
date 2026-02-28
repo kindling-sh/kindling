@@ -126,7 +126,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 	}
 
 	// ── Set kubectl context ─────────────────────────────────────
-	ctx := fmt.Sprintf("kind-%s", clusterName)
+	ctx := kindContext()
 	step("🔗", fmt.Sprintf("Switching kubectl context to %s", ctx))
 	if err := run("kubectl", "cluster-info", "--context", ctx); err != nil {
 		return fmt.Errorf("cannot reach cluster %q: %w", ctx, err)

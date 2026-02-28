@@ -138,7 +138,7 @@ kindling runners [flags]
 | `--username` | `-u` | — | CI platform username |
 | `--repo` | `-r` | — | Repository — `owner/repo` (GitHub) or `group/project` (GitLab) |
 | `--token` | `-t` | — | Personal Access Token or runner registration token |
-| `--provider` | | `github` | CI provider: `github` or `gitlab` |
+| `--ci-provider` | | `github` | CI provider: `github` or `gitlab` |
 
 **Examples:**
 
@@ -150,7 +150,7 @@ kindling runners
 kindling runners -u myuser -r myorg/myrepo -t ghp_xxxxx
 
 # GitLab CI
-kindling runners --provider gitlab -u myuser -r mygroup/myproject -t glpat_xxxxx
+kindling runners --ci-provider gitlab -u myuser -r mygroup/myproject -t glpat_xxxxx
 ```
 
 ---
@@ -177,7 +177,7 @@ kindling generate [flags]
 |---|---|---|---|
 | `--api-key` | `-k` | — (required) | GenAI API key |
 | `--repo-path` | `-r` | `.` | Path to the local repository to analyze |
-| `--provider` | | `openai` | AI provider: `openai` or `anthropic` |
+| `--ai-provider` | | `openai` | AI provider: `openai` or `anthropic` |
 | `--model` | | auto | Model name (default: `o3` for openai, `claude-sonnet-4-20250514` for anthropic). Supports OpenAI reasoning models (`o3`, `o3-mini`) which use the `developer` role and extended thinking. |
 | `--output` | `-o` | `<repo>/.github/workflows/dev-deploy.yml` | Output path for the workflow file |
 | `--dry-run` | | `false` | Print the generated workflow to stdout instead of writing a file |
@@ -207,7 +207,7 @@ kindling generate -k sk-... -r . --model gpt-4o
 kindling generate -k sk-... -r . --model o3-mini
 
 # Use Anthropic
-kindling generate -k sk-ant-... -r . --provider anthropic
+kindling generate -k sk-ant-... -r . --ai-provider anthropic
 
 # Preview without writing
 kindling generate -k sk-... -r . --dry-run
@@ -444,7 +444,7 @@ kindling expose [flags]
 
 | Flag | Default | Description |
 |---|---|---|
-| `--provider` | auto-detect | Tunnel provider: `cloudflared` or `ngrok` |
+| `--tunnel` | auto-detect | Tunnel provider: `cloudflared` or `ngrok` |
 | `--port` | `80` | Local port to expose |
 | `--stop` | `false` | Stop a running tunnel and restore original ingress configuration |
 | `--service` | — | Ingress name to route tunnel traffic to |
@@ -457,6 +457,50 @@ kindling expose
 
 # Stop the tunnel and restore ingresses
 kindling expose --stop
+```
+
+---
+
+### `kindling intel`
+
+Manage coding agent context. Automatically configures GitHub Copilot, Claude Code, Cursor, and Windsurf with full kindling project context.
+
+```
+kindling intel <subcommand>
+```
+
+**Subcommands:**
+
+| Subcommand | Description |
+|---|---|
+| `on` | Activate intel — writes context files and clears any disable flag |
+| `off` | Restore original agent configs and disable auto-activation |
+| `status` | Show whether intel is active, which files are managed, and last interaction time |
+
+:::info Auto-lifecycle
+Intel activates automatically on any `kindling` command. After 1 hour of inactivity, the next command restores originals before re-activating with fresh context. Use `kindling intel off` to disable this behavior.
+:::
+
+**Supported agents:**
+
+| Agent | Config file |
+|---|---|
+| GitHub Copilot | `.github/copilot-instructions.md` |
+| Claude Code | `CLAUDE.md` |
+| Cursor | `.cursor/rules/kindling.mdc` |
+| Windsurf | `.windsurfrules` |
+
+**Examples:**
+
+```bash
+# Activate for all detected agents
+kindling intel on
+
+# Check what's active
+kindling intel status
+
+# Restore originals and disable auto-activation
+kindling intel off
 ```
 
 ---
@@ -551,7 +595,7 @@ kindling version
 ## Typical workflow
 
 ```bash
-# 1. Bootstrap everything
+# 1. Bootstrap everything (intel auto-activates here)
 kindling init
 
 # 2. Restore secrets from a previous cluster (if any)
