@@ -21,65 +21,103 @@ curl -sL https://kindling.dev/install | sh
 Detect OS + arch, download the right binary from GitHub Releases, drop it in
 `/usr/local/bin`. Should also work in Dockerfiles and GitHub Actions runners.
 
-### 3-minute quickstart guarantee
+### ✅ Interactive ingress selection in `kindling generate`
 
-Time the quickstart end-to-end. If it takes longer than 3 minutes, cut steps.
-Put the time in the README: "From zero to a deployed app in under 3 minutes."
-
-- Pre-bake more defaults so fewer flags are required
-- Detect GitHub remote from `.git/config` to skip `--repo` flag
-- Auto-detect GitHub username from `gh auth status` or git config
-
-### README hero demo
-
-Add a screen-recording GIF or hosted demo to the README so people can see
-kindling working before they commit to installing it. First impression matters
-more than anything else on a GitHub repo page.
-
-### Harden `kindling generate` (wild-repo fuzz testing)
-
-`kindling generate` is the first thing a new user will run on their own repo.
-If it crashes, spits out invalid YAML, or silently produces garbage, that's
-the last time they use kindling. This has to be solid *before* Show HN.
-
-Clone a large corpus of real-world repos, run `kindling generate` against each
-one, and record structured results to surface failure modes.
-
-**Per-repo result record:**
-
-| Field | Description |
-|---|---|
-| `repo` | GitHub URL |
-| `language` | Primary language (from GitHub API) |
-| `size_kb` | Repo size |
-| `has_dockerfile` | Whether a Dockerfile exists |
-| `services_detected` | Number of services `generate` found |
-| `exit_code` | `kindling generate` exit code |
-| `dse_valid` | Whether a valid `dev-environment.yaml` was produced |
-| `workflow_valid` | Whether the generated workflow YAML parses |
-| `failure_category` | `no_dockerfile`, `env_parse_error`, `unsupported_lang`, `crash`, `timeout`, etc. |
-
-**Repo selection strategy:**
-- GitHub trending repos across top 10–15 languages
-- Repos with a `Dockerfile` (most relevant)
-- Repos with `docker-compose.yml` (multi-service)
-- Monorepos with multiple services in subdirectories
-- Long-tail languages (should never crash, even if generate can't help)
-
-**Quality gates (must hit before going public):**
-- ≤15% crash rate — every failure is a clean error message, never a panic
-- ≥80% success rate on repos that already have a Dockerfile
-- Top 10 failure modes identified and fixed
-
-### Interactive ingress selection in `kindling generate`
+**Status: Implemented on `feat/topology-editor`**
 
 During `kindling generate`, after discovering all services in a multi-service
-repo, prompt the user to select which services should get ingress routes instead
-of trying to auto-detect user-facing services. Present a checklist of discovered
-services and let the developer pick.
+repo, the user is prompted to select which services should get ingress routes.
+`--ingress-all` flag available for non-interactive / CI usage.
 
-For non-interactive / CI usage, add a `--ingress-all` flag that wires up every
-service with a default ingress route.
+### Make `generate` multi-agent-aware
+
+Every major multi-agent framework (OpenAI Agents SDK, LangGraph, CrewAI,
+AutoGen, Claude Agent SDK) produces the same deployment topology: a few
+Python/Node services + Postgres/Redis/message-queue + API keys. Kindling
+is already built for exactly this — `generate` just needs to detect the
+patterns automatically.
+
+**Detection rules to add:**
+
+| Signal | What to emit |
+|---|---|
+| `mcp.json` or MCP server entry points | First-class service (MCP servers are small Python/Node HTTP/stdio services) |
+| `langchain`, `llama_index`, `chromadb`, `pgvector` imports | Add `postgres` dependency (pgvector) or flag vector store need |
+| Celery workers, Kafka/RabbitMQ consumers | Separate worker deployments (not just dependencies) |
+| Inter-service HTTP calls in source | Auto-configure service names and ports |
+| High secrets density (multiple `*_API_KEY` env vars) | Surface all detected secrets upfront in generate output |
+
+**Multi-agent framework detection:**
+
+When `generate` sees imports from known agent frameworks, it should:
+
+1. Detect the orchestration pattern (supervisor, swarm, pipeline)
+2. Emit one service per logical agent/worker when they have separate
+   entry points
+3. Wire up the right message broker dependency (Redis for simple
+   handoffs, RabbitMQ/Kafka for queue-based architectures)
+4. Set up inter-service networking (K8s Service DNS names)
+
+**Frameworks to detect:** `crewai`, `langgraph`, `autogen`,
+`openai.agents` (Agents SDK), `anthropic` (Claude Agent SDK),
+`langchain`, `llama_index`, `strands`
+
+**Priority:** This is a P0 because multi-agent apps are the primary
+use case. If `generate` doesn't understand agent architectures, users
+have to manually configure the most complex deployment topology — which
+is exactly the pain point kindling exists to eliminate.
+
+### Support concurrent `kindling sync` sessions
+
+The orchestrator-worker pattern means a developer (or their coding agent)
+might be editing 3 services simultaneously. Today `kindling sync` targets
+one deployment at a time. Add:
+
+- `kindling sync --all` — watch and sync all services with Dockerfiles
+  in the repo
+- Multiple concurrent sync sessions without conflicts
+- Aggregated output showing which service got which file change
+
+### MCP server detection in `generate`
+
+Model Context Protocol is becoming the standard for giving agents tools.
+MCP servers are small Python or Node HTTP/stdio services. `kindling
+generate` should detect `mcp.json`, `mcp.config.json`, or MCP server
+entry points (`@mcp.tool()` decorators, `StdioServerTransport` usage)
+and treat them as first-class services in the DSE, not ignored files.
+
+### Vector store dependency detection
+
+RAG is in every multi-agent stack. When `generate` sees imports from
+`chromadb`, `pgvector`, `pinecone`, `weaviate`, `qdrant`, or
+`llama_index` vector store modules, it should:
+
+- Add `postgres` dependency with a note about pgvector extension
+- Or flag the specific vector DB as a dependency
+- Detect `OPENAI_API_KEY`, `PINECONE_API_KEY`, etc. and surface them
+  in the secrets detection output
+
+### Background workers as first-class deployments
+
+Celery workers, Kafka consumers, RabbitMQ subscribers, and async task
+processors are first-class agents in multi-agent architectures — not
+afterthoughts. `generate` should:
+
+- Detect `celery -A`, `celery worker`, Kafka consumer groups, AMQP
+  subscribers in Procfiles, docker-compose, or source code
+- Emit separate deployments for workers (not just the dependency)
+- Wire up the correct broker dependency (`redis`, `rabbitmq`, `kafka`)
+  alongside the worker deployment
+
+### Inter-service networking validation
+
+Multi-agent handoff and A2A patterns mean services call each other over
+HTTP. Kindling already wires up K8s Services, but `generate` should:
+
+- Scan for `requests.get("http://service-name")`, `fetch()` calls,
+  gRPC channel targets in source code
+- Auto-configure matching K8s Service DNS names and ports
+- Warn when a service references another service that isn't in the DSE
 
 ### ✅ Agent context — `kindling intel`
 
@@ -219,6 +257,50 @@ to it: *"For detailed CI generation rules, see `.kindling/generate-rules.md`."*
 The tool can be perfect and nobody will use it if they don't know it exists.
 Content is the growth engine.
 
+### 3-minute quickstart guarantee
+
+Time the quickstart end-to-end. If it takes longer than 3 minutes, cut steps.
+Put the time in the README: "From zero to a deployed app in under 3 minutes."
+
+- Pre-bake more defaults so fewer flags are required
+- Detect GitHub remote from `.git/config` to skip `--repo` flag
+- Auto-detect GitHub username from `gh auth status` or git config
+
+### Harden `kindling generate` (wild-repo fuzz testing)
+
+`kindling generate` is the first thing a new user will run on their own repo.
+If it crashes, spits out invalid YAML, or silently produces garbage, that's
+the last time they use kindling. This has to be solid *before* Show HN.
+
+Clone a large corpus of real-world repos, run `kindling generate` against each
+one, and record structured results to surface failure modes.
+
+**Per-repo result record:**
+
+| Field | Description |
+|---|---|
+| `repo` | GitHub URL |
+| `language` | Primary language (from GitHub API) |
+| `size_kb` | Repo size |
+| `has_dockerfile` | Whether a Dockerfile exists |
+| `services_detected` | Number of services `generate` found |
+| `exit_code` | `kindling generate` exit code |
+| `dse_valid` | Whether a valid `dev-environment.yaml` was produced |
+| `workflow_valid` | Whether the generated workflow YAML parses |
+| `failure_category` | `no_dockerfile`, `env_parse_error`, `unsupported_lang`, `crash`, `timeout`, etc. |
+
+**Repo selection strategy:**
+- GitHub trending repos across top 10–15 languages
+- Repos with a `Dockerfile` (most relevant)
+- Repos with `docker-compose.yml` (multi-service)
+- Monorepos with multiple services in subdirectories
+- Long-tail languages (should never crash, even if generate can't help)
+
+**Quality gates (must hit before going public):**
+- ≤15% crash rate — every failure is a clean error message, never a panic
+- ≥80% success rate on repos that already have a Dockerfile
+- Top 10 failure modes identified and fixed
+
 ### Show HN
 
 Submit a "Show HN" post. Polish the README and demo first. This is a
@@ -325,11 +407,17 @@ Medium.
 
 ---
 
-## P2 — More example apps (every framework = a new audience)
+## P2 — More example apps & marketing assets
 
 Each example app gives a different language community a reason to discover
 kindling. A Rails developer won't try kindling until they see a Rails example.
 A Spring Boot developer won't try it until they see a Java example.
+
+### README hero demo
+
+Add a screen-recording GIF or hosted demo to the README so people can see
+kindling working before they commit to installing it. First impression matters
+more than anything else on a GitHub repo page.
 
 - [ ] **Rails** example app (Ruby ecosystem — huge community, lots of Docker adoption)
 - [ ] **Django** example app (Python ecosystem — massive, underserved by local K8s tools)
