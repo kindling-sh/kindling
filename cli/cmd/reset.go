@@ -23,10 +23,14 @@ After reset, run runners again to register a runner for a different repo:
 	RunE: runReset,
 }
 
-var resetForce bool
+var (
+	resetForce    bool
+	resetProvider string
+)
 
 func init() {
 	resetCmd.Flags().BoolVarP(&resetForce, "force", "y", false, "Skip confirmation prompt")
+	resetCmd.Flags().StringVar(&resetProvider, "provider", "", "CI provider (github, gitlab)")
 	rootCmd.AddCommand(resetCmd)
 }
 
@@ -38,8 +42,19 @@ func runReset(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
+	// ── Resolve provider ─────────────────────────────────────────
+	provider := ci.Default()
+	if resetProvider != "" {
+		p, err := ci.Get(resetProvider)
+		if err != nil {
+			return fmt.Errorf("unknown provider %q (available: github, gitlab)", resetProvider)
+		}
+		provider = p
+	}
+	labels := provider.CLILabels()
+
 	// ── Find existing runner pools ──────────────────────────────
-	poolsOut, err := core.ListRunnerPools(clusterName)
+	poolsOut, err := core.ListRunnerPools(clusterName, resetProvider)
 	if err != nil || strings.TrimSpace(poolsOut) == "" {
 		warn("No runner pools found — nothing to reset")
 		return nil
@@ -67,10 +82,9 @@ func runReset(cmd *cobra.Command, args []string) error {
 	}
 
 	// ── Delete all runner pool CRs ─────────────────────────────
-	labels := ci.Default().CLILabels()
-	step("🗑️ ", fmt.Sprintf("Deleting %s CRs", labels.CRDKind))
+	step("🗑️ ", fmt.Sprintf("Deleting %s runner pools", provider.DisplayName()))
 	step("🔑", fmt.Sprintf("Removing %s secret", labels.SecretName))
-	outputs, _ := core.ResetRunners(clusterName, "default")
+	outputs, _ := core.ResetRunners(clusterName, "default", resetProvider)
 	for _, o := range outputs {
 		success(o)
 	}
@@ -79,7 +93,7 @@ func runReset(cmd *cobra.Command, args []string) error {
 	step("⏳", "Waiting for runner pods to terminate...")
 	for i := 0; i < 30; i++ {
 		out, err := runSilent("kubectl", "get", "pods",
-			"-l", "app.kubernetes.io/component=github-actions-runner",
+			"-l", "app.kubernetes.io/component="+labels.RunnerComponent,
 			"--no-headers", "--ignore-not-found")
 		if err != nil || strings.TrimSpace(out) == "" {
 			break

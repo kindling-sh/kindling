@@ -34,7 +34,7 @@ Creates a local Kubernetes cluster with an in-cluster container registry, ingres
 cp -r ~/.kindling/examples/microservices ~/kindling-demo
 ```
 
-This gives you a working 4-service app (API gateway, orders service, inventory service, React UI) with Postgres, Redis, and MongoDB — plus a pre-built GitHub Actions workflow. No AI key needed.
+This gives you a working 4-service app (API gateway, orders service, inventory service, React UI) with Postgres, Redis, and MongoDB — plus a pre-built GitHub Actions workflow (or run `kindling generate --provider gitlab` for GitLab CI). No AI key needed.
 
 ## Create a repo and push
 
@@ -46,13 +46,25 @@ gh repo create kindling-demo --private --source . --push
 
 ## Connect the runner
 
+kindling supports **GitHub Actions** and **GitLab CI**.
+
+### GitHub
+
 You need a [GitHub Personal Access Token](https://github.com/settings/tokens) with the **repo** scope.
 
 ```bash
 kindling runners -u <github-user> -r <github-user>/kindling-demo -t <pat>
 ```
 
-This registers a self-hosted GitHub Actions runner in your cluster, bound to your repo. Push a change to trigger a build:
+### GitLab
+
+You need a [GitLab runner registration token](https://docs.gitlab.com/ee/ci/runners/) for your project.
+
+```bash
+kindling runners --provider gitlab -u <gitlab-user> -r <group>/kindling-demo -t <token>
+```
+
+This registers a self-hosted CI runner in your cluster, bound to your repo. Push a change to trigger a build:
 
 ```bash
 git commit --allow-empty -m "trigger build" && git push
@@ -88,10 +100,10 @@ Once you've seen the demo, point kindling at your own repo:
 kindling generate -k <openai-api-key> -r /path/to/your-app
 ```
 
-Scans your repo — Dockerfiles, docker-compose, Helm charts, source code — and writes a complete `.github/workflows/dev-deploy.yml` using AI.
+Scans your repo — Dockerfiles, docker-compose, Helm charts, source code — and writes a complete CI workflow using AI (`.github/workflows/dev-deploy.yml` for GitHub, `.gitlab-ci.yml` for GitLab).
 
 :::note
-Works with OpenAI (default) or Anthropic (`--provider anthropic`). Your app needs a working Dockerfile.
+Works with OpenAI (default) or Anthropic (`--provider anthropic`). Use `--provider gitlab` for GitLab CI workflows. Your app needs a working Dockerfile.
 :::
 
 ---
@@ -99,12 +111,12 @@ Works with OpenAI (default) or Anthropic (`--provider anthropic`). Your app need
 ## What just happened?
 
 ```
-brew install → kindling init → cp demo → gh repo create → git push → app running
+brew install → kindling init → cp demo → create repo → git push → app running
      ↓              ↓              ↓            ↓               ↓           ↓
-  CLI + deps    K8s cluster    Demo app    GitHub repo     Local build   localhost
+  CLI + deps    K8s cluster    Demo app    Git repo      Local build   localhost
 ```
 
-Every subsequent `git push` rebuilds and redeploys automatically. No cloud CI minutes. No Docker Hub. No YAML by hand.
+Every subsequent `git push` rebuilds and redeploys automatically. No cloud CI minutes. No Docker Hub. No YAML by hand. Works with GitHub and GitLab.
 
 ---
 

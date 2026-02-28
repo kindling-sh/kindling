@@ -75,17 +75,29 @@ This creates a Kind cluster named `dev` with:
 
 ## Step 4 — Register a CI runner
 
-kindling currently uses GitHub Actions. You need a GitHub Personal Access Token (PAT) with the `repo` scope.
+kindling supports **GitHub Actions** and **GitLab CI**. You need a personal access token for your platform.
+
+### GitHub Actions
+
+You need a [GitHub PAT](https://github.com/settings/tokens) with the **repo** scope.
 
 ```bash
 kindling runners -u <your-github-username> -r <owner/repo> -t <your-pat>
 ```
 
+### GitLab CI
+
+You need a [GitLab runner registration token](https://docs.gitlab.com/ee/ci/runners/) for your project.
+
+```bash
+kindling runners --provider gitlab -u <your-gitlab-username> -r <group/project> -t <your-token>
+```
+
 Verify the runner is registered:
 
 ```bash
-kubectl get githubactionrunnerpools
-kubectl get pods -l app.kubernetes.io/managed-by=githubactionrunnerpool-operator
+kubectl get cirunnerpools
+kubectl get pods -l app.kubernetes.io/managed-by=cirunnerpool-operator
 ```
 
 You should also see it listed under your repo's **Settings → Actions → Runners**.
@@ -379,5 +391,5 @@ kindling destroy -y
 - [Secrets Management](secrets.md) — managing credentials across cluster rebuilds
 - [OAuth & Tunnels](oauth-tunnels.md) — public HTTPS for OAuth callbacks
 - [Dependency Reference](dependencies.md) — all 15 dependency types
-- [CRD Reference](crd-reference.md) — full DevStagingEnvironment and GithubActionRunnerPool specs
+- [CRD Reference](crd-reference.md) — full DevStagingEnvironment and CIRunnerPool specs
 - [GitHub Actions Reference](github-actions.md) — reusable action docs

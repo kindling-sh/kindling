@@ -29,10 +29,20 @@ type Provider interface {
 // Implementations translate provider-agnostic runner pool configuration into
 // provider-specific container specs: environment variables, startup scripts,
 // Kubernetes labels, and naming conventions.
+//
+// All methods that accept a "username" parameter expect a pre-sanitized value
+// (via SanitizeDNS). Callers — typically the controller — must sanitize raw
+// user input once at the boundary before passing it to any adapter method.
 type RunnerAdapter interface {
 	// DefaultImage returns the default container image for self-hosted runners.
 	// Example: "ghcr.io/actions/actions-runner:latest"
 	DefaultImage() string
+
+	// DefaultWorkDir returns the default working directory inside the runner
+	// container. Each CI platform image has different filesystem layouts:
+	//   GitHub Actions: "/home/runner/_work"  (runner user owns /home/runner)
+	//   GitLab:         "/builds"             (gitlab-runner convention)
+	DefaultWorkDir() string
 
 	// DefaultTokenKey returns the default key name within the CI token secret.
 	// Example: "github-token"
@@ -105,8 +115,17 @@ type WorkflowGenerator interface {
 	// Example: ".github/workflows/dev-deploy.yml"
 	DefaultOutputPath() string
 
+	// SystemPrompt returns the full system prompt for AI workflow generation.
+	// hostArch is the target CPU architecture (e.g. "arm64", "amd64") and is
+	// substituted into Kaniko Dockerfile-patching examples.
+	//
+	// Implementations assemble the prompt from shared building blocks in
+	// prompt.go (Kaniko, dependencies, deploy philosophy) plus their own
+	// CI-platform-specific syntax instructions.
+	SystemPrompt(hostArch string) string
+
 	// PromptContext returns CI-platform-specific values that are interpolated
-	// into the kindling system prompt for AI workflow generation.
+	// into the kindling user prompt for AI workflow generation.
 	PromptContext() PromptContext
 
 	// ExampleWorkflows returns reference workflow examples for the AI prompt.
@@ -193,11 +212,11 @@ type CLILabels struct {
 	SecretName string
 
 	// CRDKind is the CustomResourceDefinition kind name.
-	// Example: "GithubActionRunnerPool"
+	// Example: "CIRunnerPool"
 	CRDKind string
 
 	// CRDPlural is the CRD plural resource name for kubectl.
-	// Example: "githubactionrunnerpools"
+	// Example: "cirunnerpools"
 	CRDPlural string
 
 	// CRDListHeader is the display header for listing runner pools.

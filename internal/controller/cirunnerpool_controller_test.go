@@ -77,10 +77,10 @@ var _ = Describe("RunnerAdapter.ServiceAccountName", func() {
 })
 
 var _ = Describe("buildRunnerDeployment", func() {
-	var r *GithubActionRunnerPoolReconciler
+	var r *CIRunnerPoolReconciler
 
 	BeforeEach(func() {
-		r = &GithubActionRunnerPoolReconciler{}
+		r = &CIRunnerPoolReconciler{}
 	})
 
 	It("builds a deployment named username-runner", func() {
@@ -183,14 +183,14 @@ var _ = Describe("buildRunnerDeployment", func() {
 // Integration tests (envtest)
 // ────────────────────────────────────────────────────────────────────────────
 
-var _ = Describe("GithubActionRunnerPool Reconciler", func() {
+var _ = Describe("CIRunnerPool Reconciler", func() {
 	const timeout = time.Second * 30
 	const interval = time.Millisecond * 250
 
 	ctx := context.Background()
 
 	Context("when a valid CR with a matching secret is created", func() {
-		var cr *appsv1alpha1.GithubActionRunnerPool
+		var cr *appsv1alpha1.CIRunnerPool
 		var secret *corev1.Secret
 
 		BeforeEach(func() {
@@ -254,7 +254,7 @@ var _ = Describe("GithubActionRunnerPool Reconciler", func() {
 	})
 
 	Context("when the secret is missing", func() {
-		var cr *appsv1alpha1.GithubActionRunnerPool
+		var cr *appsv1alpha1.CIRunnerPool
 
 		BeforeEach(func() {
 			cr = newTestRunnerPool("nosecret-pool", "nosecretuser", "nosecretuser/repo")
@@ -268,7 +268,7 @@ var _ = Describe("GithubActionRunnerPool Reconciler", func() {
 
 		It("should set a SecretNotFound condition", func() {
 			Eventually(func() string {
-				updated := &appsv1alpha1.GithubActionRunnerPool{}
+				updated := &appsv1alpha1.CIRunnerPool{}
 				if err := k8sClient.Get(ctx, types.NamespacedName{Name: cr.Name, Namespace: "default"}, updated); err != nil {
 					return ""
 				}
@@ -287,14 +287,14 @@ var _ = Describe("GithubActionRunnerPool Reconciler", func() {
 // Test helpers
 // ────────────────────────────────────────────────────────────────────────────
 
-func newTestRunnerPool(name, username, repo string) *appsv1alpha1.GithubActionRunnerPool {
+func newTestRunnerPool(name, username, repo string) *appsv1alpha1.CIRunnerPool {
 	replicas := int32(1)
-	return &appsv1alpha1.GithubActionRunnerPool{
+	return &appsv1alpha1.CIRunnerPool{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: "default",
 		},
-		Spec: appsv1alpha1.GithubActionRunnerPoolSpec{
+		Spec: appsv1alpha1.CIRunnerPoolSpec{
 			GitHubUsername: username,
 			Repository:     repo,
 			Replicas:       &replicas,

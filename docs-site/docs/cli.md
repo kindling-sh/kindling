@@ -118,7 +118,7 @@ kindling init --skip-cluster
 
 ### `kindling runners`
 
-Create a CI runner pool in the cluster. Currently uses GitHub Actions.
+Create a CI runner pool in the cluster. Supports **GitHub Actions** (default) and **GitLab CI**.
 
 ```
 kindling runners [flags]
@@ -135,9 +135,10 @@ kindling runners [flags]
 
 | Flag | Short | Default | Description |
 |---|---|---|---|
-| `--username` | `-u` | — | GitHub username |
-| `--repo` | `-r` | — | GitHub repository (`owner/repo`) |
-| `--token` | `-t` | — | GitHub Personal Access Token |
+| `--username` | `-u` | — | CI platform username |
+| `--repo` | `-r` | — | Repository — `owner/repo` (GitHub) or `group/project` (GitLab) |
+| `--token` | `-t` | — | Personal Access Token or runner registration token |
+| `--provider` | | `github` | CI provider: `github` or `gitlab` |
 
 **Examples:**
 
@@ -145,15 +146,18 @@ kindling runners [flags]
 # Interactive mode (prompts for missing values)
 kindling runners
 
-# Non-interactive
+# GitHub Actions (default)
 kindling runners -u myuser -r myorg/myrepo -t ghp_xxxxx
+
+# GitLab CI
+kindling runners --provider gitlab -u myuser -r mygroup/myproject -t glpat_xxxxx
 ```
 
 ---
 
 ### `kindling generate`
 
-AI-generate a CI workflow for any repository. Currently generates GitHub Actions workflows.
+AI-generate a CI workflow for any repository. Supports **GitHub Actions** (`.github/workflows/dev-deploy.yml`) and **GitLab CI** (`.gitlab-ci.yml`).
 
 ```
 kindling generate [flags]

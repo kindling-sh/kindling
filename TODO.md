@@ -1,454 +1,756 @@
 # Kindling — Roadmap
 
-**Mission:** Make kindling the default way to build production-ready
-multi-agent systems — as reflexive as `git init`.
-
-**Product arc:** Wire up CI in minutes → build locally with an engine
-that grows with the project → export and deploy to production.
-
-**Guiding principle:** Adoption is the entire job for the next 6–12
-months. Revenue, sponsorship, and partnerships follow from being the
-standard. The patterns and tooling defaults for multi-agent systems are
-still up for grabs — win by being present and useful before the niche
-solidifies. As a solo builder, ruthless prioritization is essential. The
-product must stay ahead of the marketing — bringing people in before the
-experience is solid burns the community before it forms.
+Prioritized for mass adoption. The ordering is: harden what people will
+touch first → remove friction → reach new audiences → deepen the product.
 
 ---
 
-## Phase 1 — Stabilize & define the v1.0 story
+## P0 — Remove every barrier to trying kindling
 
-**Trigger:** CircleCI support complete. Three CI providers is the
-credible, press-ready milestone — the difference between "interesting
-project" and "this is real." Don't invest heavily in outreach before
-this is done.
+These are the things that stop someone from going from "that looks cool" to
+"I have it running" in under 3 minutes.
 
-**Exit criteria:** A stranger can clone a repo, run `kindling init`, and
-have a working multi-agent system deployed locally in under 15 minutes
-without asking anyone anything.
+### One-liner install script
 
-### CircleCI generate + runners
+For Linux and CI environments:
 
-- [ ] CircleCI `WorkflowGenerator` — system prompt, example configs, YAML output
-- [ ] CircleCI runner registration in Kind cluster (self-hosted runner)
-- [ ] `kindling runners --platform circleci` CLI path
-- [ ] End-to-end test: `generate` → push → CircleCI picks up job → build + deploy
+```bash
+curl -sL https://kindling.dev/install | sh
+```
 
-### Generate parity across all three providers
+Detect OS + arch, download the right binary from GitHub Releases, drop it in
+`/usr/local/bin`. Should also work in Dockerfiles and GitHub Actions runners.
 
-Every provider should handle the same repo the same way — same dependency
-detection, same secrets awareness, same multi-service support. Just
-different output formats.
+### 3-minute quickstart guarantee
 
-- [ ] Unified few-shot example injection (15–20 curated examples per provider)
-- [ ] LLM validation pass after generation (second cheaper call to catch errors)
-- [ ] Interactive ingress selection for multi-service repos
-- [ ] `--platform` auto-detection from git remote origin
-- [ ] Parity test suite: run the same 20 repos through all 3 providers,
-  compare detection results (services, deps, secrets, OAuth flags)
+Time the quickstart end-to-end. If it takes longer than 3 minutes, cut steps.
+Put the time in the README: "From zero to a deployed app in under 3 minutes."
 
-### Fuzz testing all three providers
+- Pre-bake more defaults so fewer flags are required
+- Detect GitHub remote from `.git/config` to skip `--repo` flag
+- Auto-detect GitHub username from `gh auth status` or git config
 
-Clone a large corpus of real-world repos, run `kindling generate` against
-each with every provider, record structured results.
+### README hero demo
+
+Add a screen-recording GIF or hosted demo to the README so people can see
+kindling working before they commit to installing it. First impression matters
+more than anything else on a GitHub repo page.
+
+### Harden `kindling generate` (wild-repo fuzz testing)
+
+`kindling generate` is the first thing a new user will run on their own repo.
+If it crashes, spits out invalid YAML, or silently produces garbage, that's
+the last time they use kindling. This has to be solid *before* Show HN.
+
+Clone a large corpus of real-world repos, run `kindling generate` against each
+one, and record structured results to surface failure modes.
 
 **Per-repo result record:**
 
 | Field | Description |
 |---|---|
 | `repo` | GitHub URL |
-| `language` | Primary language |
+| `language` | Primary language (from GitHub API) |
+| `size_kb` | Repo size |
 | `has_dockerfile` | Whether a Dockerfile exists |
-| `services_detected` | Number of services found |
-| `provider` | github / gitlab / circleci |
+| `services_detected` | Number of services `generate` found |
 | `exit_code` | `kindling generate` exit code |
-| `workflow_valid` | Whether generated config parses |
-| `failure_category` | `no_dockerfile`, `env_parse_error`, `crash`, `timeout`, etc. |
+| `dse_valid` | Whether a valid `dev-environment.yaml` was produced |
+| `workflow_valid` | Whether the generated workflow YAML parses |
+| `failure_category` | `no_dockerfile`, `env_parse_error`, `unsupported_lang`, `crash`, `timeout`, etc. |
 
-**Repo selection — bias toward agent projects:**
-- Multi-agent repos (LangGraph, CrewAI, AutoGen projects on GitHub)
-- Multi-service repos with docker-compose
-- Monorepos with multiple Dockerfiles
-- Python ML/AI repos (the primary agent audience)
-- Standard web stacks (Go, Node, Rails, Spring) for baseline coverage
+**Repo selection strategy:**
+- GitHub trending repos across top 10–15 languages
+- Repos with a `Dockerfile` (most relevant)
+- Repos with `docker-compose.yml` (multi-service)
+- Monorepos with multiple services in subdirectories
+- Long-tail languages (should never crash, even if generate can't help)
 
 **Quality gates (must hit before going public):**
-- Zero panics across the entire corpus
-- ≥80% success rate on repos with a Dockerfile
-- ≥90% valid YAML output when generation succeeds
-- Top 10 failure modes identified and fixed per provider
+- ≤15% crash rate — every failure is a clean error message, never a panic
+- ≥80% success rate on repos that already have a Dockerfile
+- Top 10 failure modes identified and fixed
 
-### New-user walkthrough
+### Interactive ingress selection in `kindling generate`
 
-Run through the full `kindling init` → `kindling generate` → first deploy
-flow yourself as a brand-new user. Fix every rough edge. Write a clean,
-honest CHANGELOG entry that frames this as v1.0.
+During `kindling generate`, after discovering all services in a multi-service
+repo, prompt the user to select which services should get ingress routes instead
+of trying to auto-detect user-facing services. Present a checklist of discovered
+services and let the developer pick.
 
----
+For non-interactive / CI usage, add a `--ingress-all` flag that wires up every
+service with a default ingress route.
 
-## Phase 2 — Build the flagship example + agent infrastructure
+### Agent context file (`kindling generate` → agent config files)
 
-**One great example beats ten mediocre ones.** Build the flagship *before*
-doing outreach. It becomes the demo, the hackathon template, the first
-blog post, and the thing you link in every community interaction.
+`kindling generate` already scans the repo and knows its languages, services,
+dependencies, ports, and config files. It already writes files into the repo
+(workflow YAML, DSE YAML). This extends that: emit a personalized context file
+that coding agents (Copilot, Cursor, Cline, Claude Code, Windsurf, etc.)
+automatically pick up, so the agent knows how to develop against kindling
+without the user explaining the setup.
 
-### Agent-native dependency types
+**What gets generated — three sections:**
 
-Add first-class operator support for infrastructure agents actually need:
+1. **Architectural principles** — development guidelines the agent must follow:
+   - Deploy with `kindling deploy`, not `kubectl apply` or raw manifests
+   - Builds use Kaniko inside the runner sidecar, not `docker build` — never
+     generate Dockerfiles or docker-compose for the dev environment
+   - Dependencies (Postgres, Redis, etc.) go in `spec.dependencies[]` in the
+     DSE YAML, not in Docker Compose or Helm charts
+   - The in-cluster registry is `localhost:5001` — no DockerHub/ECR push needed
+   - Secrets go through `kindling secrets set KEY=VALUE`, which creates K8s
+     secrets referenced via `secretKeyRef` in the workflow — never hardcode
+     secrets in YAML or env files
+   - Environment variables go through `kindling env set KEY=VALUE` or
+     `spec.env[]` in the DSE YAML
+   - To expose a service externally, use `kindling expose`, not raw Ingress
+   - To check status, use `kindling status` and `kindling logs`, not raw
+     `kubectl` commands
+   - When adding a new service to the repo, add it to the DSE YAML as a new
+     entry in `spec.services[]` — the CI workflow will build and deploy it
 
-- [ ] `qdrant` — vector store (most popular OSS option for agent RAG)
-- [ ] `weaviate` — vector store (strong multi-modal support)
-- [ ] `chroma` — vector store (lightweight, Python-native)
-- [ ] `milvus` — vector store (high-scale)
-- [ ] `langfuse` — LLM observability (traces, evals, prompt management)
-- [ ] `temporal` — workflow orchestration (agent reliability patterns)
+2. **Reference card** — quick-reference for the CLI and file locations:
+   - Where the CI workflow lives (`.github/workflows/dev-deploy.yml`)
+   - Where the environment spec lives (`.kindling/dev-environment.yaml`) and
+     what the fields mean
+   - Key CLI commands: `kindling deploy`, `kindling env set`, `kindling expose`,
+     `kindling secrets set`, `kindling status`, `kindling logs`
+   - How secrets flow: CLI → K8s Secret → `secretKeyRef` in workflow
+   - The sidecar build protocol (tarball → Kaniko → in-cluster registry)
 
-Same pattern as postgres/redis/kafka: declare in DSE YAML, operator provisions
-it, connection URL injected automatically.
+3. **Personalized project context** (from repo scan):
 
-### Flagship: LangGraph template
+   ```markdown
+   ## This Project
 
-Pick LangGraph first — largest community, most active, most likely to hit
-production pain. Build a real multi-agent app, not a toy:
+   This repo runs a FastAPI service on port 8000 with Postgres and Redis.
+   The DSE at `.kindling/dev-environment.yaml` provisions both databases.
+   To add a new dependency (e.g. Elasticsearch), add it to
+   `spec.dependencies[]` in that file and push.
 
-- [ ] Orchestrator + at least 2 tool-calling agents + real infra
-  (Postgres + Redis or Qdrant)
-- [ ] Good candidates: research agent system, customer support pipeline,
-  code review agent with memory
-- [ ] Fully deployable with `kindling init → git push`
-- [ ] Step-by-step documentation
-- [ ] Pre-built CI workflows for all 3 providers (no API key needed)
+   CI workflow: `.github/workflows/dev-deploy.yml`
+   Build action: `kindling-build` (Kaniko, not Docker)
+   Deploy action: `kindling-deploy` (applies DSE to cluster)
+   ```
 
-This becomes the flagship demo, the hackathon starter, and the basis
-for the first blog post.
+**Agent detection (in priority order):**
 
-### Then build (spaced so each gets its own moment):
+1. **Explicit flag**: `kindling generate --agents copilot,cursor,claude`
+   (non-interactive, for CI or scripting)
+2. **Existing config files**: if `.github/copilot-instructions.md`, `.cursor/`,
+   `.cursorrules`, `CLAUDE.md`, or `.windsurfrules` already exist, target those
+3. **LLM token prefix as default**: the API key passed to `kindling generate`
+   has a detectable prefix that reveals the likely coding agent:
+   - `sk-ant-...` (Anthropic) → default to **Claude Code** → `CLAUDE.md`
+   - `sk-...` (OpenAI) → default to **Copilot** →
+     `.github/copilot-instructions.md`
+   This is a *default*, not definitive — a user may have an Anthropic key but
+   use Copilot. So the CLI shows the inference and asks for confirmation:
+   `"Detected Anthropic key → will write CLAUDE.md. Also write to: [copilot/cursor/all/none]?"`
+4. **Interactive prompt** (if no signal): "Which coding assistant do you use?
+   [copilot/cursor/claude/windsurf/all/none]"
 
-- [ ] `kindling-sh/template-crewai` — crew of agents + RAG service + vector store
-- [ ] `kindling-sh/template-autogen` — AutoGen agents + shared memory service
-- [ ] `kindling-sh/template-mcp` — MCP servers + agent orchestrator
-- [ ] `kindling-sh/template-raw-agents` — no framework, pure Python/Go agents via queues
+**File placement & safe injection:**
 
-Each template includes:
-1. Working Dockerfiles for every service
-2. Pre-built CI workflow for all 3 providers
-3. README with 3-command getting started
-4. Real agent logic — tool use, RAG retrieval, inter-agent messaging
+| Agent | Target file |
+|---|---|
+| Copilot | `.github/copilot-instructions.md` (append fenced section) |
+| Cursor | `.cursor/rules/kindling.md` (standalone file, no markers needed) |
+| Claude Code | `CLAUDE.md` (append fenced section) |
+| Windsurf | `.windsurfrules` (append fenced section) |
+| Always | `.kindling/context.md` (canonical copy, kindling-owned) |
 
-### `kindling new` — interactive project scaffolding
+For shared files (copilot-instructions.md, CLAUDE.md, .windsurfrules), use
+`<!-- kindling:start -->` / `<!-- kindling:end -->` markers so that
+`kindling generate` can re-run and update the kindling section without
+clobbering user content outside the markers. For Cursor, we own the file
+(`.cursor/rules/kindling.md`) so no markers needed.
 
-The `create-react-app` moment for agent systems:
+The canonical copy at `.kindling/context.md` is always written regardless of
+agent selection — it serves as the source of truth and works with any agent
+that supports workspace-level context files.
 
-```
-kindling new
-? What are you building? → Multi-agent system
-? Which framework? → CrewAI / LangGraph / None
-? How many agents? → 3
-? Need a vector store? → Yes (Qdrant)
-? Additional dependencies? → Postgres, Redis
-? CI provider? → GitHub Actions / GitLab CI / CircleCI
+The user commits these files alongside their workflow and DSE YAML. Their
+coding agent immediately knows the architectural principles, CLI commands,
+file locations, and project-specific setup — zero manual explanation needed.
 
-✅ Project scaffolded at ./my-agent-system
-   3 agents + orchestrator + Qdrant + Postgres + Redis
-   Dockerfiles, CI workflow, and DSE manifest included.
+### Generate rules reference (`.kindling/generate-rules.md`)
 
-   Next: cd my-agent-system && kindling init && git push
-```
+The system prompt that `kindling generate` sends to the AI lives in
+`pkg/ci/prompt.go` — ~370 lines of hard-won rules about Kaniko patching,
+dependency detection, env var auto-injection, health checks, build timeouts,
+Docker Compose handling, and dev staging philosophy. Right now that knowledge
+is trapped inside the Go binary. If a developer later asks their coding agent
+to "add Kafka to my pipeline" or "fix my Dockerfile for kindling," the agent
+has no idea about any of this.
 
-### `kindling generate` agent awareness
+**Solution:** during `kindling generate`, also emit
+`.kindling/generate-rules.md` — the full generate ruleset rendered as a
+readable Markdown reference. The agent context file (section 1 above) links
+to it: *"For detailed CI generation rules, see `.kindling/generate-rules.md`."*
 
-- [ ] Detect `CrewAgent`, `@tool`, `StateGraph`, `AssistantAgent`, `autogen`,
-  `langchain`, `llama_index` imports → tag as agent service
-- [ ] Auto-detect LLM provider usage → suggest `kindling secrets set`
-- [ ] Detect vector store client usage → auto-add matching dependency
-- [ ] Generate appropriate health checks for agent services
+**What goes in the rules file:**
 
-### `kindling export` + `kindling deploy-prod` — local to production
+| Section | Source (prompt.go const) | What the agent learns |
+|---|---|---|
+| Kaniko compatibility | `PromptKanakoPatching` | BuildKit ARGs break Kaniko; when and how to patch Dockerfiles (platform ARGs, Go VCS, Poetry --no-root, npm cache) |
+| Dependency detection | `PromptDependencyDetection` | Library-to-dependency mapping for 12+ languages; cloud SDK exclusions |
+| Auto-injected env vars | `PromptDependencyAutoInjection` | Declaring `postgres` auto-injects `DATABASE_URL` — never duplicate it in env |
+| Dev staging philosophy | `PromptDevStagingPhilosophy` | Random hex for app secrets, omit optional integrations, never use secretKeyRef for cloud SDKs |
+| Build & deploy inputs | `PromptBuildInputs`, `PromptDeployInputs` | Every input to kindling-build and kindling-deploy with types and defaults |
+| Health checks | `PromptHealthChecks` | gRPC detection heuristics, Spring Boot actuator, when to use "none" |
+| Build timeouts | `PromptBuildTimeout` | Rust/Java/C#/Elixir need 900s; default 300s is fine for Go/Node/Python |
+| Docker Compose | `PromptDockerCompose` | Compose file is source of truth for build context, depends_on → deps, env var names |
+| Dockerfile existence | `PromptDockerfileExistence` | Never generate a build step without a real Dockerfile; skip monorepo services that need pre-build steps |
+| OAuth handling | `PromptOAuth` | When to suggest `kindling expose` for OAuth callbacks |
 
-This is the closer. Kindling takes you from `kindling init` all the way
-to production.
+**Implementation:**
 
-**`kindling export`** — generate production-ready manifests from the
-running cluster:
+1. At build time, `go:embed` the rendered Markdown from `pkg/ci/prompt.go`
+   constants (or render at runtime — the constants are already strings).
+2. After writing the workflow YAML, write `.kindling/generate-rules.md`
+   alongside it. Always overwrite — this is kindling-owned, not user content.
+3. The agent context file (`.kindling/context.md` and the per-agent copies)
+   includes a one-liner pointing to it.
+4. On `kindling generate --cleanup` (or just re-running generate), the rules
+   file gets refreshed to match the current CLI version's rules.
 
-```bash
-kindling export helm --output ./chart
-kindling export kustomize --output ./k8s
-```
+**Why a local file, not a hosted URL:**
 
-- Helm chart with parameterized `values.yaml` (image tags, replicas,
-  hosts, resource limits, secret refs)
-- Kustomize base + production overlay with placeholder patches
-- Strips all kindling-specific and Kind-specific resources
-- Redacts secret values with `# TODO: set me` placeholders
-- Normalizes namespaces, converts localhost hosts to placeholders
-
-**`kindling deploy-prod`** — deploy to a real cluster:
-
-```bash
-kindling deploy-prod --context my-prod-cluster
-kindling deploy-prod --context my-prod-cluster --from ./chart
-kindling deploy-prod --context my-prod-cluster --dry-run
-```
-
-- [ ] `kindling export helm` — snapshot cluster state to Helm chart
-- [ ] `kindling export kustomize` — snapshot to Kustomize base + overlay
-- [ ] `kindling deploy-prod --context <ctx>` — deploy to any K8s cluster
-- [ ] Interactive secret prompting (or `--secrets-from <file>`)
-- [ ] Pre-deploy validation — cluster reachable, namespaces exist
-- [ ] `--dry-run` and `--diff` modes
-- [ ] Image registry translation (`--registry ghcr.io/org`)
-
-The full product story:
-```
-kindling init          → local cluster
-kindling generate      → CI pipeline
-git push               → build + deploy locally
-kindling sync          → iterate fast
-kindling deploy-prod   → ship to production
-```
-
----
-
-## Phase 3 — First community outreach (careful, manual seeding)
-
-**Trigger:** v1.0 stable + LangGraph flagship example live.
-
-Don't blast. Seed carefully and manually. The goal from this phase:
-**10–20 people who have genuinely used kindling** and can answer "has
-anyone tried Kindling?" positively.
-
-### Target communities & channels
-
-**LangChain Community Slack** — [langchain.com/join-community](https://www.langchain.com/join-community)
-- Classified as a **vendor** (OSS maintainer counts)
-- Post only in: `#vendor-content`, `#events`, or `#vendor-specific`
-- No unsolicited DMs, no posting in help threads
-- Frame around the problem, not the product
-
-**CrewAI Community**
-- Discord: [discord.com/invite/X4JWnZnxPb](https://discord.com/invite/X4JWnZnxPb)
-- Forum: [community.crewai.com](https://community.crewai.com) — better for
-  detailed intro posts since it's searchable and indexed (someone Googling
-  "deploy CrewAI production" may find it later)
-- Culture is more permissive — builder-sharing is welcomed
-
-**Latent Space Discord** — [discord.gg/xJJMRaWCRt](https://discord.gg/xJJMRaWCRt)
-- High signal, practitioner-heavy (~9k members)
-- The swyx/Alessio podcast community — exactly the right audience
-- Builder-friendly culture, look for `#show-and-tell` or `#tools`
-
-**Reddit**
-- r/LocalLLaMA, r/LangChain, r/MachineLearning
-- Help with infra questions first, mention kindling when genuinely relevant
-
-### How to post
-
-Lead with the problem, not the product. Target message:
-
-> *"I've been frustrated by how hard it is to run a full multi-agent
-> system locally with Postgres, Redis, and vector stores all wired
-> together — so I built [Kindling](https://kindling.sh). It's open
-> source, and I'm looking for 5–10 people to try the LangGraph example
-> and tell me where it breaks."*
-
-The small number ("5–10 people") converts better than a general call to
-action. It signals you want feedback, not users.
-
-### Framework ecosystem integration
-
-- [ ] PR deployment guides to LangGraph / CrewAI / AutoGen docs
-- [ ] Get listed on `awesome-langchain`, `awesome-llm`, `awesome-agents`
-- [ ] MCP server support — deploy MCP servers as a dependency type
+- Coding agents can read local workspace files instantly; fetching a URL
+  requires tool use, network access, and may be blocked in air-gapped setups.
+- The rules match the *installed CLI version*, not whatever's on the website.
+  If a user is on kindling v0.4 and the docs are at v0.6, the rules would be
+  wrong. The local file is always version-correct.
+- It's one more committed file (~5 KB) — trivial cost, massive agent value.
 
 ---
 
-## Phase 4 — Content that compounds
+## P1 — Content & visibility (get in front of developers)
 
-**Trigger:** Real user feedback in hand, know where people struggle.
+The tool can be perfect and nobody will use it if they don't know it exists.
+Content is the growth engine.
 
-These are not thought leadership pieces — they're search-optimized,
-community-shareable, genuinely useful content. One framework example
-per month, one blog post per example.
+### Show HN
 
-### Priority posts
+Submit a "Show HN" post. Polish the README and demo first. This is a
+one-shot — make it count. Best posted Tuesday–Thursday, 8–10am ET.
 
-1. **"Why multi-agent systems fail in production (and how to fix it
-   before you start)"** — anchor content, no mention of kindling, just
-   owns the problem space. Ranks and gets shared independently.
+### Tutorial: "How to run GitHub Actions locally on Kubernetes"
 
-2. **"Running a full LangGraph system locally with Postgres, Redis, and
-   Qdrant"** — step-by-step, tied to the flagship example. Targets the
-   search query people actually have.
+Targets high-traffic search queries. Naturally leads to kindling as the
+solution. Optimize for SEO — this is the kind of thing people Google when
+they're frustrated with cloud CI wait times.
 
-3. **"Kindling + CrewAI: from prototype to locally deployable in 10
-   minutes"** — framework-specific, targets CrewAI community searches.
+### Tutorial: "Local Kubernetes CI/CD with Kind"
 
-4. One post per additional framework example as they're built.
+Similar SEO play, different search intent. Cross-post both tutorials to
+Dev.to, Hashnode, and Medium.
 
-### Distribution for each post
+### YouTube walkthrough
 
-- Post to the relevant community channel (LangChain Slack, CrewAI forum,
-  Latent Space Discord)
-- Cross-post to Hacker News (Show HN for launch, Ask HN for problem piece)
-- Twitter/X thread with terminal output — the `kindling init` visual
-  proof of value travels well
-- Cross-post to Dev.to, Hashnode
+Record a video: `git clone` → working deploy in under 5 minutes. Cut
+short-form clips for Twitter/LinkedIn. Developer tools live or die by
+whether people can *see* them working.
+
+### Blog posts
+
+Each post has a "the hard way → the kindling way" arc or is a hands-on
+tutorial. Publish on the docs site blog, cross-post to Dev.to / Hashnode /
+Medium.
+
+**Getting Started / Onboarding:**
+
+- [ ] "Zero to Staging in 5 Minutes: Your First kindling Environment"
+  — The canonical quickstart walkthrough: `init` → `runners` → `generate` → `git push` → app on localhost.
+- [ ] "Stop Paying for CI You Already Own"
+  — Cloud CI costs, queue times, artifact round-trips. Real billing comparison, then demo the self-hosted runner model.
+- [ ] "I Replaced My docker-compose Dev Stack with a Kubernetes Operator"
+  — Migrate a typical `docker-compose up` workflow to kindling. What you gain (CI integration, dependency auto-provisioning, ingress routing) and what stays the same.
+
+**Language / Framework Tutorials:**
+
+- [ ] "Deploy a FastAPI + Postgres App to Your Laptop with One Git Push"
+  — Python tutorial: `kindling generate` detects `requirements.txt` + compose, auto-provisions Postgres, injects `DATABASE_URL`.
+- [ ] "Next.js + Redis on Localhost Kubernetes — No Cloud Required"
+  — Node tutorial: SSR app with Redis caching. `generate` detects frontend for ingress, wires Redis, handles multi-stage Dockerfile.
+- [ ] "From Rails Monolith to Local Kubernetes in 10 Minutes"
+  — Ruby tutorial: Rails + Postgres + Redis (Sidekiq). Highlight `.env.example` scanning and credential detection.
+- [ ] "Go Microservices the Easy Way: 4 Services, 3 Databases, Zero YAML by Hand"
+  — Use `examples/microservices/`. Show `generate` producing the full workflow for Gateway + Orders + Inventory + UI.
+- [ ] "Deploying a Rust Web Service with HEALTHCHECK and Multi-Stage Builds"
+  — Rust Actix/Axum app. Highlight Kaniko handling multi-stage builds and long compile times with build timeout guidance.
+
+**Feature Deep Dives:**
+
+- [ ] "How kindling generate Actually Works: AI Meets Repo Scanning"
+  — Under-the-hood walkthrough of the 8-stage pipeline: repo scan → compose analysis → Helm render → .env scan → credential detection → OAuth detection → prompt assembly → AI call.
+- [ ] "15 Dependencies, Zero Configuration: Auto-Provisioning from Postgres to Jaeger"
+  — Tour all 15 dependency types. Single DSE YAML provisioning Postgres, Redis, Kafka, Elasticsearch, and Vault with auto-injected connection env vars.
+- [ ] "Managing Secrets in Local Kubernetes Without Losing Your Mind"
+  — Tutorial: `secrets set` → local backup → `destroy` → `init` → `secrets restore`. How `secretKeyRef` wiring works in generated workflows.
+- [ ] "OAuth on Localhost: Testing Auth0 Callbacks Without Deploying to the Cloud"
+  — Tutorial: `kindling expose` with cloudflared, configure Auth0 callback URL, push code, test the full OAuth flow locally. TLS-aware ingress patching.
+- [ ] "The Build-Agent Sidecar: How kindling Builds Containers Without Docker"
+  — Deep dive into the signal-file protocol, Kaniko one-shot pods, and the `/builds/` volume. Why this architecture keeps the runner container stock and unprivileged.
+
+**Real-World Scenarios:**
+
+- [ ] "Testing Stripe Webhooks Locally with kindling expose"
+  — Stripe needs a public URL for webhooks. `kindling secrets set STRIPE_KEY` + `kindling expose` → public tunnel → webhook hits localhost pod.
+- [ ] "Local Staging for a Multi-Service E-Commerce App"
+  — End-to-end: clone a real compose-based app, run `kindling generate`, push, see the full stack on localhost with ingress routing.
+- [ ] "Debugging CI Failures Faster When the Runner Is on Your Desk"
+  — The feedback loop: push → build fails → `kindling logs` → fix → push again. Compare to waiting 8 minutes for a cloud runner re-queue.
+- [ ] "One Cluster, Multiple Repos: Using kindling reset to Switch Projects"
+  — Tutorial: `runners` for repo A → work → `reset` → `runners` for repo B. Cluster stays warm, just the runner re-points.
+- [ ] "Live Environment Variable Updates Without Redeploying"
+  — Tutorial: `kindling env set` / `list` / `unset` to hot-swap config on a running deployment. Feature flag toggling during development.
+
+**Ops / Architecture:**
+
+- [ ] "Why We Chose Kubebuilder: Building a Kubernetes Operator for Dev Environments"
+  — CRD design, reconcile loops, OwnerReferences for garbage collection, spec-hash annotations to avoid unnecessary writes.
+- [ ] "Kaniko Layer Caching on localhost: How kindling Makes Rebuilds Fast"
+  — `registry:5000/cache`, first-build vs rebuild times, tuning Docker Desktop resources for different stack sizes.
+- [ ] "Helm Charts Meet AI: How kindling Renders Your Chart Before Generating a Workflow"
+  — How `kindling generate --model o3` uses `helm template` output as authoritative context for ports and env vars.
+- [ ] "From docker-compose.yml to Kubernetes — What the AI Actually Sees"
+  — How `build.context`, `depends_on`, and `environment` blocks get mapped to `kindling-build` inputs, dependency types, and env var overrides.
+
+**Hot Takes / Opinion:**
+
+- [ ] "Your Laptop Is the Best CI Runner You're Not Using"
+  — Economics and DX of local-first CI. Apple Silicon benchmarks vs cloud runners. When cloud CI still makes sense.
+- [ ] "Stop Writing GitHub Actions YAML by Hand"
+  — 3 real repos, run `kindling generate` on each, compare AI-generated workflow to what a human would write.
+- [ ] "The Case for Ephemeral Staging Environments That Don't Cost Anything"
+  — Compare kindling's local staging to Vercel previews, Railway, Render PR environments. Trade-offs: cost ($0) vs collaboration (single-developer).
+
+### Community presence
+
+- Answer questions on r/kubernetes, r/devops, r/selfhosted — mention
+  kindling when genuinely relevant (not spam, actually help people)
+- Join CNCF Slack and Kubernetes Slack (`#kind`, `#local-dev`) and be useful
+- Submit CFP to DevOpsDays, KubeCon ("Zero-to-deploy local K8s CI/CD in 5
+  minutes"), SeaGL, CNCF community group virtual meetups
 
 ---
 
-## Phase 5 — The launch moment
+## P2 — More example apps (every framework = a new audience)
 
-**Trigger:** CircleCI shipped + 2–3 polished examples + 20+ genuine
-GitHub stars.
+Each example app gives a different language community a reason to discover
+kindling. A Rails developer won't try kindling until they see a Rails example.
+A Spring Boot developer won't try it until they see a Java example.
 
-This is the coordinated push:
+- [ ] **Rails** example app (Ruby ecosystem — huge community, lots of Docker adoption)
+- [ ] **Django** example app (Python ecosystem — massive, underserved by local K8s tools)
+- [ ] **Spring Boot** example app (Java ecosystem — enterprise developers)
+- [ ] **Next.js** example app (React/Node ecosystem — biggest frontend framework)
+- [ ] **Laravel** example app (PHP ecosystem — still enormous)
+- [ ] **FastAPI** example app (Python — growing fast, modern audience)
 
-- [ ] **Show HN** — "Show HN: Kindling – local Kubernetes CI for
-  multi-agent systems, auto-generated from your repo." Technical,
-  specific, novel — exactly what HN responds to.
-- [ ] **Product Hunt** — schedule same week as Show HN
-- [ ] **README hero demo** — screen recording GIF showing `kindling init`
-  → `git push` → multi-agent system running on localhost
-- [ ] **YouTube walkthrough** — full multi-agent build, 5 minutes
-- [ ] **Short-form clips** for Twitter/LinkedIn from the video
-- [ ] Simultaneous cross-posts to all community channels
-- [ ] GitHub star push — ask early users explicitly
-
-The "full CI support across GitHub Actions, GitLab CI, and CircleCI"
-story is the hook — cleanest single-sentence pitch, signals maturity.
+Each example should be:
+1. Realistic (not a hello-world — use a database, have a real UI)
+2. Self-contained (copy the directory, push, done)
+3. Documented with its own README
 
 ---
 
-## Phase 6 — Hackathon
+## P3 — CLI: kindling diagnose (make Kubernetes less scary)
 
-**Don't run a hackathon cold.** The sequencing:
-
-1. 20–50 genuine users exist
-2. A few have built real projects with kindling
-3. You can feature their work as examples
-4. *Then* run the hackathon — seed with those examples, have real mentors
-
-**Format:** Virtual first, in-person later. Focused challenge: *"Build
-the best production-ready multi-agent system with Kindling."*
-
-**Strategic move:** Partner with LangChain or LlamaIndex to co-host.
-Instantly inherit their community's attention, they get a showcase event.
-Reach out to DevRel teams — mutually beneficial ask.
-
-- [ ] Sponsor 2–3 online AI hackathons
-- [ ] Provide `kindling new` templates pre-configured for hackathon stacks
-- [ ] Offer mentorship/support during events
-- [ ] Write up winning projects that used kindling
-
----
-
-## Phase 7 — Deepen the product
-
-Features that make kindling stickier once people are using it.
-
-### `kindling diagnose` — make K8s less scary
-
-Most agent developers aren't K8s experts. When something breaks, they
-need clear answers, not `kubectl describe pod` output.
+This is the adoption unlock for developers who aren't Kubernetes experts.
+Most people who try local K8s hit a wall of cryptic errors and give up.
+`kindling diagnose` catches them before they quit.
 
 ```
 kindling diagnose
-kindling diagnose --fix    # LLM-powered remediation suggestions
+kindling diagnose --fix
 ```
 
-Detects: CrashLoopBackOff, ImagePullBackOff, missing secrets/configmaps,
-service selector mismatches, ingress routing gaps, probe failures.
-`--fix` sends errors to the configured LLM for concrete fix suggestions.
+### Error detection
 
-### Stable tunnel URLs
+Walk all user-namespace resources and collect:
 
-`kindling expose` gets a new URL every reconnection. Agent systems using
-webhook callbacks (Slack, Stripe, OAuth) break. Add a stable relay URL
-at `<user>.relay.kindling.dev` that auto-updates on reconnect.
+- **RBAC issues** — pods failing with `Forbidden`, `Unauthorized`; missing
+  RoleBindings, ClusterRoleBindings
+- **Image pull errors** — `ErrImagePull`, `ImagePullBackOff` (wrong tag,
+  missing registry creds, private repo without `imagePullSecrets`)
+- **CrashLoopBackOff** — repeated restarts with exit codes; pull last N log
+  lines for context (extends what `kindling status` already does)
+- **Pending pods** — unschedulable due to resource limits, node affinity,
+  taint/toleration mismatches
+- **Service mismatches** — Service selector doesn't match any pod labels,
+  or targetPort doesn't match container port
+- **Ingress routing gaps** — ingress backend references a Service that
+  doesn't exist or has no ready endpoints
+- **ConfigMap/Secret missing refs** — pod env or volume references a
+  ConfigMap or Secret that doesn't exist
+- **Resource quota / LimitRange violations**
+- **Probe failures** — liveness/readiness probes failing (from pod events)
+
+### Output
+
+Plain-text report grouped by severity:
+
+```
+❌ ERRORS
+  deployment/orders — CrashLoopBackOff (exit 1)
+    last log: "error: DATABASE_URL not set"
+
+  pod/search-abc123 — ImagePullBackOff
+    image: kindling/search-service:latest — not found in local registry
+
+⚠️  WARNINGS
+  service/gateway — targetPort 3000 doesn't match any container port (found: 8080)
+
+  ingress/app — backend "ui-service" has 0 ready endpoints
+```
+
+### LLM integration (`--fix`)
+
+When `--fix` is passed, send the collected errors + relevant resource YAML
+to an LLM and print suggested remediation steps:
+
+- Concrete `kubectl` or `kindling` commands to fix each issue
+- YAML patches for misconfigured resources
+- Explanations of *why* the error occurred (helpful for learning K8s)
+
+Use the same LLM provider already configured for `kindling generate` (OpenAI /
+Anthropic / local). Keep the LLM call optional — `kindling diagnose` without
+`--fix` is fully offline and instant.
+
+### Flags
+
+- `--fix` — pass errors to LLM for remediation suggestions
+- `--namespace` / `-n` — scope to a namespace (default: `default`)
+- `--json` — output as JSON (for CI integration)
+- `--watch` — re-run every N seconds until errors clear
+
+---
+
+## P3.5 — File sync: integration tests & in-cluster debugging
+
+`kindling sync` gets code into the cluster fast, but the inner loop is
+incomplete without a way to **run tests against the synced code** and
+**attach a debugger** to a running pod.
+
+### Integration test runner (`kindling test`)
+
+Provide a clean way to run integration tests inside the cluster where the
+code is actually running — with access to real databases, services, and
+external providers (Auth0, Stripe, etc.) rather than mocks.
+
+```
+kindling test --service orders
+kindling test --service orders --command "npm test"
+kindling test --service spa --command "pytest tests/integration"
+```
+
+- Exec into the running pod (or spin up an ephemeral test container in the
+  same namespace) and run the test command
+- Inherit the pod's environment variables (DATABASE_URL, AUTH0_DOMAIN, etc.)
+  so tests hit real dependencies without extra configuration
+- Stream test output back to the terminal in real time
+- Return the exit code so CI scripts and `&&` chains work
+- `--watch` — re-run tests automatically when `kindling sync` pushes new
+  files
+
+### In-cluster debugger (`kindling debug`)
+
+Attach a language-aware debugger to a running pod so developers can set
+breakpoints and step through code that's talking to real cluster services.
+
+```
+kindling debug --service orders --port 9229        # Node.js inspect
+kindling debug --service api --port 5678           # Python debugpy
+kindling debug --service gateway --port 2345       # Go Delve
+```
+
+- Patch the target deployment to start the process with the debug agent
+  enabled (e.g. `--inspect=0.0.0.0:9229` for Node, `debugpy --listen`
+  for Python, `dlv exec --headless` for Go)
+- Port-forward the debug port to localhost automatically
+- Print the connection string for VS Code `launch.json` / JetBrains
+  remote debug config
+- `--restore` — remove debug patching and restart the pod normally
+- Works with `kindling sync` — sync a fix, debugger stays attached
+
+### Why this matters
+
+The Auth0 SPA + API use case is the motivating example: you can't unit-test
+an OAuth callback flow — you need the real Auth0 tenant, a real redirect
+URI (via `kindling expose`), and a running API server that validates tokens
+against a real JWKS endpoint. Being able to run integration tests and attach
+a debugger inside that environment closes the last gap in the local-first
+development story.
+
+---
+
+## P4 — Strategic integrations (meet developers where they are)
 
 ### VS Code extension
 
-Status panel, deploy button, logs, tunnel control — native VS Code
-experience. The marketplace puts kindling in front of every developer
-browsing for K8s or AI dev tools.
+Wraps the CLI with a native VS Code experience: status panel, deploy button,
+logs view, tunnel control. VS Code has 70%+ market share — being in the
+marketplace puts kindling in front of every developer browsing for K8s tools.
 
-### Dashboard: visual agent builder (drag & drop)
+### Devcontainer config
 
-Evolve the dashboard from a monitoring UI into a visual builder for
-multi-agent systems. Drag agent nodes onto a canvas, connect them with
-message flows, drop in infrastructure (vector stores, queues, databases),
-and kindling generates the service code, Dockerfiles, DSE manifest, and
-CI workflow.
+Ship a `.devcontainer/` config so people can try kindling in Gitpod or
+GitHub Codespaces with zero local setup. Removes Docker/Kind/kubectl as
+prerequisites entirely for the first experience.
 
-Think n8n / Langflow, but for the full-stack architecture — not just
-prompt chains, the actual deployed services.
+### GitHub Marketplace
 
-- [ ] Canvas-based agent graph editor (React Flow / xyflow)
-- [ ] Node types: Agent, Tool, Orchestrator, RAG Pipeline, API Gateway
-- [ ] Dependency nodes: Postgres, Redis, Qdrant, Kafka, etc.
-- [ ] Edge types: HTTP, queue-based messaging, shared memory
-- [ ] "Deploy" button generates all artifacts and runs `kindling init` + `git push`
-- [ ] Round-trip: import an existing kindling project back into the canvas
-- [ ] Export the graph as a shareable project template
-
-### Education angle
-
-- [ ] University CS / AI programs — kindling for coursework
-- [ ] Bootcamps — adopt kindling for agent-building labs
-- [ ] "Kindling 101" curriculum / workshop materials
+Publish `kindling-build` and `kindling-deploy` as verified GitHub Marketplace
+actions. Discoverability in the marketplace is free distribution.
 
 ---
 
-## Phase 8 — OSS infrastructure (when there's community)
+## P5 — Multi-platform CI support (break vendor lock-in)
 
+~~Kindling is currently GitHub-only (Actions runners, GitHub PATs, GitHub-specific
+composite actions).~~ **GitHub Actions and GitLab CI are now fully supported.**
+Expanding to additional platforms unlocks even more developers.
+
+### Git platforms
+
+- ✅ **GitHub** — GitHub Actions runners, GitHub PATs, `.github/workflows/` generation
+- ✅ **GitLab** — GitLab runner registration, `.gitlab-ci.yml` generation via `kindling generate`
+- **Bitbucket** — Bitbucket Pipelines runner registration and
+  `bitbucket-pipelines.yml` generation
+- **Gitea / Forgejo** — self-hosted Git; register Gitea Actions runners (Gitea
+  Actions is Act-compatible, so much of the GitHub Actions plumbing carries over)
+
+### CI systems
+
+- ✅ **GitHub Actions** — composite actions (`kindling-build`, `kindling-deploy`),
+  self-hosted runner registration, AI workflow generation
+- ✅ **GitLab CI** — `.gitlab-ci.yml` with Kaniko build + kubectl deploy
+  stages; GitLab Runner registration in the Kind cluster
+- **Jenkins** — generate `Jenkinsfile`; deploy a Jenkins agent pod in-cluster
+- **Drone / Woodpecker** — lightweight self-hosted CI; generate `.drone.yml` /
+  `.woodpecker.yml`
+
+### Implementation approach
+
+1. ✅ Abstract the runner pool CRD — `spec.ciProvider` field
+   (`github | gitlab`) so the operator provisions the correct runner type
+2. ✅ `kindling runners --provider gitlab` creates a GitLab Runner registration
+   instead of a GitHub Actions runner
+3. ✅ `kindling generate` detects the remote origin to infer the platform, or
+   accepts `--provider` explicitly
+4. ✅ Factor composite actions into platform-agnostic build/deploy steps that emit
+   the right CI config format per platform
+5. ✅ Keep GitHub as the default — zero breaking changes for existing users
+
+### Provider abstractions (code layer)
+
+> **CI provider interface — DONE.** The `pkg/ci/` package implements
+> `Provider`, `RunnerAdapter`, `WorkflowGenerator` interfaces with a
+> `ProviderRegistry` and two implementations (GitHub, GitLab).
+> CRD renamed from `GithubActionRunnerPool` to `CIRunnerPool`.
+> CircleCI removed (< 5% market share, persistent timeout issues).
+
+The remaining prerequisite is the **cluster provider** abstraction:
+
+**Cluster provider interface** (`core/providers/cluster.go`):
+
+```go
+type ClusterProvider interface {
+    Name() string                                     // "kind", "k3d", "minikube"
+    Create(cfg ClusterConfig) error
+    Destroy(name string) error
+    LoadImage(image, cluster string) error             // provider-specific image loading
+    GetKubeconfig(cluster string) (string, error)
+    RegistryEndpoint() string                          // in-cluster registry address
+}
+```
+
+**Remaining migration steps:**
+1. Implement `KindProvider` as the default — wrapping
+   exactly the logic that exists today in `core/`
+2. Wire through a `ProviderRegistry` so CLI commands resolve the active
+   cluster provider at startup
+3. A second provider (k3d) validates the abstraction
+4. Existing behavior is unchanged — `kindling init` still means Kind
+   unless `--cluster-provider` is passed
+
+---
+
+## P6 — CLI: kindling export (production-ready manifests)
+
+Generate a Helm chart or Kustomize overlay from the live cluster that gives
+teams a working (or near-working) foundation for deploying to a real environment.
+The key insight: by the time a developer has iterated in kindling, the cluster
+already contains battle-tested Deployments, Services, Ingresses, ConfigMaps,
+Secrets, etc. — export snapshots those into portable, production-grade manifests.
+
+```
+kindling export helm   [--output ./chart]
+kindling export kustomize [--output ./k8s]
+```
+
+### What gets exported
+
+Every user-created resource in the target namespace(s), converted to clean
+K8s primitives:
+
+- Deployments (with image tags, resource requests/limits, env vars, probes)
+- Services (ClusterIP, NodePort mapping → LoadBalancer/ClusterIP for prod)
+- Ingress — only the actively referenced ingress (the one currently routing
+  traffic to exported services), not every ingress in the namespace
+  (host/path rules, TLS stubs for cert-manager)
+- ConfigMaps and Secrets (secret values redacted with `# TODO: set me`
+  placeholders)
+- PersistentVolumeClaims
+- ServiceAccounts, Roles, RoleBindings (if present)
+- HorizontalPodAutoscalers, NetworkPolicies, CronJobs
+
+### What gets filtered out
+
+Everything kindling-specific or Kind-specific that doesn't belong in
+production:
+
+- `DevStagingEnvironment` and `CIRunnerPool` CRs
+- The kindling operator Deployment, ServiceAccount, RBAC
+- Runner pods and runner-related Secrets (PAT token, etc.)
+- `kindling-tunnel` ConfigMap and tunnel annotations
+  (`kindling.dev/original-host`, `kindling.dev/original-tls`)
+- Kind-specific resources (local-path-provisioner, kindnet, etc.)
+- `kube-system` and `local-path-storage` namespaces entirely
+- Admission webhooks added by kindling
+- Managed-by labels/annotations that reference kindling
+
+### Helm output (`kindling export helm`)
+
+Generates a valid `Chart.yaml` + `templates/` directory:
+
+1. Each resource becomes a template file (`deployment-orders.yaml`, etc.)
+2. Key values are parameterized into `values.yaml` — image tags, replica
+   counts, resource limits, ingress hosts, env var values
+3. Secret values become `{{ .Values.secrets.<name> }}` refs so they can be
+   supplied at install time
+4. Adds standard Helm labels (`app.kubernetes.io/managed-by: Helm`, chart
+   version, etc.)
+5. NodePort services are converted to ClusterIP (prod typically uses a real
+   LB or ingress controller)
+
+### Kustomize output (`kindling export kustomize`)
+
+Generates a `kustomization.yaml` + `base/` resource files:
+
+1. Raw resource YAML in `base/`
+2. `kustomization.yaml` with `resources:` listing
+3. Placeholder patches in `overlays/production/` for values that need to
+   change per environment (image tags, replicas, ingress hosts)
+
+### Cleanup / normalization
+
+- Strip `status`, `metadata.resourceVersion`, `metadata.uid`,
+  `metadata.creationTimestamp`, `metadata.generation`,
+  `metadata.managedFields`, `kubectl.kubernetes.io/last-applied-configuration`
+- Strip cluster-assigned `spec.clusterIP` from Services
+- Normalize `metadata.namespace` (parameterize or omit so it's set at
+  deploy time)
+- Replace `localhost`-based ingress hosts with `# TODO: set production host`
+- Add resource requests/limits if missing (with sensible defaults or comments)
+
+### Flags
+
+- `--output` / `-o` — output directory (default: `./kindling-export/`)
+- `--namespace` / `-n` — namespace to export (default: `default`)
+- `--all-namespaces` — export all non-system namespaces
+- `--include-secrets` — include Secret values in plaintext (off by default)
+- `--dry-run` — print what would be exported without writing files
+
+---
+
+## P7 — Expose improvements
+
+### Stable callback URL (tunnel URL relay)
+
+Every time `kindling expose` connects, the tunnel gets a new random URL.
+External services that require a callback URL (OAuth, webhooks, Slack) break
+because the registered URL no longer matches.
+
+Provide a stable intermediate URL that stays the same and automatically
+relays to whatever the current tunnel URL is.
+
+**Approach: lightweight redirect service**
+
+1. On first `kindling expose`, provision a stable hostname — either:
+   - **Self-hosted relay**: a tiny Cloudflare Worker or Vercel edge function
+     at `<username>.relay.kindling.dev` that stores the current tunnel URL
+     and 307-redirects all requests to it
+   - **Custom domain with tunnel provider**: configure cloudflared named
+     tunnel or ngrok custom domain so the URL is always the same (requires
+     paid tier — document as the "just works" option)
+
+2. When `kindling expose` reconnects with a new tunnel URL, it automatically
+   pushes the new URL to the relay — the stable hostname never changes
+
+3. Store the stable URL in a local config (`~/.kindling/relay.yaml`) so it
+   persists across sessions. Print it prominently:
+   ```
+   ✅ Tunnel active
+      Tunnel URL:  https://abc123.trycloudflare.com
+      Stable URL:  https://jeff.relay.kindling.dev  ← use this for callbacks
+   ```
+
+**Flags:**
+- `--relay` — enable the stable relay URL (first time: provisions hostname)
+- `--relay-domain <host>` — use a custom domain instead of the shared relay
+- `--no-relay` — disable relay, use raw tunnel URL only
+
+### Live service switching
+
+Allow re-targeting the tunnel to a different service while it stays up:
+
+```
+kindling expose --service orders       # initial — starts tunnel, routes to orders
+kindling expose --service gateway      # re-patch ingress, tunnel stays
+```
+
+If a tunnel is already running (pid file exists, process alive), skip starting
+a new tunnel — just re-patch the ingress host/rules.
+
+### Ingress path routing (`kindling add view`)
+
+Add path-based routing rules to the active ingress without editing YAML:
+
+```
+kindling add view /api --service orders --port 8080
+kindling add view /admin
+kindling add view --list
+kindling add view --remove /api
+```
+
+---
+
+## P8 — Education angle
+
+- [ ] Reach out to university CS / DevOps programs about using kindling in
+  coursework (Southern Oregon University, Rogue Community College, etc.)
+- [ ] Contact bootcamps (online and local) about adopting kindling for labs
+- [ ] Create a "kindling 101" curriculum / workshop materials that instructors
+  can pick up and run with
+- [ ] Pitch to KubeAcademy / Linux Foundation training as a practical lab tool
+
+---
+
+## P9 — Contributor experience & OSS infrastructure
+
+### Contributor experience
+
+- [ ] Add `good-first-issue` labels on GitHub for approachable tasks
 - [ ] `CONTRIBUTING.md` with dev setup, test instructions, PR expectations
-- [ ] `good-first-issue` labels for approachable tasks
-- [ ] Issue & PR templates
-- [ ] `CODE_OF_CONDUCT.md`
-- [ ] Dynamic README badges (CI status, coverage, release)
-- [ ] Contributor shout-outs in release notes
+- [ ] Shout out contributors in release notes
 
----
+### OSS infrastructure (do when there's community interest)
 
-## Solo builder timeline
-
-| When | Focus |
-|---|---|
-| **Now** | Finish CircleCI, stabilize the core experience |
-| **Next** | Build the LangGraph flagship example |
-| **After that** | v1.0 announcement + first community seeding |
-| **Ongoing** | One framework example/month, one blog post/example |
-| **3–6 months** | Show HN / Product Hunt launch moment |
-| **6–12 months** | Hackathon, partnerships |
-
-The test at every stage: *does this make it more likely that the next
-person who starts a multi-agent project reaches for kindling?*
-If yes, do it. If not, skip it.
-
----
-
-## Key reference links
-
-- LangChain Community Slack: [langchain.com/join-community](https://www.langchain.com/join-community)
-- CrewAI Discord: [discord.com/invite/X4JWnZnxPb](https://discord.com/invite/X4JWnZnxPb)
-- CrewAI Forum: [community.crewai.com](https://community.crewai.com)
-- Latent Space Discord: [discord.gg/xJJMRaWCRt](https://discord.gg/xJJMRaWCRt)
-- Kindling GitHub: [github.com/kindling-sh/kindling](https://github.com/kindling-sh/kindling)
-
----
-
-## Done ✅
-
-- [x] Homebrew formula (`brew install kindling-sh/tap/kindling`)
-- [x] One-liner install script
-- [x] Provider abstraction interfaces (`pkg/ci/`)
-- [x] GitHub Actions provider (generate, runners, workflow)
-- [x] GitLab CI provider (generate, runners, workflow)
-- [x] 15 auto-provisioned dependency types
-- [x] `kindling sync` — live file sync with 30+ runtime strategies
-- [x] `kindling dashboard` — web UI with sync/load/deploy
-- [x] `kindling generate` — AI workflow generation (OpenAI + Anthropic)
-- [x] `kindling secrets` — credential management with local backup
-- [x] `kindling expose` — public HTTPS tunnels (cloudflared + ngrok)
-- [x] Comprehensive test coverage (342 tests across 22 files)
+- `CODE_OF_CONDUCT.md` (Contributor Covenant v2.1)
+- Issue & PR templates (`.github/ISSUE_TEMPLATE/`, PR template)
+- Dynamic README badges (CI status, release, Go Report Card, coverage)

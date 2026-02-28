@@ -124,10 +124,11 @@ The only custom env vars are inter-service references:
 | `EVENT_STORE_URL` | inventory | Redis URL for the shared order_events queue (points at orders' Redis) |
 | `GATEWAY_URL` | ui | HTTP address of the gateway for API calls |
 
-## GitHub Actions Workflow
+## CI Workflow (GitHub Actions)
 
 The included workflow uses the **reusable kindling actions** — each
-build step is a single `uses:` call:
+build step is a single `uses:` call. For GitLab, run
+`kindling generate --provider gitlab` to produce an equivalent `.gitlab-ci.yml`.
 
 ```yaml
 # Simplified — see .github/workflows/dev-deploy.yml for the full file
@@ -161,7 +162,7 @@ steps:
 ### Prerequisites
 
 - Local Kind cluster with **kindling** operator deployed ([Getting Started](../../README.md#getting-started))
-- `GithubActionRunnerPool` CR applied with your GitHub username
+- `CIRunnerPool` CR applied with your CI username (GitHub or GitLab)
 
 ### Option A — Push to GitHub (recommended)
 

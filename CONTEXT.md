@@ -3,9 +3,9 @@
 ## Project Overview
 
 Kindling is a local Kubernetes CI/CD operator that bootstraps a Kind cluster on a
-developer's laptop with self-hosted GitHub Actions runners, an in-cluster container
-registry, and a Kubernetes operator that reconciles custom resources to deploy
-applications with auto-provisioned dependencies.
+developer's laptop with self-hosted CI runners (**GitHub Actions** and **GitLab CI**),
+an in-cluster container registry, and a Kubernetes operator that reconciles custom
+resources to deploy applications with auto-provisioned dependencies.
 
 **Repo**: `github.com/jeff-vincent/kindling`
 **Language**: Go 1.25.7
@@ -30,22 +30,24 @@ make deploy IMG=localhost:5001/kindling-controller:latest
 ### CRDs (api/v1alpha1/)
 - **DevStagingEnvironment** — declares an app deployment with image, port, ingress,
   service, and dependencies (postgres, redis, mongodb, elasticsearch, kafka, vault, etc.)
-- **GithubActionRunnerPool** — declares a self-hosted runner pool with GitHub username,
-  repo, PAT secret ref, labels, and resource requirements
+- **CIRunnerPool** — declares a self-hosted runner pool with CI provider
+  (github/gitlab), username, repo, token secret ref, labels, and resource requirements
 
 ### Operator (internal/controller/)
 - **devstagingenvironment_controller.go** — reconciles DSE CRs into Deployment, Service,
   Ingress, and auto-provisioned dependency pods (15 types supported)
-- **githubactionrunnerpool_controller.go** — reconciles runner pool CRs into Deployments
-  with a build-agent sidecar. Runner pods self-register with GitHub. The sidecar watches
+- **cirunnerpool_controller.go** — reconciles runner pool CRs into Deployments
+  with a build-agent sidecar. Runner pods self-register with the configured CI
+  platform (GitHub Actions or GitLab CI). The sidecar watches
   `/builds/` for build requests and kubectl apply requests, executing Kaniko builds and
   DSE applies on behalf of the workflow.
 
 ### CLI (cli/cmd/)
 - **init.go** — creates Kind cluster, deploys ingress-nginx, in-cluster registry, builds
   and deploys the operator. Has `--expose` flag to also start a tunnel.
-- **runners.go** (formerly quickstart.go) — creates github-runner-token secret and
-  GithubActionRunnerPool CR. Prompts interactively for missing values.
+- **runners.go** (formerly quickstart.go) — creates CI runner token secret and
+  CIRunnerPool CR. Supports `--provider github` (default) and `--provider gitlab`.
+  Prompts interactively for missing values.
 - **reset.go** — deletes all runner pools and the token secret without destroying the
   cluster, so you can re-run `runners` for a different repo.
 - **deploy.go** — applies a DevStagingEnvironment from a YAML file.
@@ -133,5 +135,5 @@ The build-agent sidecar in runner pods watches the `/builds/` shared volume:
 - `kindling secrets` subcommand with encrypted local store
 - External credential detection during generate
 - `.kindling/secrets.yaml` config
-- Multi-platform CI support (GitLab, Bitbucket, Gitea, CircleCI, Jenkins, Drone)
+- Multi-platform CI support (GitHub Actions ✔, GitLab CI ✔ — Bitbucket, Gitea, Jenkins planned)
 - OSS infrastructure (CONTRIBUTING.md, Homebrew tap, docs site)

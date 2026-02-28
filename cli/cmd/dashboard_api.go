@@ -133,10 +133,16 @@ func handleDSEs(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, out)
 }
 
-// ── /api/runners — GithubActionRunnerPools ──────────────────────
+// ── /api/runners — CIRunnerPools ──────────────────────
 
 func handleRunners(w http.ResponseWriter, r *http.Request) {
-	labels := ci.Default().CLILabels()
+	prov := ci.Default()
+	if pName := r.URL.Query().Get("provider"); pName != "" {
+		if p, err := ci.Get(pName); err == nil {
+			prov = p
+		}
+	}
+	labels := prov.CLILabels()
 	out, err := kubectlJSON("get", labels.CRDPlural, "-o", "json")
 	if err != nil {
 		jsonResponse(w, map[string]interface{}{"items": []interface{}{}})

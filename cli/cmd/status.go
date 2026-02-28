@@ -14,12 +14,15 @@ var statusCmd = &cobra.Command{
 	Long: `Displays a dashboard-style overview of the Kind cluster including:
   • Cluster info and node status
   • kindling operator health
-  • GitHub Actions runner pools
+  • CI runner pools
   • Dev staging environments and their dependencies`,
 	RunE: runStatus,
 }
 
+var statusProvider string
+
 func init() {
+	statusCmd.Flags().StringVar(&statusProvider, "provider", "", "CI provider (github, gitlab)")
 	rootCmd.AddCommand(statusCmd)
 }
 
@@ -94,7 +97,13 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	}
 
 	// ── Runner Pools ────────────────────────────────────────────
-	labels := ci.Default().CLILabels()
+	statusProviderObj := ci.Default()
+	if statusProvider != "" {
+		if p, err := ci.Get(statusProvider); err == nil {
+			statusProviderObj = p
+		}
+	}
+	labels := statusProviderObj.CLILabels()
 	header(labels.CRDListHeader)
 
 	rpOut, err := runCapture("kubectl", "get", labels.CRDPlural,

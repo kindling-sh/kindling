@@ -1,5 +1,5 @@
 apiVersion: apps.example.com/v1alpha1
-kind: GithubActionRunnerPool
+kind: CIRunnerPool
 metadata:
   name: jeff-runner-pool
 spec:

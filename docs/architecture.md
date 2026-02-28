@@ -9,9 +9,76 @@ loops running on a local [Kind](https://kind.sigs.k8s.io) cluster. The
 
 ## System overview
 
-<p align="center">
-  <img src="../assets/diagrams/architecture.svg" alt="Kindling Architecture" width="800" />
-</p>
+```mermaid
+%%{init: {'theme': 'dark'}}%%
+flowchart TB
+    dev(("👩‍💻 Developer"))
+
+    subgraph laptop["💻 Developer Laptop"]
+        subgraph kind["⎈ Kind Cluster"]
+
+            subgraph system["kindling-system namespace"]
+                operator["🎛️ Operator\n(controller-manager)"]
+            end
+
+            subgraph ns_default["default namespace"]
+                runner["🏃 Runner Pod"]
+                kaniko["📦 Kaniko Sidecar\n(build-agent)"]
+                registry["🗄️ Registry\n(registry:5000)"]
+
+                subgraph env1["DevStagingEnvironment: myapp"]
+                    app["🔷 App\nDeployment"]
+                    svc["🔶 Service"]
+                    ing["🌐 Ingress"]
+                    pg["🐘 Postgres"]
+                    rd["⚡ Redis"]
+                end
+            end
+
+            ingress_ctrl["🔶 ingress-nginx\ncontroller"]
+        end
+
+        dashboard["🖥️ Dashboard\n(localhost:9090)"]
+        sync_engine["🔄 kindling sync\n(file watch + hot reload)"]
+    end
+
+    dev -- "git push" --> gh["🐙 GitHub"]
+    gh -- "dispatches job" --> runner
+    runner -- "signal files\n(/builds/*)" --> kaniko
+    kaniko -- "pushes image" --> registry
+    runner -- "kubectl apply\nDSE CR" --> operator
+    operator -- "creates" --> app
+    operator -- "creates" --> svc
+    operator -- "creates" --> ing
+    operator -- "provisions" --> pg
+    operator -- "provisions" --> rd
+    dev -- "http://myapp.localhost" --> ingress_ctrl
+    ingress_ctrl --> svc
+    dev -- "browser" --> dashboard
+    dashboard -. "sync / load\nAPI calls" .-> app
+    dev -- "edit files" --> sync_engine
+    sync_engine -. "kubectl cp +\nrestart" .-> app
+
+    style laptop fill:#1a1a2e,stroke:#FF6B35,color:#e0e0e0,stroke-width:2px
+    style kind fill:#0f3460,stroke:#326CE5,color:#e0e0e0,stroke-width:2px
+    style system fill:#112240,stroke:#6e40c9,color:#e0e0e0
+    style ns_default fill:#112240,stroke:#2ea043,color:#e0e0e0
+    style env1 fill:#0a1628,stroke:#F7931E,color:#e0e0e0
+    style operator fill:#6e40c9,stroke:#6e40c9,color:#fff
+    style runner fill:#2ea043,stroke:#2ea043,color:#fff
+    style kaniko fill:#326CE5,stroke:#326CE5,color:#fff
+    style registry fill:#F7931E,stroke:#F7931E,color:#fff
+    style ingress_ctrl fill:#FF6B35,stroke:#FF6B35,color:#fff
+    style dev fill:#6e40c9,stroke:#6e40c9,color:#fff
+    style ci fill:#24292f,stroke:#e0e0e0,color:#fff
+    style app fill:#326CE5,stroke:#326CE5,color:#fff
+    style svc fill:#F7931E,stroke:#F7931E,color:#fff
+    style ing fill:#FF6B35,stroke:#FF6B35,color:#fff
+    style pg fill:#336791,stroke:#336791,color:#fff
+    style rd fill:#DC382D,stroke:#DC382D,color:#fff
+    style dashboard fill:#FFD23F,stroke:#FFD23F,color:#000
+    style sync_engine fill:#e040fb,stroke:#e040fb,color:#fff
+```
 
 ---
 
@@ -20,14 +87,14 @@ loops running on a local [Kind](https://kind.sigs.k8s.io) cluster. The
 ### Outer loop: CI on your laptop
 
 ```
-git push → GitHub Actions → self-hosted runner → Kaniko build → registry:5000 → operator deploys DSE
+git push → CI Platform (GitHub Actions / GitLab CI) → self-hosted runner → Kaniko build → registry:5000 → operator deploys DSE
 ```
 
-The outer loop uses GitHub Actions as the trigger mechanism, but the
-actual compute runs locally. The self-hosted runner picks up jobs,
-builds containers via Kaniko (no Docker daemon), pushes to the
-in-cluster registry, and applies DevStagingEnvironment CRs that the
-operator reconciles into running Deployments.
+The outer loop uses **GitHub Actions** or **GitLab CI** as the trigger
+mechanism, but the actual compute runs locally. The self-hosted runner
+picks up jobs, builds containers via Kaniko (no Docker daemon), pushes
+to the in-cluster registry, and applies DevStagingEnvironment CRs that
+the operator reconciles into running Deployments.
 
 ### Inner loop: Live sync + hot reload
 
@@ -67,7 +134,7 @@ the `kindling-system` namespace. It watches two CRDs:
 | CRD | Purpose |
 |---|---|
 | `DevStagingEnvironment` | Declares an app + its backing services |
-| `GithubActionRunnerPool` | Declares a self-hosted GitHub Actions runner |
+| `CIRunnerPool` | Declares a self-hosted CI runner pool (GitHub Actions or GitLab CI) |
 
 **Reconcile loop for DevStagingEnvironment:**
 
@@ -88,11 +155,11 @@ On reconcile, if the hash hasn't changed, the update is skipped.
 
 ### 3. CI Runner Pod
 
-Created by the `GithubActionRunnerPool` controller. Each runner pod has:
+Created by the `CIRunnerPool` controller. Each runner pod has:
 
 | Container | Image | Purpose |
 |---|---|---|
-| **runner** | `ghcr.io/actions/actions-runner:latest` | Registers with GitHub, polls for jobs |
+| **runner** | Platform-specific runner image | Registers with CI platform (GitHub or GitLab), polls for jobs |
 | **build-agent** | `bitnami/kubectl` | Watches `/builds/` for build requests, launches Kaniko pods |
 
 The two containers share an `emptyDir` volume mounted at `/builds/`.
@@ -424,19 +491,20 @@ all child resources automatically.
 
 ---
 
-## CI Provider Abstraction *(upcoming)*
+## CI Provider Abstraction
 
-kindling is decoupling all CI/CD-platform-specific code behind a
-provider interface layer in `pkg/ci`. Today the only implementation is
-GitHub Actions, but the interfaces are designed so that a GitLab CI,
-Bitbucket Pipelines, or other provider can be added without touching
-the operator or CLI code.
+kindling has decoupled all CI/CD-platform-specific code behind a
+provider interface layer in `pkg/ci`. Two implementations are shipped:
+**GitHub Actions** and **GitLab CI**. The interfaces are designed so
+that additional providers (Bitbucket Pipelines, Gitea Actions, etc.)
+can be added without touching the operator or CLI code.
 
 ### Provider registry
 
 Providers register themselves at init-time via `ci.Register()`. All
-consumers call `ci.Default()` to get the active provider — today that
-returns the GitHub Actions provider.
+consumers call `ci.Default()` to get the active provider — by default
+that returns the GitHub Actions provider. Use `ci.Get("gitlab")` or
+the `--provider gitlab` CLI flag to select GitLab.
 
 ```go
 provider := ci.Default()              // → GitHubProvider
@@ -538,8 +606,8 @@ and resource naming.
 | `Repository` | `string` | `"GitHub repository (owner/repo)"` |
 | `Token` | `string` | `"GitHub PAT (repo scope)"` |
 | `SecretName` | `string` | `"github-runner-token"` |
-| `CRDKind` | `string` | `"GithubActionRunnerPool"` |
-| `CRDPlural` | `string` | `"githubactionrunnerpools"` |
+| `CRDKind` | `string` | `"CIRunnerPool"` |
+| `CRDPlural` | `string` | `"cirunnerpools"` |
 | `CRDListHeader` | `string` | `"GitHub Actions Runner Pools"` |
 | `RunnerComponent` | `string` | `"github-actions-runner"` |
 | `ActionsURLFmt` | `string` | `"https://github.com/%s/actions"` |
@@ -564,10 +632,11 @@ kindling/
 ├── api/v1alpha1/                   # CRD type definitions
 ├── internal/controller/            # Operator reconcile logic
 ├── cmd/main.go                     # Operator entrypoint
-├── pkg/ci/                         # CI provider abstraction (upcoming)
+├── pkg/ci/                         # CI provider abstraction
 │   ├── types.go                    # Provider, RunnerAdapter, WorkflowGenerator interfaces
 │   ├── registry.go                 # Provider registry (Register, Default, Get)
-│   └── github.go                   # GitHub Actions implementation
+│   ├── github.go                   # GitHub Actions implementation
+│   └── gitlab.go                   # GitLab CI implementation
 ├── cli/                            # CLI tool (separate Go module)
 │   ├── cmd/
 │   │   ├── root.go

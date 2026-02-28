@@ -148,9 +148,9 @@ runners: ## Create GitHub PAT secret + runner pool CR (requires GITHUB_USERNAME,
 		--dry-run=client -o yaml | $(KUBECTL) apply -f -
 	@echo "✅ Secret github-runner-token ready"
 	@echo ""
-	@echo "🚀 Applying GithubActionRunnerPool CR..."
-	@printf 'apiVersion: apps.example.com/v1alpha1\nkind: GithubActionRunnerPool\nmetadata:\n  name: $(GITHUB_USERNAME)-runner-pool\nspec:\n  githubUsername: "$(GITHUB_USERNAME)"\n  repository: "$(GITHUB_REPO)"\n  tokenSecretRef:\n    name: github-runner-token\n    key: github-token\n  replicas: 1\n  labels:\n    - linux\n' | $(KUBECTL) apply -f -
-	@echo "✅ GithubActionRunnerPool applied"
+	@echo "🚀 Applying CIRunnerPool CR..."
+	@printf 'apiVersion: apps.example.com/v1alpha1\nkind: CIRunnerPool\nmetadata:\n  name: $(GITHUB_USERNAME)-runner-pool\nspec:\n  githubUsername: "$(GITHUB_USERNAME)"\n  repository: "$(GITHUB_REPO)"\n  tokenSecretRef:\n    name: github-runner-token\n    key: github-token\n  replicas: 1\n  labels:\n    - linux\n' | $(KUBECTL) apply -f -
+	@echo "✅ CIRunnerPool applied"
 	@echo ""
 	@echo "⏳ Waiting for runner deployment to be created..."
 	@for i in $$(seq 1 30); do \

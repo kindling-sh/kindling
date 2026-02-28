@@ -1,20 +1,20 @@
-# permissions for end users to view githubactionrunnerpools.
+# permissions for end users to view cirunnerpools.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   labels:
     app.kubernetes.io/name: clusterrole
-    app.kubernetes.io/instance: githubactionrunnerpool-viewer-role
+    app.kubernetes.io/instance: cirunnerpool-viewer-role
     app.kubernetes.io/component: rbac
     app.kubernetes.io/created-by: kindling
     app.kubernetes.io/part-of: kindling
     app.kubernetes.io/managed-by: kustomize
-  name: githubactionrunnerpool-viewer-role
+  name: cirunnerpool-viewer-role
 rules:
 - apiGroups:
   - apps.example.com
   resources:
-  - githubactionrunnerpools
+  - cirunnerpools
   verbs:
   - get
   - list
@@ -22,6 +22,6 @@ rules:
 - apiGroups:
   - apps.example.com
   resources:
-  - githubactionrunnerpools/status
+  - cirunnerpools/status
   verbs:
   - get

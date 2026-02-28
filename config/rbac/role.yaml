@@ -50,8 +50,8 @@ rules:
 - apiGroups:
   - apps.example.com
   resources:
+  - cirunnerpools
   - devstagingenvironments
-  - githubactionrunnerpools
   verbs:
   - create
   - delete
@@ -63,15 +63,15 @@ rules:
 - apiGroups:
   - apps.example.com
   resources:
+  - cirunnerpools/finalizers
   - devstagingenvironments/finalizers
-  - githubactionrunnerpools/finalizers
   verbs:
   - update
 - apiGroups:
   - apps.example.com
   resources:
+  - cirunnerpools/status
   - devstagingenvironments/status
-  - githubactionrunnerpools/status
   verbs:
   - get
   - patch

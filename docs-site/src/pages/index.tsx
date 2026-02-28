@@ -38,14 +38,9 @@ function HeroSection() {
           </h1>
           <p className={styles.heroSubtitle}>{siteConfig.tagline}</p>
           <p className={styles.heroDescription}>
-            Multi-agent systems are the next wave — orchestrators, tool-calling
-            agents, RAG services, vector stores, queues, and APIs, all talking
-            to each other. Kindling gives you the infrastructure to build them
-            from day one: a local Kubernetes cluster, a CI pipeline generated in
-            minutes, and every service deployed with its dependencies in one
-            push. Then it stays with you — live sync across agents, a visual
-            dashboard for your entire system, secrets, and public tunnels for
-            webhooks. Start with CI. Keep building.
+            A Kubernetes operator that turns your laptop into a personal CI/CD
+            environment. Push to GitHub or GitLab, build locally via Kaniko, deploy
+            ephemeral staging environments — all on localhost, in seconds.
           </p>
           <InstallCommand />
           <div className={styles.heroButtons}>
@@ -90,7 +85,7 @@ function HeroSection() {
               sk-... -r .{"\n"}
               <span className={styles.termDim}>
                 ▸ Analyzing repository{"\n"}
-                {"  "}✅ Found orchestrator, 3 agents, RAG service{"\n"}
+                {"  "}✅ Found 3 Dockerfiles, 4 manifests{"\n"}
                 ▸ Generating workflow with AI{"\n"}
                 {"  "}🤖 Provider: openai, Model: o3{"\n"}
                 {"  "}✅ Workflow written to dev-deploy.yml
@@ -98,10 +93,10 @@ function HeroSection() {
               {"\n\n"}
               <span className={styles.termPrompt}>$</span> git push{"\n"}
               <span className={styles.termDim}>
-                {"  "}🏗️ Building 5 services...{"\n"}
-                {"  "}✅ All images built & pushed{"\n"}
-                {"  "}📦 Deploying with postgres + redis + qdrant{"\n"}
-                {"  "}✅ http://agent-orchestrator.localhost
+                {"  "}🏗️ Building → registry:5000/app:abc123{"\n"}
+                {"  "}✅ Built & pushed{"\n"}
+                {"  "}📦 Deploying with postgres + redis{"\n"}
+                {"  "}✅ http://you-app.localhost
               </span>
             </code>
           </div>
@@ -119,40 +114,40 @@ type FeatureItem = {
 
 const features: FeatureItem[] = [
   {
-    emoji: "�",
-    title: "Built for Agent Architectures",
-    description:
-      "Orchestrators, tool-calling agents, RAG pipelines, memory services — deploy your entire agent system with Postgres, Redis, message queues, and vector stores, all wired together locally.",
-  },
-  {
     emoji: "⚡",
-    title: "CI Pipeline in Minutes",
+    title: "Zero Cloud CI Minutes",
     description:
-      "Kindling scans your repo and generates a complete CI workflow. Every agent and service builds and deploys on your laptop — no cloud runners, no queuing, no billing.",
+      "Your laptop is the runner. No queuing behind other jobs, no paying for compute you already own. Builds happen locally in seconds.",
   },
   {
-    emoji: "🔄",
-    title: "Live Sync Across Agents",
+    emoji: "🤖",
+    title: "AI-Generated Workflows",
     description:
-      "Iterating on a prompt, a tool, or agent logic? Edit the code and see it running instantly. Kindling detects 30+ runtimes and picks the right restart strategy for each service.",
+      "Point kindling generate at any repo. It scans Dockerfiles, docker-compose, Helm charts, and source code, then produces a complete GitHub Actions or GitLab CI workflow.",
   },
   {
-    emoji: "🧩",
-    title: "15 Infrastructure Dependencies",
+    emoji: "📦",
+    title: "15 Auto-Provisioned Dependencies",
     description:
-      "Declare postgres, redis, kafka, elasticsearch, and 11 more in your workflow. The operator provisions them and injects connection URLs — the plumbing agents need to talk to each other.",
+      "Declare postgres, redis, rabbitmq, kafka, elasticsearch, and 10 more in your workflow. The operator provisions them and injects connection URLs automatically.",
   },
   {
-    emoji: "🖥️",
-    title: "Visual Dashboard",
+    emoji: "🔨",
+    title: "Kaniko Builds — No Docker Daemon",
     description:
-      "See every agent, service, and dependency in one UI. Tail logs from your orchestrator while syncing code to a tool agent. One-click rebuilds, scaling, and environment management.",
+      "Images are built inside the cluster using Kaniko. No Docker-in-Docker, no privileged containers. Layer caching makes rebuilds fast.",
+  },
+  {
+    emoji: "🌐",
+    title: "Instant localhost Staging",
+    description:
+      "Every push deploys a full staging environment with Deployment, Service, and Ingress — accessible at http://you-app.localhost immediately.",
   },
   {
     emoji: "🔐",
-    title: "Secrets & Webhooks",
+    title: "Secrets & OAuth Built In",
     description:
-      "Manage LLM API keys, database credentials, and third-party tokens across agents. Need webhook callbacks? One command creates a public HTTPS tunnel.",
+      "Manage API keys with kindling secrets. Need OAuth callbacks? kindling expose creates a public HTTPS tunnel with one command.",
   },
 ];
 
@@ -171,10 +166,10 @@ function FeaturesSection() {
     <section className={styles.features}>
       <div className="container">
         <h2 className={styles.sectionTitle}>
-          Everything your agent system needs
+          Everything you need for local dev staging
         </h2>
         <p className={styles.sectionSubtitle}>
-          CI gets you running. The engine keeps you building.
+          One operator. One CLI. From git push to running app on localhost.
         </p>
         <div className={styles.featureGrid}>
           {features.map((f, idx) => (
@@ -196,38 +191,36 @@ function HowItWorksSection() {
             <div className={styles.stepNumber}>1</div>
             <h3>Bootstrap</h3>
             <p>
-              <code>kindling init</code> spins up a Kubernetes cluster with a
-              container registry, ingress, and operator — ready for your
-              agent system.
+              <code>kindling init</code> creates a Kind cluster with an
+              in-cluster registry, ingress controller, and the kindling
+              operator.
             </p>
           </div>
           <div className={styles.stepArrow}>→</div>
           <div className={styles.step}>
             <div className={styles.stepNumber}>2</div>
-            <h3>Generate & Push</h3>
+            <h3>Connect</h3>
             <p>
-              <code>kindling generate</code> scans your repo — agents,
-              services, infrastructure — and writes a CI workflow. Push
-              once and everything deploys.
+              <code>kindling runners</code> registers a self-hosted CI
+              runner — GitHub Actions or GitLab CI — bound to your repo and username.
             </p>
           </div>
           <div className={styles.stepArrow}>→</div>
           <div className={styles.step}>
             <div className={styles.stepNumber}>3</div>
-            <h3>Iterate</h3>
+            <h3>Generate</h3>
             <p>
-              <code>kindling sync</code> live-syncs any agent or service.
-              Tweak a prompt, update tool logic, change orchestration —
-              see it running instantly.
+              <code>kindling generate</code> scans your repo and uses AI to
+              produce a complete workflow with builds, deploys, and dependencies.
             </p>
           </div>
           <div className={styles.stepArrow}>→</div>
           <div className={styles.step}>
             <div className={styles.stepNumber}>4</div>
-            <h3>Keep Building</h3>
+            <h3>Push & Deploy</h3>
             <p>
-              Add agents, swap models, wire up new tools. Manage secrets
-              for every LLM provider. The engine grows with your system.
+              <code>git push</code> triggers the workflow. Your laptop builds
+              the image and deploys a full staging environment on localhost.
             </p>
           </div>
         </div>
@@ -255,9 +248,11 @@ sudo mv bin/kindling /usr/local/bin/
 # Bootstrap a local cluster
 kindling init
 
-# Register a GitHub Actions runner
-kindling runners -u <github-user> \\
+# Register a CI runner (GitHub or GitLab)
+kindling runners -u <user> \\
   -r <owner/repo> -t <pat>
+# or: kindling runners --provider gitlab \\
+#   -u <user> -r <group/project> -t <token>
 
 # AI-generate a workflow for your app
 kindling generate -k <api-key> -r /path/to/app
@@ -308,6 +303,29 @@ curl http://<user>-<app>.localhost`}
                   {p}
                 </span>
               ))}
+            </div>
+            <h3>Supported CI platforms</h3>
+            <div className={styles.platformBadges}>
+              <a
+                href="/docs/quickstart"
+                className={styles.platformBadge}
+                data-platform="github"
+              >
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+                  <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z" />
+                </svg>
+                <span>GitHub Actions</span>
+              </a>
+              <a
+                href="/docs/quickstart"
+                className={styles.platformBadge}
+                data-platform="gitlab"
+              >
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+                  <path d="M23.955 13.587l-1.342-4.135-2.664-8.189a.455.455 0 00-.867 0L16.418 9.45H7.582L4.918 1.263a.455.455 0 00-.867 0L1.386 9.452.044 13.587a.924.924 0 00.331 1.023L12 23.054l11.625-8.443a.92.92 0 00.33-1.024" />
+                </svg>
+                <span>GitLab CI</span>
+              </a>
             </div>
             <div style={{ marginTop: "2rem" }}>
               <Link

@@ -439,6 +439,54 @@
   font-weight: 500;
 }
 
+.platformBadges {
+  display: flex;
+  gap: 0.75rem;
+  margin-top: 0.25rem;
+}
+
+.platformBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1.1rem;
+  border-radius: 10px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  text-decoration: none;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+  cursor: pointer;
+}
+
+.platformBadge:hover {
+  transform: translateY(-2px);
+  text-decoration: none;
+}
+
+.platformBadge[data-platform="github"] {
+  background: linear-gradient(135deg, rgba(36, 41, 47, 0.9), rgba(36, 41, 47, 0.7));
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: #fff;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.platformBadge[data-platform="github"]:hover {
+  box-shadow: 0 4px 16px rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+
+.platformBadge[data-platform="gitlab"] {
+  background: linear-gradient(135deg, rgba(252, 109, 38, 0.15), rgba(252, 109, 38, 0.08));
+  border: 1px solid rgba(252, 109, 38, 0.35);
+  color: #fc6d26;
+  box-shadow: 0 2px 8px rgba(252, 109, 38, 0.15);
+}
+
+.platformBadge[data-platform="gitlab"]:hover {
+  box-shadow: 0 4px 16px rgba(252, 109, 38, 0.25);
+  color: #fc6d26;
+}
+
 /* Responsive */
 @media (max-width: 996px) {
   .heroInner {
