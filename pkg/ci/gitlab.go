@@ -372,6 +372,8 @@ Do NOT skip inter-service env vars — without them, services cannot find each o
 
 ` + PromptOAuth + `
 
+` + PromptMultiAgentArchitecture + `
+
 ` + PromptFinalValidation
 
 	return strings.ReplaceAll(prompt, "HOSTARCH", hostArch)

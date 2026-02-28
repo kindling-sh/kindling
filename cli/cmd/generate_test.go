@@ -793,3 +793,739 @@ func contains(slice []string, item string) bool {
 	}
 	return false
 }
+
+// ────────────────────────────────────────────────────────────────────────────
+// detectAgentFrameworks
+// ────────────────────────────────────────────────────────────────────────────
+
+func TestDetectAgentFrameworks_CrewAI(t *testing.T) {
+	ctx := &repoContext{
+		depFiles: map[string]string{
+			"requirements.txt": "crewai==0.28.0\nlangchain>=0.1",
+		},
+		sourceSnippets: make(map[string]string),
+		dockerfiles:    make(map[string]string),
+	}
+	frameworks := detectAgentFrameworks(ctx)
+	if !contains(frameworks, "CrewAI") {
+		t.Errorf("should detect CrewAI, got %v", frameworks)
+	}
+	if !contains(frameworks, "LangChain") {
+		t.Errorf("should detect LangChain, got %v", frameworks)
+	}
+}
+
+func TestDetectAgentFrameworks_LangGraph(t *testing.T) {
+	ctx := &repoContext{
+		sourceSnippets: map[string]string{
+			"graph.py": `from langgraph.graph import StateGraph
+graph = StateGraph(AgentState)`,
+		},
+		depFiles:    make(map[string]string),
+		dockerfiles: make(map[string]string),
+	}
+	frameworks := detectAgentFrameworks(ctx)
+	if !contains(frameworks, "LangGraph") {
+		t.Errorf("should detect LangGraph, got %v", frameworks)
+	}
+}
+
+func TestDetectAgentFrameworks_OpenAIAgents(t *testing.T) {
+	ctx := &repoContext{
+		depFiles: map[string]string{
+			"pyproject.toml": `[project]
+dependencies = ["openai-agents>=0.1"]`,
+		},
+		sourceSnippets: map[string]string{
+			"main.py": `from openai.agents import Agent, Runner`,
+		},
+		dockerfiles: make(map[string]string),
+	}
+	frameworks := detectAgentFrameworks(ctx)
+	if !contains(frameworks, "OpenAI Agents SDK") {
+		t.Errorf("should detect OpenAI Agents SDK, got %v", frameworks)
+	}
+}
+
+func TestDetectAgentFrameworks_Anthropic(t *testing.T) {
+	ctx := &repoContext{
+		sourceSnippets: map[string]string{
+			"app.py": `from anthropic import Anthropic
+client = Anthropic()`,
+		},
+		depFiles:    make(map[string]string),
+		dockerfiles: make(map[string]string),
+	}
+	frameworks := detectAgentFrameworks(ctx)
+	if !contains(frameworks, "Anthropic Claude SDK") {
+		t.Errorf("should detect Anthropic Claude SDK, got %v", frameworks)
+	}
+}
+
+func TestDetectAgentFrameworks_AutoGen(t *testing.T) {
+	ctx := &repoContext{
+		depFiles: map[string]string{
+			"requirements.txt": "pyautogen>=0.2",
+		},
+		sourceSnippets: make(map[string]string),
+		dockerfiles:    make(map[string]string),
+	}
+	frameworks := detectAgentFrameworks(ctx)
+	if !contains(frameworks, "AutoGen") {
+		t.Errorf("should detect AutoGen, got %v", frameworks)
+	}
+}
+
+func TestDetectAgentFrameworks_Strands(t *testing.T) {
+	ctx := &repoContext{
+		depFiles: map[string]string{
+			"requirements.txt": "strands-agents>=0.1",
+		},
+		sourceSnippets: make(map[string]string),
+		dockerfiles:    make(map[string]string),
+	}
+	frameworks := detectAgentFrameworks(ctx)
+	if !contains(frameworks, "Strands Agents") {
+		t.Errorf("should detect Strands Agents, got %v", frameworks)
+	}
+}
+
+func TestDetectAgentFrameworks_None(t *testing.T) {
+	ctx := &repoContext{
+		sourceSnippets: map[string]string{
+			"main.go": `package main
+func main() { http.ListenAndServe(":8080", nil) }`,
+		},
+		depFiles:    make(map[string]string),
+		dockerfiles: make(map[string]string),
+	}
+	frameworks := detectAgentFrameworks(ctx)
+	if len(frameworks) != 0 {
+		t.Errorf("should detect no frameworks, got %v", frameworks)
+	}
+}
+
+func TestDetectAgentFrameworks_NoDuplicates(t *testing.T) {
+	ctx := &repoContext{
+		sourceSnippets: map[string]string{
+			"a.py": `from langchain import LLMChain`,
+			"b.py": `from langchain.agents import AgentExecutor`,
+		},
+		depFiles: map[string]string{
+			"requirements.txt": "langchain>=0.1",
+		},
+		dockerfiles: make(map[string]string),
+	}
+	frameworks := detectAgentFrameworks(ctx)
+	count := 0
+	for _, f := range frameworks {
+		if f == "LangChain" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("LangChain should appear exactly once, got %d in %v", count, frameworks)
+	}
+}
+
+func TestDetectAgentFrameworks_Sorted(t *testing.T) {
+	ctx := &repoContext{
+		depFiles: map[string]string{
+			"requirements.txt": "crewai\nlangchain\nlanggraph",
+		},
+		sourceSnippets: make(map[string]string),
+		dockerfiles:    make(map[string]string),
+	}
+	frameworks := detectAgentFrameworks(ctx)
+	sorted := make([]string, len(frameworks))
+	copy(sorted, frameworks)
+	sort.Strings(sorted)
+	for i := range frameworks {
+		if frameworks[i] != sorted[i] {
+			t.Errorf("frameworks not sorted: got %v", frameworks)
+			break
+		}
+	}
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// detectMCPServers
+// ────────────────────────────────────────────────────────────────────────────
+
+func TestDetectMCPServers_ConfigFile(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "mcp.json"), []byte(`{"servers": {}}`), 0644)
+
+	ctx := &repoContext{
+		tree: "mcp.json\napp.py\n",
+		depFiles: map[string]string{
+			"mcp.json": `{"servers": {}}`,
+		},
+		sourceSnippets: make(map[string]string),
+		dockerfiles:    make(map[string]string),
+	}
+	servers := detectMCPServers(dir, ctx)
+	found := false
+	for _, s := range servers {
+		if strings.Contains(s, "mcp.json") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("should detect mcp.json, got %v", servers)
+	}
+}
+
+func TestDetectMCPServers_PythonDecorator(t *testing.T) {
+	dir := t.TempDir()
+	ctx := &repoContext{
+		tree: "server.py\n",
+		sourceSnippets: map[string]string{
+			"server.py": `from mcp.server import FastMCP
+
+app = FastMCP("my-tools")
+
+@app.tool()
+def search(query: str) -> str:
+    return "result"`,
+		},
+		depFiles:    make(map[string]string),
+		dockerfiles: make(map[string]string),
+	}
+	servers := detectMCPServers(dir, ctx)
+	if len(servers) == 0 {
+		t.Error("should detect MCP server patterns")
+	}
+	foundFastMCP := false
+	foundImport := false
+	for _, s := range servers {
+		if strings.Contains(s, "FastMCP") {
+			foundFastMCP = true
+		}
+		if strings.Contains(s, "MCP server Python import") {
+			foundImport = true
+		}
+	}
+	if !foundFastMCP {
+		t.Errorf("should detect FastMCP, got %v", servers)
+	}
+	if !foundImport {
+		t.Errorf("should detect MCP server import, got %v", servers)
+	}
+}
+
+func TestDetectMCPServers_NodeSDK(t *testing.T) {
+	dir := t.TempDir()
+	ctx := &repoContext{
+		tree: "server.ts\n",
+		sourceSnippets: map[string]string{
+			"server.ts": `import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";`,
+		},
+		depFiles:    make(map[string]string),
+		dockerfiles: make(map[string]string),
+	}
+	servers := detectMCPServers(dir, ctx)
+	foundStdio := false
+	foundPkg := false
+	for _, s := range servers {
+		if strings.Contains(s, "stdio") {
+			foundStdio = true
+		}
+		if strings.Contains(s, "@modelcontextprotocol") {
+			foundPkg = true
+		}
+	}
+	if !foundStdio {
+		t.Errorf("should detect StdioServerTransport, got %v", servers)
+	}
+	if !foundPkg {
+		t.Errorf("should detect @modelcontextprotocol, got %v", servers)
+	}
+}
+
+func TestDetectMCPServers_None(t *testing.T) {
+	dir := t.TempDir()
+	ctx := &repoContext{
+		tree: "main.go\n",
+		sourceSnippets: map[string]string{
+			"main.go": `package main; func main() {}`,
+		},
+		depFiles:    make(map[string]string),
+		dockerfiles: make(map[string]string),
+	}
+	servers := detectMCPServers(dir, ctx)
+	if len(servers) != 0 {
+		t.Errorf("should detect no MCP servers, got %v", servers)
+	}
+}
+
+func TestDetectMCPServers_TreeDetection(t *testing.T) {
+	dir := t.TempDir()
+	ctx := &repoContext{
+		tree:           "src/app.py\ntools/mcp.json\n",
+		depFiles:       make(map[string]string),
+		sourceSnippets: make(map[string]string),
+		dockerfiles:    make(map[string]string),
+	}
+	servers := detectMCPServers(dir, ctx)
+	found := false
+	for _, s := range servers {
+		if strings.Contains(s, "mcp.json") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("should detect mcp.json in tree, got %v", servers)
+	}
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// detectVectorStores
+// ────────────────────────────────────────────────────────────────────────────
+
+func TestDetectVectorStores_ChromaDB(t *testing.T) {
+	ctx := &repoContext{
+		depFiles: map[string]string{
+			"requirements.txt": "chromadb>=0.4\nlangchain",
+		},
+		sourceSnippets: make(map[string]string),
+		dockerfiles:    make(map[string]string),
+	}
+	stores := detectVectorStores(ctx)
+	if !contains(stores, "ChromaDB") {
+		t.Errorf("should detect ChromaDB, got %v", stores)
+	}
+}
+
+func TestDetectVectorStores_PGVector(t *testing.T) {
+	ctx := &repoContext{
+		sourceSnippets: map[string]string{
+			"db.py": `from pgvector.sqlalchemy import Vector`,
+		},
+		depFiles:    make(map[string]string),
+		dockerfiles: make(map[string]string),
+	}
+	stores := detectVectorStores(ctx)
+	if !contains(stores, "pgvector") {
+		t.Errorf("should detect pgvector, got %v", stores)
+	}
+}
+
+func TestDetectVectorStores_Pinecone(t *testing.T) {
+	ctx := &repoContext{
+		depFiles: map[string]string{
+			"package.json": `{"dependencies": {"@pinecone-database/pinecone": "^1.0"}}`,
+		},
+		sourceSnippets: make(map[string]string),
+		dockerfiles:    make(map[string]string),
+	}
+	stores := detectVectorStores(ctx)
+	if !contains(stores, "Pinecone") {
+		t.Errorf("should detect Pinecone, got %v", stores)
+	}
+}
+
+func TestDetectVectorStores_Multiple(t *testing.T) {
+	ctx := &repoContext{
+		depFiles: map[string]string{
+			"requirements.txt": "chromadb\npgvector\nqdrant-client",
+		},
+		sourceSnippets: make(map[string]string),
+		dockerfiles:    make(map[string]string),
+	}
+	stores := detectVectorStores(ctx)
+	if !contains(stores, "ChromaDB") {
+		t.Errorf("should detect ChromaDB, got %v", stores)
+	}
+	if !contains(stores, "pgvector") {
+		t.Errorf("should detect pgvector, got %v", stores)
+	}
+	if !contains(stores, "Qdrant") {
+		t.Errorf("should detect Qdrant, got %v", stores)
+	}
+}
+
+func TestDetectVectorStores_None(t *testing.T) {
+	ctx := &repoContext{
+		sourceSnippets: map[string]string{
+			"main.go": `package main; func main() {}`,
+		},
+		depFiles:    make(map[string]string),
+		dockerfiles: make(map[string]string),
+	}
+	stores := detectVectorStores(ctx)
+	if len(stores) != 0 {
+		t.Errorf("should detect no vector stores, got %v", stores)
+	}
+}
+
+func TestDetectVectorStores_Sorted(t *testing.T) {
+	ctx := &repoContext{
+		depFiles: map[string]string{
+			"requirements.txt": "qdrant-client\nchromadb\npgvector",
+		},
+		sourceSnippets: make(map[string]string),
+		dockerfiles:    make(map[string]string),
+	}
+	stores := detectVectorStores(ctx)
+	sorted := make([]string, len(stores))
+	copy(sorted, stores)
+	sort.Strings(sorted)
+	for i := range stores {
+		if stores[i] != sorted[i] {
+			t.Errorf("stores not sorted: got %v", stores)
+			break
+		}
+	}
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// detectWorkerProcesses
+// ────────────────────────────────────────────────────────────────────────────
+
+func TestDetectWorkerProcesses_Celery(t *testing.T) {
+	ctx := &repoContext{
+		sourceSnippets: map[string]string{
+			"tasks.py": `from celery import Celery
+
+app = celery.Celery('myapp')
+
+@app.task
+def process_data(data):
+    return data`,
+		},
+		depFiles:    make(map[string]string),
+		dockerfiles: make(map[string]string),
+	}
+	workers := detectWorkerProcesses(ctx)
+	if len(workers) == 0 {
+		t.Error("should detect Celery worker")
+	}
+	found := false
+	for _, w := range workers {
+		if strings.Contains(w, "Celery") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("should detect Celery, got %v", workers)
+	}
+}
+
+func TestDetectWorkerProcesses_Kafka(t *testing.T) {
+	ctx := &repoContext{
+		sourceSnippets: map[string]string{
+			"consumer.py": `from kafka import KafkaConsumer
+consumer = KafkaConsumer('my-topic')`,
+		},
+		depFiles:    make(map[string]string),
+		dockerfiles: make(map[string]string),
+	}
+	workers := detectWorkerProcesses(ctx)
+	found := false
+	for _, w := range workers {
+		if strings.Contains(w, "Kafka") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("should detect Kafka consumer, got %v", workers)
+	}
+}
+
+func TestDetectWorkerProcesses_RabbitMQ(t *testing.T) {
+	ctx := &repoContext{
+		sourceSnippets: map[string]string{
+			"worker.py": `import pika
+connection = pika.BlockingConnection(pika.ConnectionParameters('localhost'))`,
+		},
+		depFiles:    make(map[string]string),
+		dockerfiles: make(map[string]string),
+	}
+	workers := detectWorkerProcesses(ctx)
+	found := false
+	for _, w := range workers {
+		if strings.Contains(w, "RabbitMQ") || strings.Contains(w, "pika") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("should detect RabbitMQ consumer, got %v", workers)
+	}
+}
+
+func TestDetectWorkerProcesses_Sidekiq(t *testing.T) {
+	ctx := &repoContext{
+		sourceSnippets: map[string]string{
+			"worker.rb": `class HardWorker
+  include Sidekiq::Worker
+  def perform(name)
+    puts "Working on #{name}"
+  end
+end`,
+		},
+		depFiles:    make(map[string]string),
+		dockerfiles: make(map[string]string),
+	}
+	workers := detectWorkerProcesses(ctx)
+	found := false
+	for _, w := range workers {
+		if strings.Contains(w, "Sidekiq") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("should detect Sidekiq worker, got %v", workers)
+	}
+}
+
+func TestDetectWorkerProcesses_BullMQ(t *testing.T) {
+	ctx := &repoContext{
+		sourceSnippets: map[string]string{
+			"worker.ts": `import { Worker } from 'bullmq';
+const worker = new Worker('queue', async job => {});`,
+		},
+		depFiles:    make(map[string]string),
+		dockerfiles: make(map[string]string),
+	}
+	workers := detectWorkerProcesses(ctx)
+	foundBullMQ := false
+	foundWorker := false
+	for _, w := range workers {
+		if strings.Contains(w, "BullMQ") && strings.Contains(w, "worker") {
+			foundWorker = true
+		}
+		if w == "BullMQ" {
+			foundBullMQ = true
+		}
+	}
+	if !foundBullMQ && !foundWorker {
+		t.Errorf("should detect BullMQ worker, got %v", workers)
+	}
+}
+
+func TestDetectWorkerProcesses_ComposeWorker(t *testing.T) {
+	ctx := &repoContext{
+		composeFile: `services:
+  web:
+    build: .
+  celery-worker:
+    build: .
+    command: celery -A myapp worker`,
+		sourceSnippets: make(map[string]string),
+		depFiles:       make(map[string]string),
+		dockerfiles:    make(map[string]string),
+	}
+	workers := detectWorkerProcesses(ctx)
+	if len(workers) == 0 {
+		t.Error("should detect workers from compose file")
+	}
+}
+
+func TestDetectWorkerProcesses_None(t *testing.T) {
+	ctx := &repoContext{
+		sourceSnippets: map[string]string{
+			"main.go": `package main; func main() { http.ListenAndServe(":8080", nil) }`,
+		},
+		depFiles:    make(map[string]string),
+		dockerfiles: make(map[string]string),
+	}
+	workers := detectWorkerProcesses(ctx)
+	if len(workers) != 0 {
+		t.Errorf("should detect no workers, got %v", workers)
+	}
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// mergeAllContent
+// ────────────────────────────────────────────────────────────────────────────
+
+func TestMergeAllContent(t *testing.T) {
+	ctx := &repoContext{
+		dockerfiles: map[string]string{"Dockerfile": "FROM node:18"},
+		depFiles:    map[string]string{"package.json": `{"name":"app"}`},
+		sourceSnippets: map[string]string{
+			"app.js": "console.log('hello')",
+		},
+		composeFile: "services:\n  web:\n    build: .",
+	}
+	merged := mergeAllContent(ctx)
+	if len(merged) != 4 {
+		t.Errorf("expected 4 entries, got %d", len(merged))
+	}
+	if merged["Dockerfile"] != "FROM node:18" {
+		t.Error("should include Dockerfile content")
+	}
+	if merged["docker-compose.yml"] != ctx.composeFile {
+		t.Error("should include compose file")
+	}
+}
+
+func TestMergeAllContent_NoCompose(t *testing.T) {
+	ctx := &repoContext{
+		dockerfiles:    map[string]string{"Dockerfile": "FROM go:1.21"},
+		depFiles:       make(map[string]string),
+		sourceSnippets: make(map[string]string),
+	}
+	merged := mergeAllContent(ctx)
+	if _, ok := merged["docker-compose.yml"]; ok {
+		t.Error("should not include compose key when no compose file")
+	}
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// buildGeneratePrompt with multi-agent context
+// ────────────────────────────────────────────────────────────────────────────
+
+func TestBuildGeneratePrompt_WithAgentFrameworks(t *testing.T) {
+	ctx := &repoContext{
+		name:            "agent-app",
+		branch:          "main",
+		tree:            "main.py\nDockerfile\n",
+		agentFrameworks: []string{"CrewAI", "LangChain"},
+		vectorStores:    []string{"ChromaDB", "pgvector"},
+		mcpServers:      []string{"MCP config file: mcp.json"},
+		workerProcesses: []string{"Celery worker"},
+		dockerfiles:     make(map[string]string),
+		depFiles:        make(map[string]string),
+		sourceSnippets:  make(map[string]string),
+	}
+
+	system, user := buildGeneratePrompt(ctx, ci.Default())
+
+	// System prompt should contain multi-agent guidance
+	if !strings.Contains(system, "Multi-agent architecture") {
+		t.Error("system prompt should contain multi-agent architecture guidance")
+	}
+	if !strings.Contains(system, "MCP") {
+		t.Error("system prompt should mention MCP")
+	}
+
+	// User prompt should contain all detected patterns
+	if !strings.Contains(user, "multi-agent architecture") {
+		t.Error("user prompt should contain multi-agent section")
+	}
+	if !strings.Contains(user, "CrewAI") {
+		t.Error("user prompt should list CrewAI")
+	}
+	if !strings.Contains(user, "LangChain") {
+		t.Error("user prompt should list LangChain")
+	}
+	if !strings.Contains(user, "ChromaDB") {
+		t.Error("user prompt should list ChromaDB")
+	}
+	if !strings.Contains(user, "pgvector") {
+		t.Error("user prompt should list pgvector")
+	}
+	if !strings.Contains(user, "mcp.json") {
+		t.Error("user prompt should list MCP config")
+	}
+	if !strings.Contains(user, "Celery") {
+		t.Error("user prompt should list Celery worker")
+	}
+}
+
+func TestBuildGeneratePrompt_NoAgentArch(t *testing.T) {
+	ctx := &repoContext{
+		name:           "plain-app",
+		branch:         "main",
+		tree:           "main.go\n",
+		dockerfiles:    make(map[string]string),
+		depFiles:       make(map[string]string),
+		sourceSnippets: make(map[string]string),
+	}
+
+	_, user := buildGeneratePrompt(ctx, ci.Default())
+
+	if strings.Contains(user, "multi-agent architecture") {
+		t.Error("user prompt should NOT contain multi-agent section for plain apps")
+	}
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// scanRepo integration: multi-agent detection
+// ────────────────────────────────────────────────────────────────────────────
+
+func TestScanRepo_DetectsAgentFrameworks(t *testing.T) {
+	dir := t.TempDir()
+
+	os.WriteFile(filepath.Join(dir, "main.py"), []byte(`from crewai import Agent, Task, Crew
+from langchain.llms import OpenAI`), 0644)
+	os.WriteFile(filepath.Join(dir, "requirements.txt"), []byte("crewai\nlangchain"), 0644)
+
+	ctx, err := scanRepo(dir)
+	if err != nil {
+		t.Fatalf("scanRepo() error = %v", err)
+	}
+
+	if !contains(ctx.agentFrameworks, "CrewAI") {
+		t.Errorf("should detect CrewAI, got %v", ctx.agentFrameworks)
+	}
+}
+
+func TestScanRepo_DetectsMCPServer(t *testing.T) {
+	dir := t.TempDir()
+
+	os.WriteFile(filepath.Join(dir, "mcp.json"), []byte(`{"servers":{"search":{}}}`), 0644)
+	os.WriteFile(filepath.Join(dir, "server.py"), []byte(`from mcp.server import FastMCP
+app = FastMCP("search")
+@app.tool()
+def search(q: str): pass`), 0644)
+
+	ctx, err := scanRepo(dir)
+	if err != nil {
+		t.Fatalf("scanRepo() error = %v", err)
+	}
+
+	if len(ctx.mcpServers) == 0 {
+		t.Error("should detect MCP servers")
+	}
+}
+
+func TestScanRepo_DetectsVectorStores(t *testing.T) {
+	dir := t.TempDir()
+
+	os.WriteFile(filepath.Join(dir, "main.py"), []byte(`import chromadb
+client = chromadb.Client()`), 0644)
+	os.WriteFile(filepath.Join(dir, "requirements.txt"), []byte("chromadb"), 0644)
+
+	ctx, err := scanRepo(dir)
+	if err != nil {
+		t.Fatalf("scanRepo() error = %v", err)
+	}
+
+	if !contains(ctx.vectorStores, "ChromaDB") {
+		t.Errorf("should detect ChromaDB, got %v", ctx.vectorStores)
+	}
+}
+
+func TestScanRepo_DetectsWorkerProcesses(t *testing.T) {
+	dir := t.TempDir()
+
+	os.WriteFile(filepath.Join(dir, "tasks.py"), []byte(`from celery import Celery
+app = celery.Celery('myapp')
+@app.task
+def add(x, y): return x + y`), 0644)
+
+	ctx, err := scanRepo(dir)
+	if err != nil {
+		t.Fatalf("scanRepo() error = %v", err)
+	}
+
+	if len(ctx.workerProcesses) == 0 {
+		t.Error("should detect Celery worker processes")
+	}
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// scanDepFiles includes MCP config files
+// ────────────────────────────────────────────────────────────────────────────
+
+func TestScanDepFiles_IncludesMCPConfig(t *testing.T) {
+	if !scanDepFiles["mcp.json"] {
+		t.Error("scanDepFiles should include mcp.json")
+	}
+	if !scanDepFiles["mcp.config.json"] {
+		t.Error("scanDepFiles should include mcp.config.json")
+	}
+}

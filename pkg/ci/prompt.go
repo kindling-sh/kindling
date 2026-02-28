@@ -356,6 +356,58 @@ ingress-host of the auth-handling service. If no public URL is specified but OAu
 patterns are detected, add a comment noting:
   # NOTE: OAuth detected — run 'kindling expose' for a public HTTPS URL`
 
+// PromptMultiAgentArchitecture is the shared guidance on detecting and handling
+// multi-agent AI architectures (MCP servers, orchestrators, workers, vector stores).
+const PromptMultiAgentArchitecture = `Multi-agent architecture support:
+Modern AI applications use multi-agent frameworks that produce a common deployment
+topology: orchestrator services + worker services + vector stores + message brokers
++ API keys. When the user prompt includes a "Detected multi-agent architecture"
+section, use it to inform your workflow generation:
+
+MCP servers:
+  MCP (Model Context Protocol) servers are small Python or Node.js services that
+  expose tools to AI agents. Treat each MCP server as a SEPARATE first-class service
+  with its own build and deploy step. MCP servers typically listen on a port (HTTP/SSE
+  mode) or run as stdio processes. For HTTP/SSE MCP servers, configure a port and
+  health check. For stdio-only MCP servers, use health-check-type: "none".
+
+Agent frameworks:
+  When agent frameworks are detected (CrewAI, LangGraph, AutoGen, OpenAI Agents SDK,
+  Anthropic Claude SDK, Strands), the app likely has:
+  - An orchestrator/supervisor service (the main entry point)
+  - Potentially separate worker services with their own entry points
+  - Heavy reliance on API keys (OPENAI_API_KEY, ANTHROPIC_API_KEY, etc.)
+  Emit one build+deploy per service that has its own Dockerfile. Wire up API keys
+  as secretKeyRef entries (these ARE required for the app to function, unlike optional
+  integrations).
+
+Vector stores:
+  When vector store dependencies are detected (chromadb, pgvector, pinecone, weaviate,
+  qdrant, milvus), handle them as follows:
+  - pgvector: add "postgres" dependency (the operator provisions PostgreSQL; pgvector
+    extension must be in the Dockerfile or init script)
+  - chromadb: if running as a separate service, treat as a deployable service with
+    its own Dockerfile. If used as an embedded library, no extra dependency needed.
+  - pinecone, weaviate, qdrant (cloud-hosted): these connect to external APIs, so
+    surface their API keys (PINECONE_API_KEY, WEAVIATE_API_KEY, QDRANT_API_KEY) as
+    secretKeyRef entries. Do NOT add them as local dependencies.
+
+Background workers:
+  Celery workers, Kafka consumers, RabbitMQ subscribers, and async task processors
+  should be deployed as SEPARATE services (not just dependencies). Look for:
+  - Celery: separate deployment with the celery command as entrypoint. Wire up
+    redis or rabbitmq as the broker dependency.
+  - Kafka consumers: separate deployment that reads from topics. Add kafka dependency.
+  - AMQP subscribers: separate deployment. Add rabbitmq dependency.
+  Each worker needs its own deploy step with appropriate dependencies and env vars.
+
+Inter-service networking:
+  When multiple services in an agent architecture call each other (orchestrator → worker,
+  agent → MCP server, API → worker), wire up the env vars for service discovery using
+  Kubernetes DNS names: $ACTOR-<service-name>:<port>. Scan source code for HTTP client
+  calls, gRPC channel targets, or env vars ending in _URL, _ADDR, _ENDPOINT that
+  reference other services.`
+
 // PromptFinalValidation is the shared final validation checklist.
 const PromptFinalValidation = `FINAL VALIDATION — before outputting the YAML, verify:
   1. Every deploy step that uses $(AMQP_URL) in its env MUST have "- type: rabbitmq"
