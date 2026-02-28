@@ -68,7 +68,7 @@ function HeroSection() {
               className={clsx("button button--lg", styles.heroSecondary)}
               to="https://github.com/kindling-sh/kindling"
             >
-              GitHub
+              Source
             </Link>
           </div>
         </div>
