@@ -1296,3 +1296,416 @@ func handleGenerate(w http.ResponseWriter, r *http.Request) {
 		"path":     relPath,
 	})
 }
+
+// ═══════════════════════════════════════════════════════════════
+// Topology Editor API
+// ═══════════════════════════════════════════════════════════════
+
+// topologyNode is the JSON shape for a node in the topology graph.
+type topologyNode struct {
+	ID       string           `json:"id"`
+	Type     string           `json:"type"`
+	Position topologyPosition `json:"position"`
+	Data     topologyData     `json:"data"`
+}
+
+type topologyPosition struct {
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
+}
+
+type topologyData struct {
+	Kind        string `json:"kind"`
+	Label       string `json:"label"`
+	DepType     string `json:"depType,omitempty"`
+	Version     string `json:"version,omitempty"`
+	Port        int    `json:"port,omitempty"`
+	EnvVarName  string `json:"envVarName,omitempty"`
+	Image       string `json:"image,omitempty"`
+	Path        string `json:"path,omitempty"`
+	ServicePort int    `json:"servicePort,omitempty"`
+	Replicas    int    `json:"replicas,omitempty"`
+	DSEName     string `json:"dseName,omitempty"`
+	IsNew       bool   `json:"isNew,omitempty"`
+}
+
+type topologyEdge struct {
+	ID     string `json:"id"`
+	Source string `json:"source"`
+	Target string `json:"target"`
+}
+
+type topologyGraph struct {
+	Nodes []topologyNode `json:"nodes"`
+	Edges []topologyEdge `json:"edges"`
+}
+
+// ── GET /api/topology ───────────────────────────────────────────
+// Reads all DSEs from the cluster and builds a topology graph.
+
+func handleGetTopology(w http.ResponseWriter, r *http.Request) {
+	out, err := kubectlJSON("get", "devstagingenvironments", "--all-namespaces", "-o", "json")
+	if err != nil {
+		// No DSEs yet — return empty graph
+		jsonResponse(w, topologyGraph{Nodes: []topologyNode{}, Edges: []topologyEdge{}})
+		return
+	}
+
+	var dseList struct {
+		Items []struct {
+			Metadata struct {
+				Name      string `json:"name"`
+				Namespace string `json:"namespace"`
+			} `json:"metadata"`
+			Spec struct {
+				Deployment struct {
+					Image    string `json:"image"`
+					Port     int    `json:"port"`
+					Replicas *int   `json:"replicas"`
+				} `json:"deployment"`
+				Service struct {
+					Port int `json:"port"`
+				} `json:"service"`
+				Dependencies []struct {
+					Type       string `json:"type"`
+					Version    string `json:"version,omitempty"`
+					Port       *int   `json:"port,omitempty"`
+					EnvVarName string `json:"envVarName,omitempty"`
+				} `json:"dependencies"`
+			} `json:"spec"`
+		} `json:"items"`
+	}
+
+	if err := json.Unmarshal([]byte(out), &dseList); err != nil {
+		jsonResponse(w, topologyGraph{Nodes: []topologyNode{}, Edges: []topologyEdge{}})
+		return
+	}
+
+	graph := topologyGraph{
+		Nodes: []topologyNode{},
+		Edges: []topologyEdge{},
+	}
+
+	// Track dependency nodes so we can reuse them across DSEs
+	depNodes := make(map[string]string) // depType -> nodeID
+	yOffset := 0.0
+
+	for _, dse := range dseList.Items {
+		// Create service node
+		replicas := 1
+		if dse.Spec.Deployment.Replicas != nil {
+			replicas = *dse.Spec.Deployment.Replicas
+		}
+		svcID := fmt.Sprintf("svc-%s", dse.Metadata.Name)
+		graph.Nodes = append(graph.Nodes, topologyNode{
+			ID:       svcID,
+			Type:     "service",
+			Position: topologyPosition{X: 300, Y: yOffset},
+			Data: topologyData{
+				Kind:        "service",
+				Label:       dse.Metadata.Name,
+				Image:       dse.Spec.Deployment.Image,
+				ServicePort: dse.Spec.Service.Port,
+				Replicas:    replicas,
+				DSEName:     dse.Metadata.Name,
+			},
+		})
+
+		// Create dependency nodes and edges
+		for i, dep := range dse.Spec.Dependencies {
+			depID, exists := depNodes[dep.Type]
+			if !exists {
+				depID = fmt.Sprintf("dep-%s", dep.Type)
+				port := 0
+				if dep.Port != nil {
+					port = *dep.Port
+				}
+				graph.Nodes = append(graph.Nodes, topologyNode{
+					ID:       depID,
+					Type:     "dependency",
+					Position: topologyPosition{X: 650, Y: yOffset + float64(i)*100},
+					Data: topologyData{
+						Kind:       "dependency",
+						Label:      dep.Type,
+						DepType:    dep.Type,
+						Version:    dep.Version,
+						Port:       port,
+						EnvVarName: dep.EnvVarName,
+					},
+				})
+				depNodes[dep.Type] = depID
+			}
+
+			graph.Edges = append(graph.Edges, topologyEdge{
+				ID:     fmt.Sprintf("e-%s-%s", svcID, depID),
+				Source: svcID,
+				Target: depID,
+			})
+		}
+
+		yOffset += 200
+	}
+
+	jsonResponse(w, graph)
+}
+
+// ── POST /api/topology/deploy ───────────────────────────────────
+// Accepts a topology graph and converts it to DSE YAML(s), then applies.
+
+func handleDeployTopology(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) {
+		return
+	}
+
+	var graph topologyGraph
+	if err := json.NewDecoder(r.Body).Decode(&graph); err != nil {
+		actionErr(w, "invalid topology graph: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Build a map of node IDs to nodes
+	nodeMap := make(map[string]topologyNode)
+	for _, n := range graph.Nodes {
+		nodeMap[n.ID] = n
+	}
+
+	// Find service nodes and their connected dependencies
+	type serviceBundle struct {
+		service      topologyNode
+		dependencies []topologyNode
+	}
+	bundles := []serviceBundle{}
+
+	for _, n := range graph.Nodes {
+		if n.Data.Kind != "service" {
+			continue
+		}
+		bundle := serviceBundle{service: n}
+		// Find all edges where this service is the source
+		for _, e := range graph.Edges {
+			var depID string
+			if e.Source == n.ID {
+				depID = e.Target
+			} else if e.Target == n.ID {
+				depID = e.Source
+			} else {
+				continue
+			}
+			if dep, ok := nodeMap[depID]; ok && dep.Data.Kind == "dependency" {
+				bundle.dependencies = append(bundle.dependencies, dep)
+			}
+		}
+		bundles = append(bundles, bundle)
+	}
+
+	if len(bundles) == 0 {
+		actionErr(w, "no service nodes found in topology", http.StatusBadRequest)
+		return
+	}
+
+	// Generate and apply DSE YAML for each service
+	var outputs []string
+	for _, b := range bundles {
+		yaml := buildDSEYAML(b.service, b.dependencies)
+		out, err := core.KubectlApplyStdin(clusterName, yaml)
+		if err != nil {
+			actionErr(w, "deploy failed for "+b.service.Data.Label+": "+out, http.StatusInternalServerError)
+			return
+		}
+		outputs = append(outputs, fmt.Sprintf("✓ %s deployed", b.service.Data.Label))
+	}
+
+	actionOK(w, strings.Join(outputs, "\n"))
+}
+
+// buildDSEYAML generates a DevStagingEnvironment YAML manifest from a
+// service node and its connected dependency nodes.
+func buildDSEYAML(svc topologyNode, deps []topologyNode) string {
+	name := strings.ToLower(strings.ReplaceAll(svc.Data.Label, " ", "-"))
+	image := svc.Data.Image
+	if image == "" {
+		image = fmt.Sprintf("localhost:5001/%s:latest", name)
+	}
+	port := svc.Data.ServicePort
+	if port == 0 {
+		port = 3000
+	}
+	replicas := svc.Data.Replicas
+	if replicas == 0 {
+		replicas = 1
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf(`apiVersion: kindling.dev/v1alpha1
+kind: DevStagingEnvironment
+metadata:
+  name: %s
+  namespace: default
+spec:
+  deployment:
+    image: %s
+    port: %d
+    replicas: %d
+  service:
+    port: %d
+`, name, image, port, replicas, port))
+
+	if len(deps) > 0 {
+		sb.WriteString("  dependencies:\n")
+		for _, dep := range deps {
+			sb.WriteString(fmt.Sprintf("    - type: %s\n", dep.Data.DepType))
+			if dep.Data.Version != "" {
+				sb.WriteString(fmt.Sprintf("      version: \"%s\"\n", dep.Data.Version))
+			}
+			if dep.Data.Port > 0 {
+				sb.WriteString(fmt.Sprintf("      port: %d\n", dep.Data.Port))
+			}
+			if dep.Data.EnvVarName != "" {
+				sb.WriteString(fmt.Sprintf("      envVarName: %s\n", dep.Data.EnvVarName))
+			}
+		}
+	}
+
+	return sb.String()
+}
+
+// ── POST /api/topology/scaffold ─────────────────────────────────
+// Creates a new service directory with a placeholder Dockerfile and source file.
+// Body: { "name": "my-api", "path": "/abs/path", "port": 3000 }
+
+func handleScaffoldService(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) {
+		return
+	}
+
+	var body struct {
+		Name string `json:"name"`
+		Path string `json:"path"`
+		Port int    `json:"port"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		actionErr(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if body.Name == "" || body.Path == "" {
+		actionErr(w, "name and path are required", http.StatusBadRequest)
+		return
+	}
+	if body.Port == 0 {
+		body.Port = 3000
+	}
+
+	absPath, err := filepath.Abs(body.Path)
+	if err != nil {
+		actionErr(w, "invalid path: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Create directory
+	if err := os.MkdirAll(absPath, 0755); err != nil {
+		actionErr(w, "cannot create directory: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Write Dockerfile (Kaniko-compatible)
+	dockerfile := fmt.Sprintf(`FROM node:20-alpine
+WORKDIR /app
+COPY package*.json ./
+ENV npm_config_cache=/tmp/.npm
+RUN npm ci --only=production 2>/dev/null || true
+COPY . .
+EXPOSE %d
+CMD ["node", "index.js"]
+`, body.Port)
+	if err := os.WriteFile(filepath.Join(absPath, "Dockerfile"), []byte(dockerfile), 0644); err != nil {
+		actionErr(w, "cannot write Dockerfile: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Write package.json
+	pkgJSON := fmt.Sprintf(`{
+  "name": "%s",
+  "version": "0.1.0",
+  "private": true,
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  }
+}
+`, body.Name)
+	if err := os.WriteFile(filepath.Join(absPath, "package.json"), []byte(pkgJSON), 0644); err != nil {
+		actionErr(w, "cannot write package.json: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Write index.js placeholder
+	indexJS := fmt.Sprintf(`const http = require('http');
+
+const PORT = process.env.PORT || %d;
+
+const server = http.createServer((req, res) => {
+  if (req.url === '/healthz') {
+    res.writeHead(200);
+    res.end('ok');
+    return;
+  }
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ service: '%s', status: 'running' }));
+});
+
+server.listen(PORT, () => {
+  console.log('%s listening on port ' + PORT);
+});
+`, body.Port, body.Name, body.Name)
+	if err := os.WriteFile(filepath.Join(absPath, "index.js"), []byte(indexJS), 0644); err != nil {
+		actionErr(w, "cannot write index.js: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	actionOK(w, fmt.Sprintf("Service '%s' scaffolded at %s", body.Name, absPath))
+}
+
+// ── GET /api/topology/check-path ────────────────────────────────
+// Checks if a directory exists and whether it has a Dockerfile.
+// Query: ?path=/abs/path
+
+func handleCheckPath(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Query().Get("path")
+	if path == "" {
+		actionErr(w, "path query parameter is required", http.StatusBadRequest)
+		return
+	}
+
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		jsonResponse(w, map[string]interface{}{
+			"exists":         false,
+			"has_dockerfile": false,
+			"language":       "",
+		})
+		return
+	}
+
+	info, err := os.Stat(absPath)
+	if err != nil || !info.IsDir() {
+		jsonResponse(w, map[string]interface{}{
+			"exists":         false,
+			"has_dockerfile": false,
+			"language":       "",
+		})
+		return
+	}
+
+	hasDockerfile := false
+	if _, err := os.Stat(filepath.Join(absPath, "Dockerfile")); err == nil {
+		hasDockerfile = true
+	}
+
+	lang := detectLanguageFromSource(absPath)
+
+	jsonResponse(w, map[string]interface{}{
+		"exists":         true,
+		"has_dockerfile": hasDockerfile,
+		"language":       lang,
+	})
+}

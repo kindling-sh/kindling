@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import type { RuntimeInfo, SyncStatus, ServiceDir, IntelStatus } from './types';
+import type { RuntimeInfo, SyncStatus, ServiceDir, IntelStatus, TopologyGraph } from './types';
 
 const API_BASE = '';
 
@@ -171,4 +171,22 @@ export async function streamGenerate(
     }
   }
   return lastResult;
+}
+
+// ── Topology helpers ─────────────────────────────────────────────
+
+export async function fetchTopology(): Promise<TopologyGraph> {
+  return apiFetch<TopologyGraph>('/api/topology');
+}
+
+export async function deployTopology(graph: TopologyGraph): Promise<ActionResult> {
+  return apiPost('/api/topology/deploy', graph);
+}
+
+export async function scaffoldService(body: { name: string; path: string; port?: number }): Promise<ActionResult> {
+  return apiPost('/api/topology/scaffold', body);
+}
+
+export async function checkPath(path: string): Promise<{ exists: boolean; has_dockerfile: boolean; language: string }> {
+  return apiFetch(`/api/topology/check-path?path=${encodeURIComponent(path)}`);
 }

@@ -91,6 +91,12 @@ func runDashboard(cmd *cobra.Command, args []string) error {
 	mux.HandleFunc("/api/intel", handleIntel)              // GET=status, POST=activate, DELETE=deactivate
 	mux.HandleFunc("/api/generate", handleGenerate)        // POST — AI workflow generation (ndjson)
 
+	// ── API routes (topology editor) ────────────────────────────
+	mux.HandleFunc("/api/topology", handleGetTopology)              // GET — current topology graph
+	mux.HandleFunc("/api/topology/deploy", handleDeployTopology)    // POST — deploy topology
+	mux.HandleFunc("/api/topology/scaffold", handleScaffoldService) // POST — scaffold service dir
+	mux.HandleFunc("/api/topology/check-path", handleCheckPath)     // GET — check dir existence
+
 	// ── Static frontend ─────────────────────────────────────────
 	distFS, err := fs.Sub(dashboardFS, "dashboard-ui/dist")
 	if err != nil {
