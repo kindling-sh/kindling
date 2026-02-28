@@ -52,7 +52,7 @@ function HeroSection() {
           </div>
           <p className={styles.heroSubtitle}>{siteConfig.tagline}</p>
           <p className={styles.heroDescription}>
-            A Kubernetes operator that turns your laptop into a personal CI/CD
+            A free and open-source Kubernetes operator that turns your laptop into a personal CI/CD
             environment. Push to GitHub or GitLab, build locally via Kaniko, deploy
             ephemeral staging environments — all on localhost, in seconds.
           </p>
