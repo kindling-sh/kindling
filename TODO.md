@@ -84,13 +84,15 @@ kindling sync -d inventory --restart --src ./services/inventory
 Added parallel-sync examples to the `sync` help text so this is
 discoverable.
 
-### MCP server detection in `generate`
+### ✅ MCP server detection in `generate`
 
 Model Context Protocol is becoming the standard for giving agents tools.
 MCP servers are small Python or Node HTTP/stdio services. `kindling
-generate` should detect `mcp.json`, `mcp.config.json`, or MCP server
-entry points (`@mcp.tool()` decorators, `StdioServerTransport` usage)
-and treat them as first-class services in the DSE, not ignored files.
+generate` detects `mcp.json`, `mcp.config.json`, and MCP server
+entry points (`@mcp.tool()` decorators, `StdioServerTransport` usage,
+`FastMCP`, `@modelcontextprotocol`) and surfaces them in CLI output.
+The user prompt issues a **DIRECTIVE** to the AI: each MCP server with
+its own Dockerfile becomes a separate build+deploy step.
 
 ### Vector store dependency detection
 
@@ -98,32 +100,37 @@ RAG is in every multi-agent stack. When `generate` sees imports from
 `chromadb`, `pgvector`, `pinecone`, `weaviate`, `qdrant`, or
 `llama_index` vector store modules, it should:
 
-- Add `postgres` dependency with a note about pgvector extension
-- Or flag the specific vector DB as a dependency
-- Detect `OPENAI_API_KEY`, `PINECONE_API_KEY`, etc. and surface them
-  in the secrets detection output
+**Default: respect external services.** Most teams already have a
+cloud-hosted vector store (Pinecone, Weaviate Cloud, Qdrant Cloud,
+etc.). The default behavior should:
 
-### Background workers as first-class deployments
+- Surface the required API keys (`PINECONE_API_KEY`, `QDRANT_API_KEY`,
+  etc.) in the secrets detection output
+- Add a YAML comment noting which vector store was detected
+- NOT auto-inject a local dependency — the user's app already points
+  at their external service
+
+**Local option:** For vector stores that *can* run locally (pgvector
+via postgres, ChromaDB as a service), add a comment noting the user
+can add a `postgres` or `chromadb` dependency if they want a local
+replica for dev. But don't do it automatically.
+
+### ✅ Background workers as first-class deployments
 
 Celery workers, Kafka consumers, RabbitMQ subscribers, and async task
 processors are first-class agents in multi-agent architectures — not
-afterthoughts. `generate` should:
+afteroughts. `generate` detects them via source code patterns, Procfile,
+and docker-compose, then issues a **DIRECTIVE** to the AI: each worker
+gets a separate deploy step with the correct broker dependency wired up.
 
-- Detect `celery -A`, `celery worker`, Kafka consumer groups, AMQP
-  subscribers in Procfiles, docker-compose, or source code
-- Emit separate deployments for workers (not just the dependency)
-- Wire up the correct broker dependency (`redis`, `rabbitmq`, `kafka`)
-  alongside the worker deployment
-
-### Inter-service networking validation
+### ✅ Inter-service networking validation
 
 Multi-agent handoff and A2A patterns mean services call each other over
-HTTP. Kindling already wires up K8s Services, but `generate` should:
-
-- Scan for `requests.get("http://service-name")`, `fetch()` calls,
-  gRPC channel targets in source code
-- Auto-configure matching K8s Service DNS names and ports
-- Warn when a service references another service that isn't in the DSE
+HTTP or gRPC. `generate` now detects inter-service call patterns:
+HTTP client calls (requests, fetch, axios, http.Get), gRPC channel
+creation, service URL env vars (_SERVICE_URL, _ENDPOINT), and
+compose depends_on graphs. The user prompt issues a **DIRECTIVE** to
+the AI to wire up K8s Service DNS names for service discovery.
 
 ### ✅ Agent context — `kindling intel`
 

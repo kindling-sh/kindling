@@ -1529,3 +1529,356 @@ func TestScanDepFiles_IncludesMCPConfig(t *testing.T) {
 		t.Error("scanDepFiles should include mcp.config.json")
 	}
 }
+
+// ────────────────────────────────────────────────────────────────────────────
+// scanDepFiles includes Procfile
+// ────────────────────────────────────────────────────────────────────────────
+
+func TestScanDepFiles_IncludesProcfile(t *testing.T) {
+	if !scanDepFiles["Procfile"] {
+		t.Error("scanDepFiles should include Procfile")
+	}
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Inter-service call detection
+// ────────────────────────────────────────────────────────────────────────────
+
+func TestDetectInterServiceCalls_HTTPLocalhost(t *testing.T) {
+	ctx := &repoContext{
+		sourceSnippets: map[string]string{
+			"app.py": `resp = requests.get("http://localhost:8080/api/orders")`,
+		},
+	}
+	result := detectInterServiceCalls(ctx)
+	if len(result) == 0 {
+		t.Error("should detect HTTP localhost call")
+	}
+	found := false
+	for _, r := range result {
+		if strings.Contains(r, "localhost") || strings.Contains(r, "requests.get") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("should detect localhost or requests.get pattern, got %v", result)
+	}
+}
+
+func TestDetectInterServiceCalls_GoHTTP(t *testing.T) {
+	ctx := &repoContext{
+		sourceSnippets: map[string]string{
+			"main.go": `resp, err := http.Get("http://inventory:3000/items")`,
+		},
+	}
+	result := detectInterServiceCalls(ctx)
+	found := false
+	for _, r := range result {
+		if strings.Contains(r, "http.Get") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("should detect Go http.Get, got %v", result)
+	}
+}
+
+func TestDetectInterServiceCalls_GRPCDial(t *testing.T) {
+	ctx := &repoContext{
+		sourceSnippets: map[string]string{
+			"client.go": `conn, err := grpc.Dial("orders:50051", grpc.WithInsecure())`,
+		},
+	}
+	result := detectInterServiceCalls(ctx)
+	found := false
+	for _, r := range result {
+		if strings.Contains(r, "gRPC") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("should detect gRPC dial, got %v", result)
+	}
+}
+
+func TestDetectInterServiceCalls_PythonGRPC(t *testing.T) {
+	ctx := &repoContext{
+		sourceSnippets: map[string]string{
+			"client.py": `channel = grpc.insecure_channel("mcp-server:50051")`,
+		},
+	}
+	result := detectInterServiceCalls(ctx)
+	found := false
+	for _, r := range result {
+		if strings.Contains(r, "gRPC") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("should detect Python gRPC channel, got %v", result)
+	}
+}
+
+func TestDetectInterServiceCalls_ServiceEnvVar(t *testing.T) {
+	ctx := &repoContext{
+		sourceSnippets: map[string]string{
+			"config.py": `ORDERS_SERVICE_URL = os.getenv("ORDERS_SERVICE_URL")`,
+		},
+	}
+	result := detectInterServiceCalls(ctx)
+	found := false
+	for _, r := range result {
+		if strings.Contains(r, "Service URL") || strings.Contains(r, "Endpoint") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("should detect service URL env var, got %v", result)
+	}
+}
+
+func TestDetectInterServiceCalls_ComposeDepends(t *testing.T) {
+	ctx := &repoContext{
+		sourceSnippets: make(map[string]string),
+		composeFile: `services:
+  api:
+    depends_on:
+      - orders
+      - inventory`,
+	}
+	result := detectInterServiceCalls(ctx)
+	found := false
+	for _, r := range result {
+		if strings.Contains(r, "depends_on") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("should detect compose depends_on, got %v", result)
+	}
+}
+
+func TestDetectInterServiceCalls_None(t *testing.T) {
+	ctx := &repoContext{
+		sourceSnippets: map[string]string{
+			"main.go": `func main() { fmt.Println("hello") }`,
+		},
+	}
+	result := detectInterServiceCalls(ctx)
+	if len(result) != 0 {
+		t.Errorf("should detect no inter-service calls, got %v", result)
+	}
+}
+
+func TestDetectInterServiceCalls_FetchJS(t *testing.T) {
+	ctx := &repoContext{
+		sourceSnippets: map[string]string{
+			"api.ts": `const res = await fetch("http://mcp-server:8080/tools")`,
+		},
+	}
+	result := detectInterServiceCalls(ctx)
+	found := false
+	for _, r := range result {
+		if strings.Contains(r, "fetch") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("should detect JS fetch, got %v", result)
+	}
+}
+
+func TestDetectInterServiceCalls_AxiosPost(t *testing.T) {
+	ctx := &repoContext{
+		sourceSnippets: map[string]string{
+			"service.ts": `await axios.post("http://worker:3001/enqueue", data)`,
+		},
+	}
+	result := detectInterServiceCalls(ctx)
+	found := false
+	for _, r := range result {
+		if strings.Contains(r, "Axios") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("should detect Axios POST, got %v", result)
+	}
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Vector store API key credential detection
+// ────────────────────────────────────────────────────────────────────────────
+
+func TestCredentialExactNames_VectorStoreKeys(t *testing.T) {
+	keys := []string{
+		"PINECONE_API_KEY", "WEAVIATE_API_KEY", "QDRANT_API_KEY",
+		"MILVUS_API_KEY", "COHERE_API_KEY", "HUGGINGFACE_API_KEY",
+		"HF_TOKEN", "GROQ_API_KEY", "MISTRAL_API_KEY",
+		"TOGETHER_API_KEY", "REPLICATE_API_TOKEN",
+	}
+	for _, k := range keys {
+		if !credentialExactNames[k] {
+			t.Errorf("credentialExactNames should include %s", k)
+		}
+	}
+}
+
+func TestIsExternalCredential_VectorStoreKeys(t *testing.T) {
+	keys := []string{
+		"PINECONE_API_KEY", "WEAVIATE_API_KEY", "QDRANT_API_KEY",
+		"COHERE_API_KEY", "GROQ_API_KEY",
+	}
+	for _, k := range keys {
+		if !isExternalCredential(k) {
+			t.Errorf("isExternalCredential(%q) should return true", k)
+		}
+	}
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Directive prompt output
+// ────────────────────────────────────────────────────────────────────────────
+
+func TestBuildGeneratePrompt_DirectiveMCP(t *testing.T) {
+	ctx := &repoContext{
+		name:           "mcp-app",
+		branch:         "main",
+		tree:           "server.py\nDockerfile\nmcp.json\n",
+		mcpServers:     []string{"MCP config file: mcp.json", "MCP tool decorator (@mcp.tool)"},
+		dockerfiles:    make(map[string]string),
+		depFiles:       make(map[string]string),
+		sourceSnippets: make(map[string]string),
+	}
+	_, user := buildGeneratePrompt(ctx, ci.Default())
+
+	if !strings.Contains(user, "DIRECTIVE") {
+		t.Error("user prompt should contain DIRECTIVE for MCP servers")
+	}
+	if !strings.Contains(user, "separate build+deploy") {
+		t.Error("user prompt should instruct separate build+deploy for MCP servers")
+	}
+}
+
+func TestBuildGeneratePrompt_DirectiveWorkers(t *testing.T) {
+	ctx := &repoContext{
+		name:            "celery-app",
+		branch:          "main",
+		tree:            "app.py\nDockerfile\n",
+		workerProcesses: []string{"Celery worker (celery -A)"},
+		dockerfiles:     make(map[string]string),
+		depFiles:        make(map[string]string),
+		sourceSnippets:  make(map[string]string),
+	}
+	_, user := buildGeneratePrompt(ctx, ci.Default())
+
+	if !strings.Contains(user, "DIRECTIVE") {
+		t.Error("user prompt should contain DIRECTIVE for workers")
+	}
+	if !strings.Contains(user, "separate deploy step") {
+		t.Error("user prompt should instruct separate deploy for workers")
+	}
+	if !strings.Contains(user, "broker dependency") {
+		t.Error("user prompt should mention broker dependency wiring")
+	}
+}
+
+func TestBuildGeneratePrompt_DirectiveVectorStores(t *testing.T) {
+	ctx := &repoContext{
+		name:           "rag-app",
+		branch:         "main",
+		tree:           "main.py\nDockerfile\n",
+		vectorStores:   []string{"Pinecone", "pgvector"},
+		dockerfiles:    make(map[string]string),
+		depFiles:       make(map[string]string),
+		sourceSnippets: make(map[string]string),
+	}
+	_, user := buildGeneratePrompt(ctx, ci.Default())
+
+	if !strings.Contains(user, "DIRECTIVE") {
+		t.Error("user prompt should contain DIRECTIVE for vector stores")
+	}
+	if !strings.Contains(user, "do NOT auto-add local dependencies") {
+		t.Error("user prompt should instruct not to auto-add local deps")
+	}
+	if !strings.Contains(user, "secretKeyRef") {
+		t.Error("user prompt should mention secretKeyRef for API keys")
+	}
+}
+
+func TestBuildGeneratePrompt_DirectiveInterService(t *testing.T) {
+	ctx := &repoContext{
+		name:              "multi-svc",
+		branch:            "main",
+		tree:              "api/main.go\nworker/main.go\n",
+		interServiceCalls: []string{"Go http.Get (potential inter-service call)"},
+		dockerfiles:       make(map[string]string),
+		depFiles:          make(map[string]string),
+		sourceSnippets:    make(map[string]string),
+	}
+	_, user := buildGeneratePrompt(ctx, ci.Default())
+
+	if !strings.Contains(user, "DIRECTIVE") {
+		t.Error("user prompt should contain DIRECTIVE for inter-service calls")
+	}
+	if !strings.Contains(user, "Kubernetes DNS") {
+		t.Error("user prompt should mention Kubernetes DNS for inter-service calls")
+	}
+}
+
+func TestBuildGeneratePrompt_NoInterServiceWithoutDetection(t *testing.T) {
+	ctx := &repoContext{
+		name:           "simple-app",
+		branch:         "main",
+		tree:           "main.go\n",
+		dockerfiles:    make(map[string]string),
+		depFiles:       make(map[string]string),
+		sourceSnippets: make(map[string]string),
+	}
+	_, user := buildGeneratePrompt(ctx, ci.Default())
+
+	if strings.Contains(user, "Inter-service communication") {
+		t.Error("user prompt should NOT contain inter-service section when nothing detected")
+	}
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// scanRepo integration: inter-service calls
+// ────────────────────────────────────────────────────────────────────────────
+
+func TestScanRepo_DetectsInterServiceCalls(t *testing.T) {
+	dir := t.TempDir()
+
+	os.WriteFile(filepath.Join(dir, "main.go"), []byte(`package main
+import "net/http"
+func main() {
+	resp, _ := http.Get("http://orders:3000/api")
+	_ = resp
+}`), 0644)
+
+	ctx, err := scanRepo(dir)
+	if err != nil {
+		t.Fatalf("scanRepo() error = %v", err)
+	}
+
+	if len(ctx.interServiceCalls) == 0 {
+		t.Error("should detect inter-service HTTP call")
+	}
+}
+
+func TestScanRepo_DetectsProcfile(t *testing.T) {
+	dir := t.TempDir()
+
+	os.WriteFile(filepath.Join(dir, "Procfile"), []byte(`web: gunicorn app:app
+worker: celery -A app worker
+`), 0644)
+
+	ctx, err := scanRepo(dir)
+	if err != nil {
+		t.Fatalf("scanRepo() error = %v", err)
+	}
+
+	if _, ok := ctx.depFiles["Procfile"]; !ok {
+		t.Error("scanRepo should collect Procfile as a dependency manifest")
+	}
+}

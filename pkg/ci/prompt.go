@@ -383,14 +383,21 @@ Agent frameworks:
 
 Vector stores:
   When vector store dependencies are detected (chromadb, pgvector, pinecone, weaviate,
-  qdrant, milvus), handle them as follows:
-  - pgvector: add "postgres" dependency (the operator provisions PostgreSQL; pgvector
-    extension must be in the Dockerfile or init script)
-  - chromadb: if running as a separate service, treat as a deployable service with
-    its own Dockerfile. If used as an embedded library, no extra dependency needed.
-  - pinecone, weaviate, qdrant (cloud-hosted): these connect to external APIs, so
-    surface their API keys (PINECONE_API_KEY, WEAVIATE_API_KEY, QDRANT_API_KEY) as
-    secretKeyRef entries. Do NOT add them as local dependencies.
+  qdrant, milvus), DEFAULT to respecting external services — the user almost certainly
+  already has a cloud-hosted vector store they're connecting to. Handle as follows:
+  - pinecone, weaviate, qdrant, milvus (cloud-hosted): surface their API keys
+    (PINECONE_API_KEY, WEAVIATE_API_KEY, QDRANT_API_KEY, MILVUS_API_KEY) as
+    secretKeyRef entries. Do NOT add local dependencies.
+  - pgvector: do NOT auto-add a "postgres" dependency. The app likely connects to
+    an external PostgreSQL with pgvector. Surface any API keys / connection env vars.
+    Add a YAML comment: # NOTE: pgvector detected — add 'postgres' dependency if you
+    # want a local dev replica instead of your external database.
+  - chromadb: if used as an embedded library, no extra dependency needed. If it
+    appears to run as a separate service (has its own Dockerfile), treat it as a
+    deployable service. Add a comment noting the user can run ChromaDB locally.
+  - FAISS: always embedded, no dependency needed.
+  Do NOT inject local database dependencies for vector stores unless the user
+  explicitly asks for local replication.
 
 Background workers:
   Celery workers, Kafka consumers, RabbitMQ subscribers, and async task processors

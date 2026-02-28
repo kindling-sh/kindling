@@ -160,6 +160,12 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 				fmt.Fprintf(os.Stderr, "         • %s\n", w)
 			}
 		}
+		if len(repoCtx.interServiceCalls) > 0 {
+			fmt.Fprintf(os.Stderr, "       Inter-service calls:\n")
+			for _, c := range repoCtx.interServiceCalls {
+				fmt.Fprintf(os.Stderr, "         • %s\n", c)
+			}
+		}
 	}
 
 	// ── Call the AI ──────────────────────────────────────────────
@@ -245,10 +251,11 @@ type repoContext struct {
 	hostArch          string   // host CPU architecture (arm64, amd64)
 
 	// Multi-agent architecture detection
-	agentFrameworks []string // detected agent framework imports
-	mcpServers      []string // detected MCP server indicators
-	vectorStores    []string // detected vector store dependencies
-	workerProcesses []string // detected background worker patterns
+	agentFrameworks   []string // detected agent framework imports
+	mcpServers        []string // detected MCP server indicators
+	vectorStores      []string // detected vector store dependencies
+	workerProcesses   []string // detected background worker patterns
+	interServiceCalls []string // detected inter-service HTTP/gRPC calls
 }
 
 // Directories to skip during scanning (built from the shared skip list).
@@ -313,6 +320,8 @@ var scanDepFiles = map[string]bool{
 	// MCP (Model Context Protocol)
 	"mcp.json":        true,
 	"mcp.config.json": true,
+	// Process managers (worker detection)
+	"Procfile": true,
 }
 
 // scanDepExts matches dependency manifests by extension (e.g. .csproj, .fsproj).
@@ -524,6 +533,7 @@ func scanRepo(repoPath string) (*repoContext, error) {
 	ctx.mcpServers = detectMCPServers(repoPath, ctx)
 	ctx.vectorStores = detectVectorStores(ctx)
 	ctx.workerProcesses = detectWorkerProcesses(ctx)
+	ctx.interServiceCalls = detectInterServiceCalls(ctx)
 
 	return ctx, nil
 }
@@ -691,31 +701,57 @@ func buildGeneratePrompt(ctx *repoContext, provider ci.Provider) (system, user s
 		b.WriteString("`kindling expose` should be run if OAuth callbacks need to reach the cluster.\n\n")
 	}
 
-	// Multi-agent architecture context
+	// Multi-agent architecture context — directive instructions
 	hasAgentArch := len(ctx.agentFrameworks) > 0 || len(ctx.mcpServers) > 0 ||
-		len(ctx.vectorStores) > 0 || len(ctx.workerProcesses) > 0
+		len(ctx.vectorStores) > 0 || len(ctx.workerProcesses) > 0 ||
+		len(ctx.interServiceCalls) > 0
 	if hasAgentArch {
 		b.WriteString("## Detected multi-agent architecture\n\n")
-		b.WriteString("This repository uses AI agent patterns. Use the multi-agent guidance from the system prompt.\n\n")
+		b.WriteString("This repository uses AI agent patterns. Follow the directives below and the multi-agent guidance from the system prompt.\n\n")
+
 		if len(ctx.agentFrameworks) > 0 {
-			b.WriteString("**Agent frameworks detected:** " + strings.Join(ctx.agentFrameworks, ", ") + "\n\n")
+			b.WriteString("### Agent frameworks: " + strings.Join(ctx.agentFrameworks, ", ") + "\n\n")
+			b.WriteString("**DIRECTIVE:** This app likely has an orchestrator service and possibly separate worker services. ")
+			b.WriteString("Emit one build+deploy per service that has its own Dockerfile. ")
+			b.WriteString("Agent framework API keys (OPENAI_API_KEY, ANTHROPIC_API_KEY, etc.) are REQUIRED for the app to function — use secretKeyRef for these.\n\n")
 		}
+
 		if len(ctx.mcpServers) > 0 {
-			b.WriteString("**MCP server indicators:**\n")
+			b.WriteString("### MCP servers detected:\n")
 			for _, s := range ctx.mcpServers {
 				b.WriteString(fmt.Sprintf("- %s\n", s))
 			}
-			b.WriteString("\n")
+			b.WriteString("\n**DIRECTIVE:** Each MCP server with its own Dockerfile MUST be a separate build+deploy step. ")
+			b.WriteString("For HTTP/SSE MCP servers, configure a port and health check. ")
+			b.WriteString("For stdio-only MCP servers, use health-check-type: \"none\". ")
+			b.WriteString("Wire up inter-service env vars so the orchestrator can reach each MCP server via K8s DNS.\n\n")
 		}
+
 		if len(ctx.vectorStores) > 0 {
-			b.WriteString("**Vector store dependencies:** " + strings.Join(ctx.vectorStores, ", ") + "\n\n")
+			b.WriteString("### Vector stores: " + strings.Join(ctx.vectorStores, ", ") + "\n\n")
+			b.WriteString("**DIRECTIVE:** Default to respecting external services — do NOT auto-add local dependencies for vector stores. ")
+			b.WriteString("Surface API keys (PINECONE_API_KEY, WEAVIATE_API_KEY, QDRANT_API_KEY, etc.) as secretKeyRef. ")
+			b.WriteString("Add a YAML comment noting the vector store and that the user can add a local dependency if they want a dev replica.\n\n")
 		}
+
 		if len(ctx.workerProcesses) > 0 {
-			b.WriteString("**Background worker patterns:**\n")
+			b.WriteString("### Background workers detected:\n")
 			for _, w := range ctx.workerProcesses {
 				b.WriteString(fmt.Sprintf("- %s\n", w))
 			}
-			b.WriteString("\n")
+			b.WriteString("\n**DIRECTIVE:** Each background worker MUST be a separate deploy step (not just a dependency). ")
+			b.WriteString("Workers typically share the same Dockerfile as the main service but with a different command/entrypoint. ")
+			b.WriteString("Wire up the correct broker dependency (redis for Celery/BullMQ, rabbitmq for AMQP, kafka for Kafka consumers).\n\n")
+		}
+
+		if len(ctx.interServiceCalls) > 0 {
+			b.WriteString("### Inter-service communication detected:\n")
+			for _, c := range ctx.interServiceCalls {
+				b.WriteString(fmt.Sprintf("- %s\n", c))
+			}
+			b.WriteString("\n**DIRECTIVE:** Wire up env vars for service discovery using Kubernetes DNS: ")
+			b.WriteString("$ACTOR-<service-name>:<port>. Check source code for env vars ending in _URL, _ADDR, _ENDPOINT, ")
+			b.WriteString("_SERVICE_HOST that reference other services, and set them to the correct K8s DNS name.\n\n")
 		}
 	}
 
@@ -827,6 +863,20 @@ var credentialExactNames = map[string]bool{
 	"FIREBASE_API_KEY":      true,
 	"OPENAI_API_KEY":        true,
 	"ANTHROPIC_API_KEY":     true,
+	"PINECONE_API_KEY":      true,
+	"WEAVIATE_API_KEY":      true,
+	"QDRANT_API_KEY":        true,
+	"QDRANT_URL":            true,
+	"MILVUS_API_KEY":        true,
+	"COHERE_API_KEY":        true,
+	"HUGGINGFACE_API_KEY":   true,
+	"HF_TOKEN":              true,
+	"VOYAGE_API_KEY":        true,
+	"GOOGLE_API_KEY":        true,
+	"GROQ_API_KEY":          true,
+	"MISTRAL_API_KEY":       true,
+	"TOGETHER_API_KEY":      true,
+	"REPLICATE_API_TOKEN":   true,
 }
 
 // detectExternalSecrets scans source files, Dockerfiles, compose files, and .env
@@ -1297,4 +1347,72 @@ func mergeAllContent(ctx *repoContext) map[string]string {
 		all["docker-compose.yml"] = ctx.composeFile
 	}
 	return all
+}
+
+// ── Inter-service call detection ────────────────────────────────
+
+// interServicePatterns are code-level patterns that indicate one service is
+// calling another over HTTP, gRPC, or message passing. Each match includes
+// a description and the raw line for context.
+var interServiceCallPatterns = []struct {
+	pattern string
+	desc    string
+}{
+	// HTTP client calls with service-name-like URLs
+	{`http://localhost:`, "HTTP call to localhost (likely inter-service)"},
+	{`http://127.0.0.1:`, "HTTP call to 127.0.0.1 (likely inter-service)"},
+	{`requests.get(`, "Python requests.get (potential inter-service call)"},
+	{`requests.post(`, "Python requests.post (potential inter-service call)"},
+	{`httpx.get(`, "Python httpx.get (potential inter-service call)"},
+	{`httpx.post(`, "Python httpx.post (potential inter-service call)"},
+	{`fetch("http`, "JS/TS fetch to HTTP URL (potential inter-service call)"},
+	{`fetch('http`, "JS/TS fetch to HTTP URL (potential inter-service call)"},
+	{`axios.get(`, "Axios GET (potential inter-service call)"},
+	{`axios.post(`, "Axios POST (potential inter-service call)"},
+	{`http.Get(`, "Go http.Get (potential inter-service call)"},
+	{`http.Post(`, "Go http.Post (potential inter-service call)"},
+	{`http.NewRequest(`, "Go http.NewRequest (potential inter-service call)"},
+	// gRPC channels
+	{`grpc.Dial(`, "Go gRPC dial (inter-service)"},
+	{`grpc.NewClient(`, "Go gRPC client (inter-service)"},
+	{`grpc.insecure_channel(`, "Python gRPC channel (inter-service)"},
+	{`new grpc.Client(`, "Node gRPC client (inter-service)"},
+	{`ManagedChannelBuilder.forAddress(`, "Java gRPC channel (inter-service)"},
+	// Service URL env vars
+	{`_SERVICE_URL`, "Service URL env var reference"},
+	{`_SERVICE_HOST`, "Service host env var reference"},
+	{`_SERVICE_ADDR`, "Service address env var reference"},
+	{`_ENDPOINT`, "Endpoint env var reference"},
+}
+
+// detectInterServiceCalls scans source code for patterns indicating
+// one service calls another over HTTP or gRPC.
+func detectInterServiceCalls(ctx *repoContext) []string {
+	seen := make(map[string]bool)
+
+	for _, content := range ctx.sourceSnippets {
+		for _, p := range interServiceCallPatterns {
+			if seen[p.desc] {
+				continue
+			}
+			if strings.Contains(content, p.pattern) {
+				seen[p.desc] = true
+			}
+		}
+	}
+
+	// Also scan compose file for links/depends_on that imply inter-service calls
+	if ctx.composeFile != "" {
+		lower := strings.ToLower(ctx.composeFile)
+		if strings.Contains(lower, "depends_on") && !seen["docker-compose depends_on (service dependency graph)"] {
+			seen["docker-compose depends_on (service dependency graph)"] = true
+		}
+	}
+
+	var result []string
+	for desc := range seen {
+		result = append(result, desc)
+	}
+	sort.Strings(result)
+	return result
 }
