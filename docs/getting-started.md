@@ -1,8 +1,15 @@
 # Getting Started
 
-This guide walks you through both development loops: the **outer loop**
-(CI — push code, build containers, deploy environments) and the **inner
-loop** (live sync — edit files, see changes instantly).
+This guide walks you through the full kindling journey: **analyze** your
+project, **generate** a CI workflow, enter the **dev loop**, and eventually
+**graduate to production**.
+
+```
+analyze → generate → dev loop → promote
+   ↓          ↓          ↓          ↓
+ readiness  workflow   push/sync  production
+ check      via AI     iterate    (coming soon)
+```
 
 ---
 
@@ -10,14 +17,14 @@ loop** (live sync — edit files, see changes instantly).
 
 | Tool | Version | Purpose |
 |---|---|---|
-| [Docker](https://docs.docker.com/get-docker/) | 20.10+ | Container runtime |
+| [Docker](https://docs.docker.com/get-docker/) | 24+ | Container runtime |
 | [Kind](https://kind.sigs.k8s.io/docs/user/quick-start/#installation) | 0.20+ | Local Kubernetes clusters |
-| [kubectl](https://kubernetes.io/docs/tasks/tools/) | 1.27+ | Kubernetes CLI |
+| [kubectl](https://kubernetes.io/docs/tasks/tools/) | 1.28+ | Kubernetes CLI |
 | [Go](https://go.dev/dl/) | 1.20+ | Building the CLI from source |
 | [Make](https://www.gnu.org/software/make/) | Any | Building the CLI from source |
 
-> **Note:** Go and Make are only required if you build the CLI from source
-> (Step 2). If you install via Homebrew (`brew install kindling-sh/tap/kindling`),
+> **Note:** Go and Make are only required if you build the CLI from source.
+> If you install via Homebrew (`brew install kindling-sh/tap/kindling`),
 > you don't need them.
 
 Verify everything is installed:
@@ -28,30 +35,23 @@ kind --version && kubectl version --client && docker info -f '{{.ServerVersion}}
 
 ---
 
-## Step 1 — Clone the repo
+## Phase 0 — Setup
+
+### Install the CLI
+
+```bash
+brew install kindling-sh/tap/kindling
+```
+
+Or build from source:
 
 ```bash
 git clone https://github.com/kindling-sh/kindling.git
-cd kindling
-```
-
----
-
-## Step 2 — Build the CLI
-
-```bash
-make cli
-```
-
-This produces `bin/kindling`. Add it to your PATH:
-
-```bash
+cd kindling && make cli
 sudo cp bin/kindling /usr/local/bin/
 ```
 
----
-
-## Step 3 — Bootstrap the cluster
+### Bootstrap the cluster
 
 **Before you begin**, allocate enough Docker Desktop resources
 (Settings → Resources):
@@ -71,13 +71,12 @@ This creates a Kind cluster named `dev` with:
 - ingress-nginx controller (routes `*.localhost` → your apps)
 - kindling operator (watches for DevStagingEnvironment CRs)
 
----
+### Register a CI runner
 
-## Step 4 — Register a CI runner
+kindling supports **GitHub Actions** and **GitLab CI**. You need a personal
+access token for your platform.
 
-kindling supports **GitHub Actions** and **GitLab CI**. You need a personal access token for your platform.
-
-### GitHub Actions
+#### GitHub Actions
 
 You need a [GitHub PAT](https://github.com/settings/tokens) with the **repo** scope.
 
@@ -85,7 +84,7 @@ You need a [GitHub PAT](https://github.com/settings/tokens) with the **repo** sc
 kindling runners -u <your-github-username> -r <owner/repo> -t <your-pat>
 ```
 
-### GitLab CI
+#### GitLab CI
 
 You need a [GitLab runner registration token](https://docs.gitlab.com/ee/ci/runners/) for your project.
 
@@ -93,21 +92,65 @@ You need a [GitLab runner registration token](https://docs.gitlab.com/ee/ci/runn
 kindling runners --ci-provider gitlab -u <your-gitlab-username> -r <group/project> -t <your-token>
 ```
 
-Verify the runner is registered:
+---
+
+## Phase 1 — Analyze
+
+Before generating a workflow, let kindling check your project's readiness:
 
 ```bash
-kubectl get cirunnerpools
-kubectl get pods -l app.kubernetes.io/managed-by=cirunnerpool-operator
+kindling analyze
 ```
 
-You should also see it listed under your repo's **Settings → Actions → Runners**.
+**What it checks:**
+- **Dockerfiles** — found, valid, Kaniko-compatible (no BuildKit-only features)
+- **Dependencies** — Postgres, Redis, MongoDB, Kafka, and 11 more detected from source
+- **Secrets** — external credentials (`*_API_KEY`, `*_SECRET`, `*_TOKEN`) your app references
+- **Agent architecture** — LangChain, CrewAI, LangGraph, OpenAI Agents SDK, MCP servers
+- **Inter-service communication** — HTTP calls between your services
+- **Build context** — verifies COPY/ADD paths align with the Dockerfile's build context
+
+**Example output:**
+
+```
+📁 Repository: /path/to/your-app
+──────────────────────────────
+
+🐳 Dockerfiles
+  ✅ ./Dockerfile (Kaniko-compatible)
+  ✅ ./agent/Dockerfile (Kaniko-compatible)
+
+📦 Dependencies
+  • postgres 16
+  • redis (latest)
+
+🔑 Secrets
+  ⚠️  OPENAI_API_KEY — run: kindling secrets set OPENAI_API_KEY <value>
+  ⚠️  STRIPE_KEY — run: kindling secrets set STRIPE_KEY <value>
+
+🤖 Agent Frameworks
+  • LangChain detected in agent/
+
+✅ Ready for 'kindling generate'
+```
+
+Fix any issues it flags before moving on. For example, if it detects
+missing secrets, set them now:
+
+```bash
+kindling secrets set OPENAI_API_KEY sk-...
+kindling secrets set STRIPE_KEY sk_live_...
+```
+
+> **Coming soon:** `kindling scaffold` will generate Dockerfiles and project
+> structure for new projects that don't have them yet.
 
 ---
 
-## Step 5 — Create your app workflow
+## Phase 2 — Generate
 
-> **⚠️ Dockerfile required:** Your app must have a working Dockerfile that
-> builds successfully on its own (`docker build .`). Kaniko runs it as-is.
+> **⚠️ Dockerfile required:** Your app must have a working Dockerfile.
+> Kaniko builds it as-is inside the cluster.
 
 ### Option A: AI-generate the workflow (recommended)
 
@@ -167,18 +210,11 @@ jobs:
 
 ---
 
-## Step 5b — Set external credentials (if detected)
+## Phase 3 — Dev Loop
 
-If `kindling generate` detected external credentials:
+The dev loop has two speeds:
 
-```bash
-kindling secrets set STRIPE_KEY sk_live_abc123
-kindling secrets set OPENAI_API_KEY sk-...
-```
-
----
-
-## Step 6 — Push and deploy (outer loop)
+### Outer loop: push → build → deploy
 
 ```bash
 git add -A && git commit -m "add kindling workflow" && git push
@@ -197,33 +233,11 @@ Access your app:
 curl http://<your-username>-my-app.localhost/
 ```
 
-**This is the outer loop** — every `git push` triggers a full CI build + deploy.
+Every `git push` triggers a full CI build + deploy.
 
----
+### Inner loop: edit → sync → reload
 
-## Step 7 — Launch the dashboard
-
-```bash
-kindling dashboard
-```
-
-Open `http://localhost:9090` in your browser. You'll see:
-
-- All deployed environments with status, images, and replicas
-- Runtime detection badges for each service (Node.js, Python, Go, etc.)
-- **Sync** and **Load** buttons on every service
-- Pod status, logs, events, services, and ingresses
-
-The dashboard is your visual control plane for the inner loop.
-
----
-
-## Step 8 — Start the inner loop (live sync)
-
-Now for the fast part. Instead of pushing code and waiting for CI, sync
-your changes directly into the running container:
-
-### From the CLI
+For rapid iteration without waiting for CI:
 
 ```bash
 # Watch for file changes and auto-restart (strategy auto-detected)
@@ -235,20 +249,6 @@ kindling sync -d myapp-dev --restart --once
 # Go service — cross-compiles locally, syncs the binary
 kindling sync -d my-gateway --restart --language go
 ```
-
-### From the dashboard
-
-Click the **Sync** button on any service. The dashboard will:
-
-1. Auto-detect the runtime from the container's process
-2. Prompt you for the local source directory
-3. Start the sync session with real-time status updates
-4. Show the sync count as files are synced
-
-Click **Stop** to end the session — the deployment automatically rolls
-back to its pre-sync state.
-
-### How it works
 
 `kindling sync` auto-detects the runtime and chooses the right strategy:
 
@@ -262,67 +262,60 @@ back to its pre-sync state.
 
 ### Automatic rollback
 
-When you stop a sync session (Ctrl+C or via the dashboard):
-
+When you stop sync (Ctrl+C):
 - If the deployment was patched (wrapper injected), kindling performs a
-  `rollout undo` to the saved revision — removing the wrapper entirely
-- If only files were synced (signal-reload servers), it performs a
-  `rollout restart` for a fresh pod with the original image
-- Either way, the container returns to exactly the state it was in
-  before sync started
+  `rollout undo` — removing the wrapper entirely
+- If only files were synced, it performs a `rollout restart` for a fresh pod
+- Either way, the container returns to exactly the state it was in before sync
 
-No manual cleanup. No stale processes. Clean rollback every time.
+### The dashboard
 
----
-
-## Step 9 — Load without CI
-
-For larger changes that need a full image rebuild but don't warrant a
-`git push`, use **Load** from the dashboard:
-
-1. Click **Load** on a service
-2. Kindling runs `docker build` locally, loads the image into Kind, and
-   triggers a rolling update
-3. No GitHub Actions involved — it's a local build + deploy
-
-This is useful when you've changed a Dockerfile, added dependencies, or
-want to test a full rebuild without going through CI.
-
----
-
-## Iterate
-
-The two loops work together. Use the **inner loop** for rapid iteration
-on code changes, and the **outer loop** when you're ready to commit:
-
+```bash
+kindling dashboard
 ```
- edit → sync → verify → edit → sync → verify → ... → commit → push → CI
-  ▲                                                                     │
-  └─────────────────── next feature ◄───────────────────────────────────┘
+
+Open `http://localhost:9090` for a visual control plane:
+- **Sync** and **Load** buttons on every service
+- Pod status, logs, events, services, and ingresses
+- Runtime detection badges (Node.js, Python, Go, etc.)
+- Secrets, env vars, and scaling controls
+
+### Public URLs for OAuth
+
+```bash
+kindling expose
 ```
+
+Creates an HTTPS tunnel via cloudflared or ngrok. Auto-patches your ingress
+with the tunnel hostname. Stop with `kindling expose --stop`.
 
 ### Other useful commands while iterating
 
 ```bash
-# Check status — includes crash diagnostics for unhealthy pods
-kindling status
-
-# Set env vars on a running deployment without redeploying
+# Set env vars without redeploying
 kindling env set myapp-dev DATABASE_PORT=5432
 
 # List env vars
 kindling env list myapp-dev
 
-# Start a public HTTPS tunnel for OAuth callbacks
-kindling expose
+# Rebuild an image locally (skip CI)
+kindling load -s my-app --context .
 
-# Stop the tunnel
-kindling expose --stop
+# One-service rebuild via CI
+kindling push -s my-app
 
-# Switch to a different GitHub repo without destroying the cluster
+# Switch repos without destroying the cluster
 kindling reset
 kindling runners -u myuser -r neworg/newrepo -t ghp_xxxxx
 ```
+
+---
+
+## Phase 4 — Graduate to Production *(coming soon)*
+
+> `kindling promote` will graduate your staging environment to a production
+> cluster with TLS, DNS, and real infrastructure. This feature is on the
+> roadmap for an upcoming release.
 
 ---
 
@@ -362,7 +355,7 @@ EOF
 # Deploy
 kindling deploy -f dev-environment.yaml
 
-# Then start the inner loop
+# Then start the dev loop
 kindling sync -d my-app-dev --restart
 ```
 
@@ -387,7 +380,7 @@ kindling destroy -y
 ## Next steps
 
 - [CLI Reference](cli.md) — all commands and flags
-- [Architecture](architecture.md) — how both loops work under the hood
+- [Architecture](architecture.md) — how the operator works under the hood
 - [Secrets Management](secrets.md) — managing credentials across cluster rebuilds
 - [OAuth & Tunnels](oauth-tunnels.md) — public HTTPS for OAuth callbacks
 - [Dependency Reference](dependencies.md) — all 15 dependency types

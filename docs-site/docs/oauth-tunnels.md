@@ -183,6 +183,84 @@ open https://random-name.trycloudflare.com
 
 ---
 
+## Multi-service tunnels
+
+A single `kindling expose` tunnel routes to the ingress controller, which
+means **all your services are exposed through one public URL** — the ingress
+controller handles routing based on hostnames and paths.
+
+### How it works
+
+When you run `kindling expose`, the tunnel connects to `localhost:80`
+(the ingress controller). Since all your services have their own ingress
+rules (e.g. `alice-api.localhost`, `alice-ui.localhost`), the tunnel
+automatically patches the active ingress with the tunnel's public hostname.
+
+For **multi-service apps** with separate frontend and backend ingresses,
+you can target a specific ingress with `--service`:
+
+```bash
+# Expose the frontend ingress (e.g. for OAuth callbacks)
+kindling expose --service alice-ui
+```
+
+The tunnel patches that ingress's host to the public URL, while your
+backend services remain accessible internally via cluster DNS
+(`http://alice-api:8080`).
+
+### Example: Frontend + API with OAuth
+
+A common pattern is a React/Next.js frontend that handles OAuth callbacks,
+talking to an API backend:
+
+```
+Internet → tunnel → ingress-nginx → alice-ui (handles /auth/callback)
+                                   ↘ alice-api (internal only, no tunnel needed)
+```
+
+```bash
+# 1. Both services are deployed via git push
+git push origin main
+
+# 2. Expose just the frontend for OAuth callbacks
+kindling expose --service alice-ui
+#   ✅ Public URL: https://random-name.trycloudflare.com
+#   ✅ Patched ingress alice-ui → random-name.trycloudflare.com
+
+# 3. Configure your OAuth provider's callback:
+#    https://random-name.trycloudflare.com/auth/callback
+
+# 4. The frontend calls the API internally:
+#    API_URL=http://alice-api:8080 (cluster DNS, no tunnel needed)
+```
+
+### When you need both services exposed
+
+If your API also needs to be publicly reachable (e.g. for webhook
+receivers or mobile app backends), you have two options:
+
+**Option A: Path-based routing** — Route both through a single ingress
+using path prefixes (`/api/*` → backend, everything else → frontend).
+This works with a single tunnel.
+
+**Option B: Multiple tunnels** — Run a second tunnel on a different port:
+
+```bash
+# Tunnel 1: frontend on port 80 (default ingress)
+kindling expose --service alice-ui
+
+# Tunnel 2: direct to the API service port
+kindling expose --port 8080 --tunnel ngrok
+```
+
+:::tip
+Most apps only need the frontend exposed for OAuth. Backend services
+communicate over cluster DNS (`http://<name>:<port>`) and don't need
+a public URL.
+:::
+
+---
+
 ## Limitations
 
 - **cloudflared quick tunnels** generate a new random URL each time.

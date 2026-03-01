@@ -1,9 +1,11 @@
 package cmd
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -37,6 +39,28 @@ Omit to rebuild all services.`)
 }
 
 func runPush(cmd *cobra.Command, args []string) error {
+	// ── Pre-flight: check for missing secrets ───────────────────
+	missing := checkWorkflowSecrets()
+	if len(missing) > 0 {
+		fmt.Fprintf(os.Stderr, "\n  %s%s⚠️  Missing secrets detected%s\n\n", colorBold, colorYellow, colorReset)
+		for _, name := range missing {
+			fmt.Fprintf(os.Stderr, "  %s❌ %s%s — pod will crash without this secret\n",
+				colorRed, name, colorReset)
+			fmt.Fprintf(os.Stderr, "     %s→ kindling secrets set %s <value>%s\n",
+				colorDim, name, colorReset)
+		}
+		fmt.Fprintln(os.Stderr)
+		fmt.Fprintf(os.Stderr, "  Push anyway? [y/N] ")
+		reader := bufio.NewReader(os.Stdin)
+		answer, _ := reader.ReadString('\n')
+		answer = strings.TrimSpace(strings.ToLower(answer))
+		if answer != "y" && answer != "yes" {
+			fmt.Fprintf(os.Stderr, "  %sAborted.%s Set the missing secrets and try again.\n\n", colorYellow, colorReset)
+			return nil
+		}
+		fmt.Fprintln(os.Stderr)
+	}
+
 	// ── Normalise service list (allow -s "orders,gateway") ──────
 	services := normaliseServices(pushServices)
 
@@ -117,4 +141,78 @@ func runGit(args ...string) error {
 	c.Stderr = os.Stderr
 	c.Stdin = os.Stdin
 	return c.Run()
+}
+
+// checkWorkflowSecrets scans the generated CI workflow for secretKeyRef
+// entries and verifies each referenced K8s secret exists in the cluster.
+// Returns the names of any missing secrets. Silently returns nil if no
+// workflow is found or the cluster is unreachable.
+func checkWorkflowSecrets() []string {
+	// Find the workflow file
+	cwd, err := os.Getwd()
+	if err != nil {
+		return nil
+	}
+
+	workflowPaths := []string{
+		filepath.Join(cwd, ".github", "workflows", "dev-deploy.yml"),
+		filepath.Join(cwd, ".github", "workflows", "dev-deploy.yaml"),
+		filepath.Join(cwd, ".gitlab-ci.yml"),
+	}
+
+	var workflowContent string
+	for _, p := range workflowPaths {
+		data, err := os.ReadFile(p)
+		if err == nil {
+			workflowContent = string(data)
+			break
+		}
+	}
+	if workflowContent == "" {
+		return nil
+	}
+
+	// Extract secretKeyRef names from the workflow
+	requiredSecrets := extractSecretKeyRefNames(workflowContent)
+	if len(requiredSecrets) == 0 {
+		return nil
+	}
+
+	// Check which exist in the cluster — look for both the bare name
+	// (e.g. openai-api-key) and the kindling-prefixed form
+	// (kindling-secret-openai-api-key), since users create secrets via
+	// `kindling secrets set` which adds the prefix.
+	clusterSecrets := listClusterSecrets()
+	var missing []string
+	for _, name := range requiredSecrets {
+		if clusterSecrets[name] || clusterSecrets["kindling-secret-"+name] {
+			continue
+		}
+		missing = append(missing, name)
+	}
+	return missing
+}
+
+// extractSecretKeyRefNames parses YAML content for secretKeyRef blocks
+// and returns the K8s secret names referenced.
+func extractSecretKeyRefNames(content string) []string {
+	var names []string
+	seen := make(map[string]bool)
+	lines := strings.Split(content, "\n")
+
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "secretKeyRef:" && i+1 < len(lines) {
+			// Next line should be "name: <secret-name>"
+			nextLine := strings.TrimSpace(lines[i+1])
+			if strings.HasPrefix(nextLine, "name:") {
+				name := strings.TrimSpace(strings.TrimPrefix(nextLine, "name:"))
+				if name != "" && !seen[name] {
+					seen[name] = true
+					names = append(names, name)
+				}
+			}
+		}
+	}
+	return names
 }

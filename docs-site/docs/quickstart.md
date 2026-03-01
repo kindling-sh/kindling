@@ -1,122 +1,131 @@
 ---
 sidebar_position: 1
 title: Quickstart
-description: Go from zero to a deployed app on the public internet in 5 minutes.
+description: Go from zero to a deployed app on localhost in 5 minutes.
 ---
 
 # Quickstart
 
-Set up CI for a new project in 5 minutes. Then keep building with live sync, secrets, tunnels, and a visual dashboard.
+Go from nothing to a running app in three phases: **analyze → generate → dev loop**.
 
-## Install
+---
+
+## 1. Install & bootstrap
 
 ```bash
 brew install kindling-sh/tap/kindling
-```
-
-:::tip
-This installs `kindling`, `kind`, and `kubectl` automatically. That's it — one command, all dependencies handled.
-:::
-
-## Bootstrap
-
-```bash
 kindling init
 ```
 
-Creates a local Kubernetes cluster with an in-cluster container registry, ingress controller, and the kindling operator — all in one shot.
+:::tip
+`brew install` installs `kindling`, `kind`, and `kubectl` automatically. `kindling init` creates a local Kubernetes cluster with a container registry, ingress controller, and the kindling operator — all in one shot.
+:::
 
-## Try the demo app
-
-`kindling init` auto-clones the project to `~/.kindling`. Copy the included microservices demo — Go, Python, Node.js, and React — into a fresh directory:
-
-```bash
-cp -r ~/.kindling/examples/microservices ~/kindling-demo
-```
-
-This gives you a working 4-service app (API gateway, orders service, inventory service, React UI) with Postgres, Redis, and MongoDB — plus a pre-built GitHub Actions workflow (or run `kindling generate --ci-provider gitlab` for GitLab CI). No AI key needed.
-
-## Create a repo and push
-
-```bash
-cd ~/kindling-demo
-git init && git add -A && git commit -m "initial commit"
-gh repo create kindling-demo --private --source . --push
-```
-
-## Connect the runner
+## 2. Connect a CI runner
 
 kindling supports **GitHub Actions** and **GitLab CI**.
 
-### GitHub
-
-You need a [GitHub Personal Access Token](https://github.com/settings/tokens) with the **repo** scope.
-
 ```bash
-kindling runners -u <github-user> -r <github-user>/kindling-demo -t <pat>
+# GitHub (needs a PAT with repo scope)
+kindling runners -u <user> -r <owner/repo> -t <pat>
+
+# GitLab
+kindling runners --ci-provider gitlab -u <user> -r <group/project> -t <token>
 ```
 
-### GitLab
+---
 
-You need a [GitLab runner registration token](https://docs.gitlab.com/ee/ci/runners/) for your project.
+## 3. Analyze your project
 
-```bash
-kindling runners --ci-provider gitlab -u <gitlab-user> -r <group>/kindling-demo -t <token>
-```
-
-This registers a self-hosted CI runner in your cluster, bound to your repo. Push a change to trigger a build:
+Before generating anything, check your project's readiness:
 
 ```bash
-git commit --allow-empty -m "trigger build" && git push
+kindling analyze
 ```
 
-## Watch it deploy
+This scans your repo and reports:
+- Dockerfiles found and Kaniko compatibility
+- Dependencies detected (Postgres, Redis, etc.)
+- Secrets and credentials your app needs
+- Agent frameworks (LangChain, CrewAI, etc.) and MCP servers
+- Build context alignment between Dockerfiles and workflow
+
+Fix any issues it flags, then move to generate.
+
+## 4. Generate a workflow
+
+```bash
+kindling generate -k <api-key> -r .
+```
+
+AI-generates a complete CI workflow (`.github/workflows/dev-deploy.yml` or `.gitlab-ci.yml`). Detects services, languages, ports, dependencies, health checks, and secrets.
+
+:::note
+Works with OpenAI (default) or Anthropic (`--ai-provider anthropic`). Preview first with `--dry-run`.
+:::
+
+## 5. Push and deploy
+
+```bash
+git add -A && git commit -m "add kindling workflow" && git push
+```
+
+The runner picks up the job, Kaniko builds images in-cluster, the operator provisions dependencies, and ingress routes go live:
 
 ```bash
 kindling status
+curl http://<your-user>-my-app.localhost
 ```
 
-The runner picks up the workflow, Kaniko builds all four images, the operator provisions Postgres, Redis, and MongoDB, and ingress routes go live:
+## 6. Start the dev loop
+
+Now iterate without pushing to git:
 
 ```bash
-curl http://<your-user>-ui.localhost
+# Sub-second live sync — edit, save, see changes instantly
+kindling sync -d <your-user>-my-app --restart
+
+# Or open the visual dashboard
+kindling dashboard
 ```
 
-### Want a public URL?
+When you stop sync (Ctrl+C), the deployment automatically rolls back to its pre-sync state.
+
+### Need a public URL?
 
 ```bash
 kindling expose
 ```
 
-Instantly creates an HTTPS tunnel. Share the URL with anyone.
+Creates an HTTPS tunnel instantly — useful for OAuth callbacks, webhooks, or sharing with teammates.
 
 ---
 
-## Use your own app
+## Try the demo app (optional)
 
-Once you've seen the demo, point kindling at your own repo:
+Don't have a project handy? Use the included microservices demo:
 
 ```bash
-kindling generate -k <openai-api-key> -r /path/to/your-app
+cp -r ~/.kindling/examples/microservices ~/kindling-demo
+cd ~/kindling-demo
+git init && git add -A && git commit -m "initial commit"
+gh repo create kindling-demo --private --source . --push
 ```
 
-Scans your repo — Dockerfiles, docker-compose, Helm charts, source code — and writes a complete CI workflow using AI (`.github/workflows/dev-deploy.yml` for GitHub, `.gitlab-ci.yml` for GitLab).
-
-:::note
-Works with OpenAI (default) or Anthropic (`--ai-provider anthropic`). Use `--ci-provider gitlab` for GitLab CI workflows. Your app needs a working Dockerfile.
-:::
+This gives you a 4-service app (Go, Python, Node.js, React) with Postgres, Redis, and MongoDB — plus a pre-built workflow. No AI key needed.
 
 ---
 
-## What just happened?
+## The journey
 
 ```
-brew install → kindling init → cp demo → create repo → git push → app running
-     ↓              ↓              ↓            ↓               ↓           ↓
-  CLI + deps    K8s cluster    Demo app    Git repo      Local build   localhost
+analyze → generate → dev loop → promote
+   ↓          ↓          ↓          ↓
+ readiness  workflow   push/sync  production
+ check      via AI     iterate    (coming soon)
 ```
 
-Every subsequent `git push` rebuilds and redeploys automatically. No cloud CI minutes. No Docker Hub. No YAML by hand. Works with GitHub and GitLab.
+Every `git push` rebuilds and redeploys. `kindling sync` gives you sub-second iteration. No cloud CI minutes. No Docker Hub. No YAML by hand.
 
 ---
 

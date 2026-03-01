@@ -136,6 +136,38 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 			colorCyan, colorReset))
 	}
 
+	// Report multi-agent architecture detections
+	hasAgentArch := len(repoCtx.agentFrameworks) > 0 || len(repoCtx.mcpServers) > 0 ||
+		len(repoCtx.vectorStores) > 0 || len(repoCtx.workerProcesses) > 0
+	if hasAgentArch {
+		fmt.Fprintln(os.Stderr)
+		step("🤖", fmt.Sprintf("%sDetected multi-agent architecture:%s", colorBold, colorReset))
+		if len(repoCtx.agentFrameworks) > 0 {
+			fmt.Fprintf(os.Stderr, "       Agent frameworks: %s\n", strings.Join(repoCtx.agentFrameworks, ", "))
+		}
+		if len(repoCtx.mcpServers) > 0 {
+			fmt.Fprintf(os.Stderr, "       MCP servers:\n")
+			for _, s := range repoCtx.mcpServers {
+				fmt.Fprintf(os.Stderr, "         • %s\n", s)
+			}
+		}
+		if len(repoCtx.vectorStores) > 0 {
+			fmt.Fprintf(os.Stderr, "       Vector stores: %s\n", strings.Join(repoCtx.vectorStores, ", "))
+		}
+		if len(repoCtx.workerProcesses) > 0 {
+			fmt.Fprintf(os.Stderr, "       Background workers:\n")
+			for _, w := range repoCtx.workerProcesses {
+				fmt.Fprintf(os.Stderr, "         • %s\n", w)
+			}
+		}
+		if len(repoCtx.interServiceCalls) > 0 {
+			fmt.Fprintf(os.Stderr, "       Inter-service calls:\n")
+			for _, c := range repoCtx.interServiceCalls {
+				fmt.Fprintf(os.Stderr, "         • %s\n", c)
+			}
+		}
+	}
+
 	// ── Call the AI ──────────────────────────────────────────────
 	header("Generating workflow with AI")
 	step("🤖", fmt.Sprintf("Provider: %s, Model: %s", genProvider, genModel))
@@ -217,6 +249,13 @@ type repoContext struct {
 	needsPublicExpose bool     // true if OAuth/OIDC patterns detected
 	oauthHints        []string // descriptions of detected OAuth indicators
 	hostArch          string   // host CPU architecture (arm64, amd64)
+
+	// Multi-agent architecture detection
+	agentFrameworks   []string // detected agent framework imports
+	mcpServers        []string // detected MCP server indicators
+	vectorStores      []string // detected vector store dependencies
+	workerProcesses   []string // detected background worker patterns
+	interServiceCalls []string // detected inter-service HTTP/gRPC calls
 }
 
 // Directories to skip during scanning (built from the shared skip list).
@@ -278,6 +317,11 @@ var scanDepFiles = map[string]bool{
 	"deno.jsonc": true,
 	// Bun
 	"bun.lockb": true,
+	// MCP (Model Context Protocol)
+	"mcp.json":        true,
+	"mcp.config.json": true,
+	// Process managers (worker detection)
+	"Procfile": true,
 }
 
 // scanDepExts matches dependency manifests by extension (e.g. .csproj, .fsproj).
@@ -484,6 +528,13 @@ func scanRepo(repoPath string) (*repoContext, error) {
 	// Detect OAuth/OIDC patterns that need public exposure
 	ctx.oauthHints, ctx.needsPublicExpose = detectOAuthRequirements(ctx)
 
+	// Detect multi-agent architecture patterns
+	ctx.agentFrameworks = detectAgentFrameworks(ctx)
+	ctx.mcpServers = detectMCPServers(repoPath, ctx)
+	ctx.vectorStores = detectVectorStores(ctx)
+	ctx.workerProcesses = detectWorkerProcesses(ctx)
+	ctx.interServiceCalls = detectInterServiceCalls(ctx)
+
 	return ctx, nil
 }
 
@@ -650,6 +701,60 @@ func buildGeneratePrompt(ctx *repoContext, provider ci.Provider) (system, user s
 		b.WriteString("`kindling expose` should be run if OAuth callbacks need to reach the cluster.\n\n")
 	}
 
+	// Multi-agent architecture context — directive instructions
+	hasAgentArch := len(ctx.agentFrameworks) > 0 || len(ctx.mcpServers) > 0 ||
+		len(ctx.vectorStores) > 0 || len(ctx.workerProcesses) > 0 ||
+		len(ctx.interServiceCalls) > 0
+	if hasAgentArch {
+		b.WriteString("## Detected multi-agent architecture\n\n")
+		b.WriteString("This repository uses AI agent patterns. Follow the directives below and the multi-agent guidance from the system prompt.\n\n")
+
+		if len(ctx.agentFrameworks) > 0 {
+			b.WriteString("### Agent frameworks: " + strings.Join(ctx.agentFrameworks, ", ") + "\n\n")
+			b.WriteString("**DIRECTIVE:** This app likely has an orchestrator service and possibly separate worker services. ")
+			b.WriteString("Emit one build+deploy per service that has its own Dockerfile. ")
+			b.WriteString("Agent framework API keys (OPENAI_API_KEY, ANTHROPIC_API_KEY, etc.) are REQUIRED for the app to function — use secretKeyRef for these.\n\n")
+		}
+
+		if len(ctx.mcpServers) > 0 {
+			b.WriteString("### MCP servers detected:\n")
+			for _, s := range ctx.mcpServers {
+				b.WriteString(fmt.Sprintf("- %s\n", s))
+			}
+			b.WriteString("\n**DIRECTIVE:** Each MCP server with its own Dockerfile MUST be a separate build+deploy step. ")
+			b.WriteString("For HTTP/SSE MCP servers, configure a port and health check. ")
+			b.WriteString("For stdio-only MCP servers, use health-check-type: \"none\". ")
+			b.WriteString("Wire up inter-service env vars so the orchestrator can reach each MCP server via K8s DNS.\n\n")
+		}
+
+		if len(ctx.vectorStores) > 0 {
+			b.WriteString("### Vector stores: " + strings.Join(ctx.vectorStores, ", ") + "\n\n")
+			b.WriteString("**DIRECTIVE:** Default to respecting external services — do NOT auto-add local dependencies for vector stores. ")
+			b.WriteString("Surface API keys (PINECONE_API_KEY, WEAVIATE_API_KEY, QDRANT_API_KEY, etc.) as secretKeyRef. ")
+			b.WriteString("Add a YAML comment noting the vector store and that the user can add a local dependency if they want a dev replica.\n\n")
+		}
+
+		if len(ctx.workerProcesses) > 0 {
+			b.WriteString("### Background workers detected:\n")
+			for _, w := range ctx.workerProcesses {
+				b.WriteString(fmt.Sprintf("- %s\n", w))
+			}
+			b.WriteString("\n**DIRECTIVE:** Each background worker MUST be a separate deploy step (not just a dependency). ")
+			b.WriteString("Workers typically share the same Dockerfile as the main service but with a different command/entrypoint. ")
+			b.WriteString("Wire up the correct broker dependency (redis for Celery/BullMQ, rabbitmq for AMQP, kafka for Kafka consumers).\n\n")
+		}
+
+		if len(ctx.interServiceCalls) > 0 {
+			b.WriteString("### Inter-service communication detected:\n")
+			for _, c := range ctx.interServiceCalls {
+				b.WriteString(fmt.Sprintf("- %s\n", c))
+			}
+			b.WriteString("\n**DIRECTIVE:** Wire up env vars for service discovery using Kubernetes DNS: ")
+			b.WriteString("$ACTOR-<service-name>:<port>. Check source code for env vars ending in _URL, _ADDR, _ENDPOINT, ")
+			b.WriteString("_SERVICE_HOST that reference other services, and set them to the correct K8s DNS name.\n\n")
+		}
+	}
+
 	singleExample, multiExample := wfGen.ExampleWorkflows()
 
 	// Reference examples
@@ -758,6 +863,20 @@ var credentialExactNames = map[string]bool{
 	"FIREBASE_API_KEY":      true,
 	"OPENAI_API_KEY":        true,
 	"ANTHROPIC_API_KEY":     true,
+	"PINECONE_API_KEY":      true,
+	"WEAVIATE_API_KEY":      true,
+	"QDRANT_API_KEY":        true,
+	"QDRANT_URL":            true,
+	"MILVUS_API_KEY":        true,
+	"COHERE_API_KEY":        true,
+	"HUGGINGFACE_API_KEY":   true,
+	"HF_TOKEN":              true,
+	"VOYAGE_API_KEY":        true,
+	"GOOGLE_API_KEY":        true,
+	"GROQ_API_KEY":          true,
+	"MISTRAL_API_KEY":       true,
+	"TOGETHER_API_KEY":      true,
+	"REPLICATE_API_TOKEN":   true,
 }
 
 // detectExternalSecrets scans source files, Dockerfiles, compose files, and .env
@@ -950,4 +1069,350 @@ func detectOAuthRequirements(ctx *repoContext) (hints []string, needsExpose bool
 	sort.Strings(hints)
 	needsExpose = len(hints) > 0
 	return hints, needsExpose
+}
+
+// ── Multi-agent architecture detection ──────────────────────────
+
+// agentFrameworkPatterns maps import/package patterns to framework names.
+var agentFrameworkPatterns = []struct {
+	pattern   string
+	framework string
+}{
+	// CrewAI
+	{"from crewai", "CrewAI"},
+	{"import crewai", "CrewAI"},
+	{"crewai", "CrewAI"}, // in requirements.txt / pyproject.toml
+	// LangGraph
+	{"from langgraph", "LangGraph"},
+	{"import langgraph", "LangGraph"},
+	{"langgraph", "LangGraph"},
+	// AutoGen
+	{"from autogen", "AutoGen"},
+	{"import autogen", "AutoGen"},
+	{"autogen", "AutoGen"},
+	{"pyautogen", "AutoGen"},
+	// OpenAI Agents SDK
+	{"from openai.agents", "OpenAI Agents SDK"},
+	{"from agents", "OpenAI Agents SDK"},
+	{"openai-agents", "OpenAI Agents SDK"},
+	// Anthropic Claude SDK
+	{"from anthropic", "Anthropic Claude SDK"},
+	{"anthropic", "Anthropic Claude SDK"},
+	// LangChain
+	{"from langchain", "LangChain"},
+	{"import langchain", "LangChain"},
+	{"langchain", "LangChain"},
+	// LlamaIndex
+	{"from llama_index", "LlamaIndex"},
+	{"import llama_index", "LlamaIndex"},
+	{"llama-index", "LlamaIndex"},
+	{"llama_index", "LlamaIndex"},
+	// Strands Agents
+	{"from strands", "Strands Agents"},
+	{"strands-agents", "Strands Agents"},
+}
+
+// detectAgentFrameworks scans all collected content for agent framework imports.
+func detectAgentFrameworks(ctx *repoContext) []string {
+	allContent := mergeAllContent(ctx)
+
+	seen := make(map[string]bool)
+	for _, content := range allContent {
+		lower := strings.ToLower(content)
+		for _, p := range agentFrameworkPatterns {
+			if seen[p.framework] {
+				continue
+			}
+			if strings.Contains(lower, strings.ToLower(p.pattern)) {
+				seen[p.framework] = true
+			}
+		}
+	}
+
+	var result []string
+	for fw := range seen {
+		result = append(result, fw)
+	}
+	sort.Strings(result)
+	return result
+}
+
+// mcpServerPatterns are code-level indicators of MCP server implementations.
+var mcpServerPatterns = []struct {
+	pattern string
+	desc    string
+}{
+	{"@mcp.tool(", "MCP tool decorator (@mcp.tool)"},
+	{"@server.tool(", "MCP server tool decorator (@server.tool)"},
+	{"StdioServerTransport", "MCP stdio server transport"},
+	{"SSEServerTransport", "MCP SSE server transport"},
+	{"from mcp.server", "MCP server Python import"},
+	{"mcp.server", "MCP server package"},
+	{"@modelcontextprotocol", "MCP npm package (@modelcontextprotocol)"},
+	{"FastMCP", "FastMCP Python framework"},
+}
+
+// detectMCPServers scans for MCP server indicators in source code and config files.
+func detectMCPServers(repoPath string, ctx *repoContext) []string {
+	seen := make(map[string]bool)
+
+	// Check for MCP config files in the tree
+	for path := range ctx.depFiles {
+		base := strings.ToLower(filepath.Base(path))
+		if base == "mcp.json" || base == "mcp.config.json" {
+			desc := fmt.Sprintf("MCP config file: %s", path)
+			if !seen[desc] {
+				seen[desc] = true
+			}
+		}
+	}
+
+	// Also check the tree listing for mcp.json at any depth
+	for _, line := range strings.Split(ctx.tree, "\n") {
+		base := strings.ToLower(filepath.Base(strings.TrimSpace(line)))
+		if base == "mcp.json" || base == "mcp.config.json" {
+			desc := fmt.Sprintf("MCP config file: %s", strings.TrimSpace(line))
+			if !seen[desc] {
+				seen[desc] = true
+			}
+		}
+	}
+
+	// Scan source code for MCP server patterns
+	allContent := mergeAllContent(ctx)
+	for _, content := range allContent {
+		for _, p := range mcpServerPatterns {
+			if seen[p.desc] {
+				continue
+			}
+			if strings.Contains(content, p.pattern) {
+				seen[p.desc] = true
+			}
+		}
+	}
+
+	var result []string
+	for desc := range seen {
+		result = append(result, desc)
+	}
+	sort.Strings(result)
+	return result
+}
+
+// vectorStorePatterns maps import patterns to vector store names.
+var vectorStorePatterns = []struct {
+	pattern string
+	store   string
+}{
+	// ChromaDB
+	{"chromadb", "ChromaDB"},
+	{"import chromadb", "ChromaDB"},
+	{"from chromadb", "ChromaDB"},
+	// pgvector
+	{"pgvector", "pgvector"},
+	{"from pgvector", "pgvector"},
+	// Pinecone
+	{"pinecone", "Pinecone"},
+	{"from pinecone", "Pinecone"},
+	{"@pinecone-database", "Pinecone"},
+	// Weaviate
+	{"weaviate", "Weaviate"},
+	{"from weaviate", "Weaviate"},
+	{"weaviate-client", "Weaviate"},
+	// Qdrant
+	{"qdrant", "Qdrant"},
+	{"from qdrant_client", "Qdrant"},
+	{"qdrant-client", "Qdrant"},
+	// Milvus
+	{"pymilvus", "Milvus"},
+	{"from pymilvus", "Milvus"},
+	// FAISS (typically embedded, but worth noting)
+	{"faiss", "FAISS"},
+	{"from faiss", "FAISS"},
+	// LlamaIndex vector stores
+	{"llama_index.vector_stores", "LlamaIndex Vector Store"},
+}
+
+// detectVectorStores scans all collected content for vector store imports.
+func detectVectorStores(ctx *repoContext) []string {
+	allContent := mergeAllContent(ctx)
+
+	seen := make(map[string]bool)
+	for _, content := range allContent {
+		lower := strings.ToLower(content)
+		for _, p := range vectorStorePatterns {
+			if seen[p.store] {
+				continue
+			}
+			if strings.Contains(lower, strings.ToLower(p.pattern)) {
+				seen[p.store] = true
+			}
+		}
+	}
+
+	var result []string
+	for store := range seen {
+		result = append(result, store)
+	}
+	sort.Strings(result)
+	return result
+}
+
+// workerPatterns maps code/config patterns to worker process descriptions.
+var workerPatterns = []struct {
+	pattern string
+	desc    string
+}{
+	// Celery
+	{"celery -A", "Celery worker (celery -A)"},
+	{"celery worker", "Celery worker"},
+	{"celery.Celery", "Celery app instance"},
+	{"from celery", "Celery import"},
+	{"@app.task", "Celery task decorator"},
+	{"@shared_task", "Celery shared task"},
+	// Kafka consumers
+	{"KafkaConsumer", "Kafka consumer (Python)"},
+	{"kafka.consumer", "Kafka consumer"},
+	{"kafkajs", "KafkaJS consumer (Node.js)"},
+	{"consumer.subscribe", "Kafka/message consumer subscription"},
+	{"confluent_kafka", "Confluent Kafka (Python)"},
+	{"segmentio/kafka-go", "Kafka consumer (Go)"},
+	// RabbitMQ / AMQP
+	{"basic_consume", "RabbitMQ consumer (basic_consume)"},
+	{"channel.consume", "AMQP channel consumer"},
+	{"amqplib", "AMQP consumer (Node.js)"},
+	{"pika.BlockingConnection", "RabbitMQ consumer (pika)"},
+	{"aio_pika", "RabbitMQ async consumer (aio-pika)"},
+	// Sidekiq (Ruby)
+	{"include Sidekiq::Worker", "Sidekiq worker (Ruby)"},
+	{"include Sidekiq::Job", "Sidekiq job (Ruby)"},
+	{"sidekiq", "Sidekiq"},
+	// Bull/BullMQ (Node.js)
+	{"new Worker(", "BullMQ worker (Node.js)"},
+	{"bullmq", "BullMQ"},
+	{"bull", "Bull queue"},
+}
+
+// detectWorkerProcesses scans all collected content for background worker patterns.
+func detectWorkerProcesses(ctx *repoContext) []string {
+	allContent := mergeAllContent(ctx)
+
+	seen := make(map[string]bool)
+	for _, content := range allContent {
+		for _, p := range workerPatterns {
+			if seen[p.desc] {
+				continue
+			}
+			if strings.Contains(content, p.pattern) {
+				seen[p.desc] = true
+			}
+		}
+	}
+
+	// Also check compose file for worker service patterns
+	if ctx.composeFile != "" {
+		lower := strings.ToLower(ctx.composeFile)
+		if strings.Contains(lower, "celery") && !seen["Celery worker (from compose)"] {
+			seen["Celery worker (from compose)"] = true
+		}
+		if strings.Contains(lower, "worker") && !seen["Worker service (from compose)"] {
+			seen["Worker service (from compose)"] = true
+		}
+		if strings.Contains(lower, "consumer") && !seen["Consumer service (from compose)"] {
+			seen["Consumer service (from compose)"] = true
+		}
+	}
+
+	var result []string
+	for desc := range seen {
+		result = append(result, desc)
+	}
+	sort.Strings(result)
+	return result
+}
+
+// mergeAllContent combines all scanned content into a single map for pattern matching.
+func mergeAllContent(ctx *repoContext) map[string]string {
+	all := make(map[string]string)
+	for k, v := range ctx.dockerfiles {
+		all[k] = v
+	}
+	for k, v := range ctx.depFiles {
+		all[k] = v
+	}
+	for k, v := range ctx.sourceSnippets {
+		all[k] = v
+	}
+	if ctx.composeFile != "" {
+		all["docker-compose.yml"] = ctx.composeFile
+	}
+	return all
+}
+
+// ── Inter-service call detection ────────────────────────────────
+
+// interServicePatterns are code-level patterns that indicate one service is
+// calling another over HTTP, gRPC, or message passing. Each match includes
+// a description and the raw line for context.
+var interServiceCallPatterns = []struct {
+	pattern string
+	desc    string
+}{
+	// HTTP client calls with service-name-like URLs
+	{`http://localhost:`, "HTTP call to localhost (likely inter-service)"},
+	{`http://127.0.0.1:`, "HTTP call to 127.0.0.1 (likely inter-service)"},
+	{`requests.get(`, "Python requests.get (potential inter-service call)"},
+	{`requests.post(`, "Python requests.post (potential inter-service call)"},
+	{`httpx.get(`, "Python httpx.get (potential inter-service call)"},
+	{`httpx.post(`, "Python httpx.post (potential inter-service call)"},
+	{`fetch("http`, "JS/TS fetch to HTTP URL (potential inter-service call)"},
+	{`fetch('http`, "JS/TS fetch to HTTP URL (potential inter-service call)"},
+	{`axios.get(`, "Axios GET (potential inter-service call)"},
+	{`axios.post(`, "Axios POST (potential inter-service call)"},
+	{`http.Get(`, "Go http.Get (potential inter-service call)"},
+	{`http.Post(`, "Go http.Post (potential inter-service call)"},
+	{`http.NewRequest(`, "Go http.NewRequest (potential inter-service call)"},
+	// gRPC channels
+	{`grpc.Dial(`, "Go gRPC dial (inter-service)"},
+	{`grpc.NewClient(`, "Go gRPC client (inter-service)"},
+	{`grpc.insecure_channel(`, "Python gRPC channel (inter-service)"},
+	{`new grpc.Client(`, "Node gRPC client (inter-service)"},
+	{`ManagedChannelBuilder.forAddress(`, "Java gRPC channel (inter-service)"},
+	// Service URL env vars
+	{`_SERVICE_URL`, "Service URL env var reference"},
+	{`_SERVICE_HOST`, "Service host env var reference"},
+	{`_SERVICE_ADDR`, "Service address env var reference"},
+	{`_ENDPOINT`, "Endpoint env var reference"},
+}
+
+// detectInterServiceCalls scans source code for patterns indicating
+// one service calls another over HTTP or gRPC.
+func detectInterServiceCalls(ctx *repoContext) []string {
+	seen := make(map[string]bool)
+
+	for _, content := range ctx.sourceSnippets {
+		for _, p := range interServiceCallPatterns {
+			if seen[p.desc] {
+				continue
+			}
+			if strings.Contains(content, p.pattern) {
+				seen[p.desc] = true
+			}
+		}
+	}
+
+	// Also scan compose file for links/depends_on that imply inter-service calls
+	if ctx.composeFile != "" {
+		lower := strings.ToLower(ctx.composeFile)
+		if strings.Contains(lower, "depends_on") && !seen["docker-compose depends_on (service dependency graph)"] {
+			seen["docker-compose depends_on (service dependency graph)"] = true
+		}
+	}
+
+	var result []string
+	for desc := range seen {
+		result = append(result, desc)
+	}
+	sort.Strings(result)
+	return result
 }

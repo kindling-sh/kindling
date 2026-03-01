@@ -248,6 +248,19 @@
   overflow-x: auto;
 }
 
+.terminalBody code {
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font-size: inherit;
+  font-family: inherit;
+  color: inherit;
+  line-height: inherit;
+  white-space: inherit;
+  border-radius: 0;
+}
+
 .termPrompt {
   color: #cc5528;
   font-weight: 700;
@@ -369,11 +382,9 @@
 }
 
 .step code {
-  background: rgba(255, 107, 53, 0.12);
   color: #ffad60;
-  padding: 2px 6px;
-  border-radius: 4px;
   font-size: 0.85rem;
+  font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
 }
 
 .stepArrow {

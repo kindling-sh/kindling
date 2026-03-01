@@ -52,10 +52,10 @@ function HeroSection() {
           </div>
           <p className={styles.heroSubtitle}>{siteConfig.tagline}</p>
           <p className={styles.heroDescription}>
-            A free and open-source Kubernetes operator that turns your laptop into a personal CI/CD
-            environment. Push to GitHub or GitLab, build locally via Kaniko, deploy
-            ephemeral staging environments — all on localhost, in seconds. Agent Intel
-            auto-configures your coding agent with full project context.
+            A free and open-source Kubernetes operator that takes your project from
+            first commit to production. Analyze your repo, AI-generate a CI workflow,
+            dev with live sync on localhost, then graduate to production — from the CLI
+            or the visual dashboard.
           </p>
           <InstallCommand />
           <div className={styles.heroButtons}>
@@ -87,28 +87,20 @@ function HeroSection() {
               {"\n"}
               <span className={styles.termDim}>
                 ▸ Creating Kind cluster{"\n"}
-                {"  "}✅ Kind cluster created{"\n"}
-                ▸ Installing ingress + registry{"\n"}
-                {"  "}✅ Ingress and registry ready{"\n"}
-                ▸ Deploying operator{"\n"}
-                {"  "}✅ Controller is running{"\n"}
-                {"\n"}
-                {"  "}🎉 kindling is ready!
+                {"  "}✅ Cluster, registry, operator ready
               </span>
               {"\n\n"}
-              <span className={styles.termPrompt}>$</span> kindling intel on
+              <span className={styles.termPrompt}>$</span> kindling analyze
               {"\n"}
               <span className={styles.termDim}>
-                {"  "}🧠 Agent intel activated{"\n"}
-                {"  "}✅ GitHub Copilot, Claude Code, Cursor, Windsurf
+                {"  "}✅ 2 Dockerfiles, 3 dependencies{"\n"}
+                {"  "}ℹ️  Agent frameworks: LangChain{"\n"}
+                {"  "}✅ Ready for 'kindling generate'
               </span>
               {"\n\n"}
               <span className={styles.termPrompt}>$</span> kindling generate -k
               sk-... -r .{"\n"}
               <span className={styles.termDim}>
-                ▸ Analyzing repository{"\n"}
-                {"  "}✅ Found 3 Dockerfiles, 4 manifests{"\n"}
-                ▸ Generating workflow with AI{"\n"}
                 {"  "}🤖 Provider: openai, Model: o3{"\n"}
                 {"  "}✅ Workflow written to dev-deploy.yml
               </span>
@@ -116,9 +108,14 @@ function HeroSection() {
               <span className={styles.termPrompt}>$</span> git push{"\n"}
               <span className={styles.termDim}>
                 {"  "}🏗️ Building → registry:5000/app:abc123{"\n"}
-                {"  "}✅ Built & pushed{"\n"}
-                {"  "}📦 Deploying with postgres + redis{"\n"}
                 {"  "}✅ http://you-app.localhost
+              </span>
+              {"\n\n"}
+              <span className={styles.termPrompt}>$</span> kindling sync -d
+              you-app --restart{"\n"}
+              <span className={styles.termDim}>
+                {"  "}🔄 Watching for changes...{"\n"}
+                {"  "}✅ Synced 3 files → restarted
               </span>
             </code>
           </div>
@@ -136,46 +133,46 @@ type FeatureItem = {
 
 const features: FeatureItem[] = [
   {
-    emoji: "⚡",
-    title: "Zero Cloud CI Minutes",
+    emoji: "🔍",
+    title: "Analyze Before You Build",
     description:
-      "Your laptop is the runner. No queuing behind other jobs, no paying for compute you already own. Builds happen locally in seconds.",
+      "kindling analyze checks your repo's readiness — Dockerfiles, dependencies, secrets, agent architecture, Kaniko compatibility — before you generate a single line of CI.",
   },
   {
     emoji: "🤖",
     title: "AI-Generated Workflows",
     description:
-      "Point kindling generate at any repo. It scans Dockerfiles, docker-compose, Helm charts, and source code, then produces a complete GitHub Actions or GitLab CI workflow.",
+      "kindling generate scans your repo and produces a complete GitHub Actions or GitLab CI workflow. Detects agent frameworks, MCP servers, inter-service calls, and secrets.",
   },
   {
-    emoji: "🧠",
-    title: "Agent Intel",
+    emoji: "⚡",
+    title: "Two-Speed Dev Loop",
     description:
-      "kindling intel auto-configures GitHub Copilot, Claude Code, Cursor, and Windsurf with full project context. Activates on any command, restores originals when you're done.",
+      "Outer loop: git push → build → deploy. Inner loop: edit → sync → reload in under a second. Both run on your laptop, zero cloud CI minutes.",
   },
   {
     emoji: "📦",
     title: "15 Auto-Provisioned Dependencies",
     description:
-      "Declare postgres, redis, rabbitmq, kafka, elasticsearch, and 10 more in your workflow. The operator provisions them and injects connection URLs automatically.",
+      "Declare postgres, redis, kafka, elasticsearch, and 11 more. The operator provisions them and injects connection URLs automatically.",
   },
   {
-    emoji: "🔨",
-    title: "Kaniko Builds — No Docker Daemon",
+    emoji: "🧠",
+    title: "Agent Intel",
     description:
-      "Images are built inside the cluster using Kaniko. No Docker-in-Docker, no privileged containers. Layer caching makes rebuilds fast.",
+      "Auto-configures GitHub Copilot, Claude Code, Cursor, and Windsurf with full project context. Activates on any command, restores originals when you're done.",
   },
   {
     emoji: "🌐",
-    title: "Instant localhost Staging",
+    title: "Localhost to Production",
     description:
-      "Every push deploys a full staging environment with Deployment, Service, and Ingress — accessible at http://you-app.localhost immediately.",
+      "Dev on localhost with instant staging. Need OAuth callbacks? kindling expose creates a public HTTPS tunnel. Ready to ship? kindling promote (coming soon) graduates to production.",
   },
   {
     emoji: "🔐",
-    title: "Secrets & OAuth Built In",
+    title: "Secrets & Credentials Built In",
     description:
-      "Manage API keys with kindling secrets. Need OAuth callbacks? kindling expose creates a public HTTPS tunnel with one command.",
+      "Manage API keys with kindling secrets. Automatic detection during analyze and generate. Local backup survives cluster rebuilds.",
   },
 ];
 
@@ -217,38 +214,39 @@ function HowItWorksSection() {
         <div className={styles.stepsGrid}>
           <div className={styles.step}>
             <div className={styles.stepNumber}>1</div>
-            <h3>Bootstrap</h3>
+            <h3>Analyze</h3>
             <p>
-              <code>kindling init</code> creates a Kind cluster with an
-              in-cluster registry, ingress controller, and the kindling
-              operator.
+              <code>kindling analyze</code> checks your project — Dockerfiles,
+              dependencies, secrets, agent architecture — and tells you
+              exactly what's ready.
             </p>
           </div>
           <div className={styles.stepArrow}>→</div>
           <div className={styles.step}>
             <div className={styles.stepNumber}>2</div>
-            <h3>Connect</h3>
+            <h3>Generate</h3>
             <p>
-              <code>kindling runners</code> registers a self-hosted CI
-              runner — GitHub Actions or GitLab CI — bound to your repo and username.
+              <code>kindling generate</code> scans your repo and uses AI to
+              produce a complete CI workflow with builds, deploys, and dependencies.
             </p>
           </div>
           <div className={styles.stepArrow}>→</div>
           <div className={styles.step}>
             <div className={styles.stepNumber}>3</div>
-            <h3>Generate</h3>
+            <h3>Dev Loop</h3>
             <p>
-              <code>kindling generate</code> scans your repo and uses AI to
-              produce a complete workflow with builds, deploys, and dependencies.
+              <code>git push</code> builds and deploys.
+              <code>kindling sync</code> gives you sub-second live reload.
+              Iterate until it's right.
             </p>
           </div>
           <div className={styles.stepArrow}>→</div>
           <div className={styles.step}>
             <div className={styles.stepNumber}>4</div>
-            <h3>Push & Deploy</h3>
+            <h3>Promote <em>(coming soon)</em></h3>
             <p>
-              <code>git push</code> triggers the workflow. Your laptop builds
-              the image and deploys a full staging environment on localhost.
+              <code>kindling promote</code> will graduate your app to a
+              production cluster with TLS, DNS, and real infrastructure.
             </p>
           </div>
         </div>
@@ -268,10 +266,6 @@ function QuickStartSection() {
               <code>
                 {`# Install
 brew install kindling-sh/tap/kindling
-# — or build from source —
-git clone https://github.com/kindling-sh/kindling.git
-cd kindling && make cli
-sudo mv bin/kindling /usr/local/bin/
 
 # Bootstrap a local cluster
 kindling init
@@ -279,8 +273,9 @@ kindling init
 # Register a CI runner (GitHub or GitLab)
 kindling runners -u <user> \\
   -r <owner/repo> -t <pat>
-# or: kindling runners --ci-provider gitlab \\
-#   -u <user> -r <group/project> -t <token>
+
+# Check your project's readiness
+kindling analyze
 
 # AI-generate a workflow for your app
 kindling generate -k <api-key> -r /path/to/app
@@ -288,8 +283,8 @@ kindling generate -k <api-key> -r /path/to/app
 # Push and watch it deploy
 git push origin main
 
-# Access your app
-curl http://<user>-<app>.localhost`}
+# Start live sync
+kindling sync -d <user>-<app> --restart`}
               </code>
             </pre>
           </div>

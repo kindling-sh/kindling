@@ -21,65 +21,116 @@ curl -sL https://kindling.dev/install | sh
 Detect OS + arch, download the right binary from GitHub Releases, drop it in
 `/usr/local/bin`. Should also work in Dockerfiles and GitHub Actions runners.
 
-### 3-minute quickstart guarantee
+### ✅ Interactive ingress selection in `kindling generate`
 
-Time the quickstart end-to-end. If it takes longer than 3 minutes, cut steps.
-Put the time in the README: "From zero to a deployed app in under 3 minutes."
-
-- Pre-bake more defaults so fewer flags are required
-- Detect GitHub remote from `.git/config` to skip `--repo` flag
-- Auto-detect GitHub username from `gh auth status` or git config
-
-### README hero demo
-
-Add a screen-recording GIF or hosted demo to the README so people can see
-kindling working before they commit to installing it. First impression matters
-more than anything else on a GitHub repo page.
-
-### Harden `kindling generate` (wild-repo fuzz testing)
-
-`kindling generate` is the first thing a new user will run on their own repo.
-If it crashes, spits out invalid YAML, or silently produces garbage, that's
-the last time they use kindling. This has to be solid *before* Show HN.
-
-Clone a large corpus of real-world repos, run `kindling generate` against each
-one, and record structured results to surface failure modes.
-
-**Per-repo result record:**
-
-| Field | Description |
-|---|---|
-| `repo` | GitHub URL |
-| `language` | Primary language (from GitHub API) |
-| `size_kb` | Repo size |
-| `has_dockerfile` | Whether a Dockerfile exists |
-| `services_detected` | Number of services `generate` found |
-| `exit_code` | `kindling generate` exit code |
-| `dse_valid` | Whether a valid `dev-environment.yaml` was produced |
-| `workflow_valid` | Whether the generated workflow YAML parses |
-| `failure_category` | `no_dockerfile`, `env_parse_error`, `unsupported_lang`, `crash`, `timeout`, etc. |
-
-**Repo selection strategy:**
-- GitHub trending repos across top 10–15 languages
-- Repos with a `Dockerfile` (most relevant)
-- Repos with `docker-compose.yml` (multi-service)
-- Monorepos with multiple services in subdirectories
-- Long-tail languages (should never crash, even if generate can't help)
-
-**Quality gates (must hit before going public):**
-- ≤15% crash rate — every failure is a clean error message, never a panic
-- ≥80% success rate on repos that already have a Dockerfile
-- Top 10 failure modes identified and fixed
-
-### Interactive ingress selection in `kindling generate`
+**Status: Implemented on `feat/topology-editor`**
 
 During `kindling generate`, after discovering all services in a multi-service
-repo, prompt the user to select which services should get ingress routes instead
-of trying to auto-detect user-facing services. Present a checklist of discovered
-services and let the developer pick.
+repo, the user is prompted to select which services should get ingress routes.
+`--ingress-all` flag available for non-interactive / CI usage.
 
-For non-interactive / CI usage, add a `--ingress-all` flag that wires up every
-service with a default ingress route.
+### Make `generate` multi-agent-aware
+
+Every major multi-agent framework (OpenAI Agents SDK, LangGraph, CrewAI,
+AutoGen, Claude Agent SDK) produces the same deployment topology: a few
+Python/Node services + Postgres/Redis/message-queue + API keys. Kindling
+is already built for exactly this — `generate` just needs to detect the
+patterns automatically.
+
+**Detection rules to add:**
+
+| Signal | What to emit |
+|---|---|
+| `mcp.json` or MCP server entry points | First-class service (MCP servers are small Python/Node HTTP/stdio services) |
+| `langchain`, `llama_index`, `chromadb`, `pgvector` imports | Add `postgres` dependency (pgvector) or flag vector store need |
+| Celery workers, Kafka/RabbitMQ consumers | Separate worker deployments (not just dependencies) |
+| Inter-service HTTP calls in source | Auto-configure service names and ports |
+| High secrets density (multiple `*_API_KEY` env vars) | Surface all detected secrets upfront in generate output |
+
+**Multi-agent framework detection:**
+
+When `generate` sees imports from known agent frameworks, it should:
+
+1. Detect the orchestration pattern (supervisor, swarm, pipeline)
+2. Emit one service per logical agent/worker when they have separate
+   entry points
+3. Wire up the right message broker dependency (Redis for simple
+   handoffs, RabbitMQ/Kafka for queue-based architectures)
+4. Set up inter-service networking (K8s Service DNS names)
+
+**Frameworks to detect:** `crewai`, `langgraph`, `autogen`,
+`openai.agents` (Agents SDK), `anthropic` (Claude Agent SDK),
+`langchain`, `llama_index`, `strands`
+
+**Priority:** This is a P0 because multi-agent apps are the primary
+use case. If `generate` doesn't understand agent architectures, users
+have to manually configure the most complex deployment topology — which
+is exactly the pain point kindling exists to eliminate.
+
+### ✅ Concurrent `kindling sync` sessions
+
+Each `kindling sync -d <service>` process is fully independent — per-pod
+PID files, no global locks, no shared state. Running multiple syncs in
+parallel already works today:
+
+```
+# Terminal 1 — primary service
+kindling sync -d orders --restart --src ./services/orders
+
+# Terminal 2 — debug a dependency
+kindling sync -d inventory --restart --src ./services/inventory
+```
+
+Added parallel-sync examples to the `sync` help text so this is
+discoverable.
+
+### ✅ MCP server detection in `generate`
+
+Model Context Protocol is becoming the standard for giving agents tools.
+MCP servers are small Python or Node HTTP/stdio services. `kindling
+generate` detects `mcp.json`, `mcp.config.json`, and MCP server
+entry points (`@mcp.tool()` decorators, `StdioServerTransport` usage,
+`FastMCP`, `@modelcontextprotocol`) and surfaces them in CLI output.
+The user prompt issues a **DIRECTIVE** to the AI: each MCP server with
+its own Dockerfile becomes a separate build+deploy step.
+
+### Vector store dependency detection
+
+RAG is in every multi-agent stack. When `generate` sees imports from
+`chromadb`, `pgvector`, `pinecone`, `weaviate`, `qdrant`, or
+`llama_index` vector store modules, it should:
+
+**Default: respect external services.** Most teams already have a
+cloud-hosted vector store (Pinecone, Weaviate Cloud, Qdrant Cloud,
+etc.). The default behavior should:
+
+- Surface the required API keys (`PINECONE_API_KEY`, `QDRANT_API_KEY`,
+  etc.) in the secrets detection output
+- Add a YAML comment noting which vector store was detected
+- NOT auto-inject a local dependency — the user's app already points
+  at their external service
+
+**Local option:** For vector stores that *can* run locally (pgvector
+via postgres, ChromaDB as a service), add a comment noting the user
+can add a `postgres` or `chromadb` dependency if they want a local
+replica for dev. But don't do it automatically.
+
+### ✅ Background workers as first-class deployments
+
+Celery workers, Kafka consumers, RabbitMQ subscribers, and async task
+processors are first-class agents in multi-agent architectures — not
+afteroughts. `generate` detects them via source code patterns, Procfile,
+and docker-compose, then issues a **DIRECTIVE** to the AI: each worker
+gets a separate deploy step with the correct broker dependency wired up.
+
+### ✅ Inter-service networking validation
+
+Multi-agent handoff and A2A patterns mean services call each other over
+HTTP or gRPC. `generate` now detects inter-service call patterns:
+HTTP client calls (requests, fetch, axios, http.Get), gRPC channel
+creation, service URL env vars (_SERVICE_URL, _ENDPOINT), and
+compose depends_on graphs. The user prompt issues a **DIRECTIVE** to
+the AI to wire up K8s Service DNS names for service discovery.
 
 ### ✅ Agent context — `kindling intel`
 
@@ -214,10 +265,257 @@ to it: *"For detailed CI generation rules, see `.kindling/generate-rules.md`."*
 
 ---
 
+## P0.5 — Prescriptive guidance engine
+
+Kindling knows enough about the user's app to prescribe secure, performant
+patterns — not just deploy what they give us, but tell them when something
+is wrong. Three layers, increasing depth:
+
+### Layer 1: `kindling lint` (static DSE/workflow analysis)
+
+New command that validates a DSE YAML or generated workflow before deploy.
+Pure YAML parsing — no cluster needed, fast, can run in CI too.
+
+**Checks to implement:**
+
+| Check | Severity | Description |
+|---|---|---|
+| Hardcoded secrets | error | API keys as plain `value:` instead of `secretKeyRef` |
+| Duplicate auto-injected env | error | `DATABASE_URL` in env when postgres is a dependency |
+| Missing dependency | warning | Env references `REDIS_URL` but no redis dependency declared |
+| Missing health check | warning | No `health-check-path` on an HTTP service |
+| No resource limits | info | No CPU/memory limits (acceptable for dev, flag anyway) |
+| API key in YAML | error | Regex for key-shaped values in plain `value:` fields |
+
+### Layer 2: Deploy-time warnings (enhance `kindling deploy`)
+
+When `kindling deploy -f dse.yaml` runs, call the lint engine automatically.
+Warnings print before applying — deploy still proceeds, but the user sees:
+
+```
+  ⚠️  OPENAI_API_KEY is set as a plain value — use 'kindling secrets set' instead
+  ⚠️  No health-check-path on service 'api' — pods may not restart on failure
+  ⚠️  DATABASE_URL in env block will conflict with auto-injected postgres URL
+```
+
+### Layer 3: Agent-facing patterns (enhance `kindling intel`)
+
+Add a "Secure & Performant Patterns" section to the intel context document.
+App-level guidance that agents consume during development:
+
+- Store API keys with `kindling secrets set`, never in YAML or committed files
+- Use connection pooling for database connections in multi-worker setups
+- MCP servers should validate tool inputs before execution
+- Background workers need graceful shutdown handlers for SIGTERM
+- Use `health-check-type: none` only for workers, never for HTTP services
+
+---
+
+## P0.5 — Dashboard: real-time fix-it UX
+
+The topology view already plans real-time cluster scanning. The next step
+is making it actionable — "see a red service, enter the missing value, see
+it turn green."
+
+### Interactive service health resolution
+
+When the dashboard detects a failing service (CrashLoopBackOff,
+CreateContainerConfigError, ImagePullBackOff, etc.), it should:
+
+1. **Diagnose** — parse pod events and container logs to identify the root
+   cause (missing env var, missing secret, image not found, port conflict)
+2. **Surface the fix inline** — show an input field or action button right
+   on the red service node in the topology view
+3. **Apply the fix** — user enters the missing value or clicks the action,
+   kindling patches the deployment live, pod restarts, service goes green
+
+**Fix actions by failure type:**
+
+| Failure | Diagnosis signal | Inline action |
+|---|---|---|
+| Missing secret | `CreateContainerConfigError` + secret name in event | Text input: "Enter value for OPENAI_API_KEY" → `kindling secrets set` |
+| Missing env var | App crash log with "KeyError" / "undefined" | Text input: "Set FOO_BAR" → patch deployment env |
+| CrashLoopBackOff | Exit code + last log lines | Show logs + "Restart" / "Edit env" buttons |
+| ImagePullBackOff | Image name in event | "Rebuild" button → triggers `kindling load` |
+| Port conflict | bind error in logs | "Change port" input → patch deployment |
+
+### The UX loop
+
+```
+Topology view: [api ✅] → [orders 🔴] → [inventory ✅]
+                              │
+                    ┌─────────┴──────────┐
+                    │ Missing secret:     │
+                    │ OPENAI_API_KEY      │
+                    │ [Enter value...] [✓]│
+                    └─────────────────────┘
+                              │
+                         (user enters key)
+                              │
+Topology view: [api ✅] → [orders ✅] → [inventory ✅]
+```
+
+This is the "no Kubernetes knowledge needed" moment — the user never
+touches kubectl, never reads pod events, never debugs YAML. They just
+see what's broken and fix it.
+
+---
+
+## P0.5 — `kindling promote`: dev → production in one command
+
+Everything above is about making the dev environment perfect. This is
+about what happens next: the app works locally, now ship it to a real
+cluster with real DNS and real TLS. The name "promote" signals graduation
+— this isn't sync, this is shipping.
+
+### The UX
+
+```
+$ kindling promote
+
+  📦 Scanning dev cluster for deployable services...
+
+  Services found:
+    api        (port 3000, postgres, redis)
+    orders     (port 3001, postgres, rabbitmq)
+    worker     (port -, rabbitmq)    # no ingress, background worker
+    mcp-tools  (port 8080)
+
+  🌐 Ingress services: api, orders, mcp-tools
+
+  Set your DNS records:
+    api.myapp.com        → <cluster-ip>
+    orders.myapp.com     → <cluster-ip>
+    mcp-tools.myapp.com  → <cluster-ip>
+
+  Enter kube context for target cluster: prod-cluster
+  Domain for TLS [myapp.com]: myapp.com
+
+  🔒 Installing cert-manager (if not present)...
+  📦 Pushing images to registry...
+  🚀 Deploying with TLS certificates...
+  ✅ Live at:
+     https://api.myapp.com
+     https://orders.myapp.com
+     https://mcp-tools.myapp.com
+```
+
+### Core features
+
+**1. Cluster state export — `kindling promote --export helm`**
+
+Read the current dev cluster state (deployments, services, configmaps,
+secrets structure) and produce a production-ready Helm chart:
+
+- Extract all DSE-managed deployments, services, ingress rules
+- Template secrets as `{{ .Values.secrets.OPENAI_API_KEY }}`
+- Template image tags as `{{ .Values.image.tag }}`
+- Generate `values.yaml` with sensible prod defaults
+- Include cert-manager `Certificate` resources for TLS
+- Output to `./charts/<app-name>/`
+
+This gives users a Helm chart they can commit, customize, and use with
+any GitOps tool (ArgoCD, Flux, etc.) — kindling gets them started, then
+gets out of the way.
+
+**2. Direct deploy — `kindling promote --context <kube-context>`**
+
+Skip Helm, deploy directly to a remote cluster:
+
+- Switch to the target kube context
+- Push images to the target registry (flag: `--registry`)
+- Apply manifests with production-appropriate settings
+- Install cert-manager if not present, issue Let's Encrypt certs
+- Wait for rollout + cert issuance, report live URLs
+
+**3. TLS auto-configuration**
+
+Under the hood, kindling handles cert-manager:
+
+- Detect if cert-manager is installed, install if not
+- Create a `ClusterIssuer` for Let's Encrypt (staging or prod)
+- Generate `Certificate` resources for each ingress service
+- Update ingress annotations for TLS termination
+- Flag: `--tls-issuer` to use an existing issuer
+- Flag: `--no-tls` to skip (e.g., behind a load balancer that terminates)
+
+**4. DNS guidance**
+
+Before deploying, `promote` tells the user exactly what DNS records to
+set. After deploy, it verifies DNS resolution and warns if records are
+missing or propagating.
+
+### What `promote` reads from the dev cluster
+
+| Source | What it extracts |
+|---|---|
+| DSE CRs | Services, ports, dependencies, env vars, ingress hosts |
+| Deployments | Container images, resource limits, replicas |
+| Services | Port mappings, service types |
+| Secrets | Secret names + keys (NOT values — user re-enters for prod) |
+| ConfigMaps | Non-secret configuration |
+| Ingress | Host rules, paths, TLS config |
+
+### Subcommands
+
+```
+kindling promote                          # Interactive: walks through everything
+kindling promote --export helm            # Export Helm chart from cluster state
+kindling promote --export kustomize       # Export Kustomize overlay
+kindling promote --context prod --registry ghcr.io/myorg  # Direct deploy
+kindling promote --dry-run                # Show what would be deployed
+```
+
+---
+
 ## P1 — Content & visibility (get in front of developers)
 
 The tool can be perfect and nobody will use it if they don't know it exists.
 Content is the growth engine.
+
+### 3-minute quickstart guarantee
+
+Time the quickstart end-to-end. If it takes longer than 3 minutes, cut steps.
+Put the time in the README: "From zero to a deployed app in under 3 minutes."
+
+- Pre-bake more defaults so fewer flags are required
+- Detect GitHub remote from `.git/config` to skip `--repo` flag
+- Auto-detect GitHub username from `gh auth status` or git config
+
+### Harden `kindling generate` (wild-repo fuzz testing)
+
+`kindling generate` is the first thing a new user will run on their own repo.
+If it crashes, spits out invalid YAML, or silently produces garbage, that's
+the last time they use kindling. This has to be solid *before* Show HN.
+
+Clone a large corpus of real-world repos, run `kindling generate` against each
+one, and record structured results to surface failure modes.
+
+**Per-repo result record:**
+
+| Field | Description |
+|---|---|
+| `repo` | GitHub URL |
+| `language` | Primary language (from GitHub API) |
+| `size_kb` | Repo size |
+| `has_dockerfile` | Whether a Dockerfile exists |
+| `services_detected` | Number of services `generate` found |
+| `exit_code` | `kindling generate` exit code |
+| `dse_valid` | Whether a valid `dev-environment.yaml` was produced |
+| `workflow_valid` | Whether the generated workflow YAML parses |
+| `failure_category` | `no_dockerfile`, `env_parse_error`, `unsupported_lang`, `crash`, `timeout`, etc. |
+
+**Repo selection strategy:**
+- GitHub trending repos across top 10–15 languages
+- Repos with a `Dockerfile` (most relevant)
+- Repos with `docker-compose.yml` (multi-service)
+- Monorepos with multiple services in subdirectories
+- Long-tail languages (should never crash, even if generate can't help)
+
+**Quality gates (must hit before going public):**
+- ≤15% crash rate — every failure is a clean error message, never a panic
+- ≥80% success rate on repos that already have a Dockerfile
+- Top 10 failure modes identified and fixed
 
 ### Show HN
 
@@ -325,11 +623,17 @@ Medium.
 
 ---
 
-## P2 — More example apps (every framework = a new audience)
+## P2 — More example apps & marketing assets
 
 Each example app gives a different language community a reason to discover
 kindling. A Rails developer won't try kindling until they see a Rails example.
 A Spring Boot developer won't try it until they see a Java example.
+
+### README hero demo
+
+Add a screen-recording GIF or hosted demo to the README so people can see
+kindling working before they commit to installing it. First impression matters
+more than anything else on a GitHub repo page.
 
 - [ ] **Rails** example app (Ruby ecosystem — huge community, lots of Docker adoption)
 - [ ] **Django** example app (Python ecosystem — massive, underserved by local K8s tools)
@@ -707,6 +1011,61 @@ kindling add view /admin
 kindling add view --list
 kindling add view --remove /api
 ```
+
+---
+
+## P7.5 — Topology editor: from gimmicky to genuinely useful
+
+The topology map exists on `feat/topology-editor`. It works — drag-and-drop
+services, wire up dependencies, deploy from the canvas. But right now it's
+mostly a pretty picture of static YAML. The things that would make it
+*actually* valuable:
+
+### Live cluster state overlay
+
+This is the single highest-value improvement. Overlay real-time pod status
+on each service node in the topology:
+
+- **Pod status** — green dot for Running, yellow for Pending, red for
+  CrashLoopBackOff / Error
+- **Restart count** — subtle badge when restarts > 0
+- **Last deploy timestamp** — "deployed 3m ago" on each node
+- **Resource usage** — optional CPU/memory sparkline or bar
+
+This turns the topology from a config editor into an operational dashboard.
+The visual layout actually *helps* here because you can see at a glance
+which service in your dependency chain is broken.
+
+### File-first architecture (done)
+
+Already implemented: `.kindling/environments/*.yaml` is the source of truth,
+cluster state is derived. Drift detection compares file fingerprints vs
+cluster fingerprints and shows a warning banner with a sync button.
+
+### Ingress config in the editor (done)
+
+Already implemented: toggle ingress on/off per service, set host and
+ingress class, emitted in the generated DSE YAML.
+
+### Where it earns its keep vs. stays gimmicky
+
+**Genuinely useful if:**
+- It's the *primary* interface for configuring environments (not a
+  read-only mirror of YAML you edit by hand)
+- It shows live state that's hard to get from `kubectl` at a glance
+- Junior devs / non-K8s-native users can understand their stack visually
+
+**Stays gimmicky if:**
+- It's just a read-only graph of what's already in YAML
+- No live cluster feedback
+- Power users always bypass it for the CLI
+
+### Next steps
+
+1. Wire up `kubectl get pods` status into topology node rendering
+2. Add restart count + last-transition-time badges
+3. Consider WebSocket or polling for live updates (every 5s)
+4. Evaluate whether this replaces `kindling status` output entirely
 
 ---
 

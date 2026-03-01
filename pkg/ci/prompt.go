@@ -52,7 +52,31 @@ const PromptBuildInputs = `kindling-build inputs:
   image (required) — Full image reference (registry/name:tag)
   exclude — tar --exclude patterns (space-separated, e.g. './ui ./.git')
   dockerfile — Path to Dockerfile relative to context (default: Dockerfile)
-  timeout — Max seconds to wait for the build to complete (default: 300)`
+  timeout — Max seconds to wait for the build to complete (default: 300)
+
+CRITICAL — build context and Dockerfile COPY paths:
+  The "context" determines the root directory sent to Kaniko. Every COPY and ADD
+  path in the Dockerfile is relative to this context root. Get this wrong and
+  the build will fail with "no such file or directory".
+
+  Rule: if a Dockerfile COPYs files from OUTSIDE its own directory (e.g. a shared/
+  directory, a root-level config file, or another service's code), the context MUST
+  be the repo root (${{ github.workspace }}), NOT the service subdirectory. Use the
+  "dockerfile" input to point to the service's Dockerfile:
+
+    # WRONG — context is agent/ but Dockerfile does COPY shared/ tools/ config.py
+    context: ${{ github.workspace }}/agent
+
+    # RIGHT — context is repo root, dockerfile points to service Dockerfile
+    context: ${{ github.workspace }}
+    dockerfile: agent/Dockerfile
+
+  Only use a subdirectory as context when the service is fully self-contained:
+  its Dockerfile only COPYs files from within that subdirectory.
+
+  When examining a Dockerfile, check every COPY and ADD instruction. If ANY path
+  references a directory or file that is not inside the Dockerfile's parent directory,
+  set context to the repo root and set dockerfile accordingly.`
 
 // PromptHealthChecks is shared guidance on health check configuration.
 const PromptHealthChecks = `Health check guidance:
@@ -345,6 +369,25 @@ WRONG format (this will cause a CRD validation error):
 
 If any secretKeyRef IS used, those secrets are managed by
 "kindling secrets set <NAME> <VALUE>" and stored as Kubernetes Secrets.
+CRITICAL: kindling stores secrets with a "kindling-secret-" prefix in kebab-case.
+For example, "kindling secrets set OPENAI_API_KEY sk-..." creates a K8s Secret
+named "kindling-secret-openai-api-key" with key "OPENAI_API_KEY".
+So your secretKeyRef MUST use the prefixed name:
+
+CORRECT:
+  - name: OPENAI_API_KEY
+    valueFrom:
+      secretKeyRef:
+        name: kindling-secret-openai-api-key
+        key: OPENAI_API_KEY
+
+WRONG (secret will not be found):
+  - name: OPENAI_API_KEY
+    valueFrom:
+      secretKeyRef:
+        name: openai-api-key        # ← missing kindling-secret- prefix!
+        key: OPENAI_API_KEY
+
 Include a comment noting which secrets need to be set.`
 
 // PromptOAuth is the shared OAuth/public exposure guidance.
@@ -356,14 +399,75 @@ ingress-host of the auth-handling service. If no public URL is specified but OAu
 patterns are detected, add a comment noting:
   # NOTE: OAuth detected — run 'kindling expose' for a public HTTPS URL`
 
+// PromptMultiAgentArchitecture is the shared guidance on detecting and handling
+// multi-agent AI architectures (MCP servers, orchestrators, workers, vector stores).
+const PromptMultiAgentArchitecture = `Multi-agent architecture support:
+Modern AI applications use multi-agent frameworks that produce a common deployment
+topology: orchestrator services + worker services + vector stores + message brokers
++ API keys. When the user prompt includes a "Detected multi-agent architecture"
+section, use it to inform your workflow generation:
+
+MCP servers:
+  MCP (Model Context Protocol) servers are small Python or Node.js services that
+  expose tools to AI agents. Treat each MCP server as a SEPARATE first-class service
+  with its own build and deploy step. MCP servers typically listen on a port (HTTP/SSE
+  mode) or run as stdio processes. For HTTP/SSE MCP servers, configure a port and
+  health check. For stdio-only MCP servers, use health-check-type: "none".
+
+Agent frameworks:
+  When agent frameworks are detected (CrewAI, LangGraph, AutoGen, OpenAI Agents SDK,
+  Anthropic Claude SDK, Strands), the app likely has:
+  - An orchestrator/supervisor service (the main entry point)
+  - Potentially separate worker services with their own entry points
+  - Heavy reliance on API keys (OPENAI_API_KEY, ANTHROPIC_API_KEY, etc.)
+  Emit one build+deploy per service that has its own Dockerfile. Wire up API keys
+  as secretKeyRef entries (these ARE required for the app to function, unlike optional
+  integrations).
+
+Vector stores:
+  When vector store dependencies are detected (chromadb, pgvector, pinecone, weaviate,
+  qdrant, milvus), DEFAULT to respecting external services — the user almost certainly
+  already has a cloud-hosted vector store they're connecting to. Handle as follows:
+  - pinecone, weaviate, qdrant, milvus (cloud-hosted): surface their API keys
+    (PINECONE_API_KEY, WEAVIATE_API_KEY, QDRANT_API_KEY, MILVUS_API_KEY) as
+    secretKeyRef entries. Do NOT add local dependencies.
+  - pgvector: do NOT auto-add a "postgres" dependency. The app likely connects to
+    an external PostgreSQL with pgvector. Surface any API keys / connection env vars.
+    Add a YAML comment: # NOTE: pgvector detected — add 'postgres' dependency if you
+    # want a local dev replica instead of your external database.
+  - chromadb: if used as an embedded library, no extra dependency needed. If it
+    appears to run as a separate service (has its own Dockerfile), treat it as a
+    deployable service. Add a comment noting the user can run ChromaDB locally.
+  - FAISS: always embedded, no dependency needed.
+  Do NOT inject local database dependencies for vector stores unless the user
+  explicitly asks for local replication.
+
+Background workers:
+  Celery workers, Kafka consumers, RabbitMQ subscribers, and async task processors
+  should be deployed as SEPARATE services (not just dependencies). Look for:
+  - Celery: separate deployment with the celery command as entrypoint. Wire up
+    redis or rabbitmq as the broker dependency.
+  - Kafka consumers: separate deployment that reads from topics. Add kafka dependency.
+  - AMQP subscribers: separate deployment. Add rabbitmq dependency.
+  Each worker needs its own deploy step with appropriate dependencies and env vars.
+
+Inter-service networking:
+  When multiple services in an agent architecture call each other (orchestrator → worker,
+  agent → MCP server, API → worker), wire up the env vars for service discovery using
+  Kubernetes DNS names: $ACTOR-<service-name>:<port>. Scan source code for HTTP client
+  calls, gRPC channel targets, or env vars ending in _URL, _ADDR, _ENDPOINT that
+  reference other services.`
+
 // PromptFinalValidation is the shared final validation checklist.
 const PromptFinalValidation = `FINAL VALIDATION — before outputting the YAML, verify:
   1. Every deploy step that uses $(AMQP_URL) in its env MUST have "- type: rabbitmq"
      in its dependencies. Every step using $(REDIS_URL) MUST have "- type: redis".
      Every step using $(DATABASE_URL) MUST have "- type: postgres" (or mysql).
      A $(VAR) reference without the matching dependency will cause a runtime crash.
-  2. Every build step's "context" matches the docker-compose "build.context" for that
-     service. If context is "." or the repo root, use the workspace root path.
+  2. For EVERY build step, trace each COPY/ADD instruction in the Dockerfile.
+     If ANY copied path lives outside the Dockerfile's parent directory, the
+     context MUST be the repo root (${{ github.workspace }}) with "dockerfile"
+     pointing to the service's Dockerfile. This is the #1 build failure.
 
 Return ONLY the raw YAML content of the workflow file. No markdown code fences,
 no explanation text, no commentary. Just the YAML.`
