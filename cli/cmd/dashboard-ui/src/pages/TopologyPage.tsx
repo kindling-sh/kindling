@@ -744,6 +744,24 @@ function DetailSidebar({ node, onClose, onUpdate, onDelete, edges, allNodes }: {
         {data.scaffolded && isStaged && (
           <div className="topo-scaffold-done">✓ Scaffolded — write your code, then deploy</div>
         )}
+        {/* Test API button for deployed services */}
+        {!isDep && data.fromCluster && data.dseName && (
+          <button
+            className="btn btn-sm btn-ghost"
+            style={{ marginBottom: 8 }}
+            onClick={() => {
+              window.dispatchEvent(new CustomEvent('navigate', { detail: 'api-explorer' }));
+              // Small delay so the page mounts before we send the prefill event
+              setTimeout(() => {
+                window.dispatchEvent(new CustomEvent('api-explorer-prefill', {
+                  detail: { service: data.dseName, port: data.servicePort || 3000 },
+                }));
+              }, 100);
+            }}
+          >
+            ⇆ Test API
+          </button>
+        )}
         <button className="btn btn-danger btn-sm" onClick={onDelete}>
           Remove
         </button>

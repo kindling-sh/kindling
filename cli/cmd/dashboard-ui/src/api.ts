@@ -231,3 +231,43 @@ export async function removeEdgeFromCluster(body: {
 export async function saveCanvas(overlay: { nodes: unknown[]; edges: unknown[]; positions?: Record<string, { x: number; y: number }> }): Promise<{ ok: boolean }> {
   return apiPost('/api/topology/canvas', overlay);
 }
+
+// ── Proxy / API Explorer helpers ─────────────────────────────────
+
+export interface ProxyService {
+  name: string;
+  namespace: string;
+  port: number;
+  ports: { name: string; port: number }[];
+}
+
+export interface ProxyResponse {
+  ok: boolean;
+  status?: number;
+  elapsed?: number;
+  headers?: Record<string, string>;
+  body?: string;
+  size?: number;
+  error?: string;
+}
+
+export async function fetchProxyServices(): Promise<ProxyService[]> {
+  return apiFetch<ProxyService[]>('/api/proxy/services');
+}
+
+export async function proxyRequest(body: {
+  service: string;
+  namespace?: string;
+  port: number;
+  method: string;
+  path: string;
+  headers?: Record<string, string>;
+  body?: string;
+}): Promise<ProxyResponse> {
+  const res = await fetch(`${API_BASE}/api/proxy`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  return res.json();
+}

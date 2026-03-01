@@ -104,6 +104,11 @@ func runDashboard(cmd *cobra.Command, args []string) error {
 	mux.HandleFunc("/api/topology/workspace", handleWorkspaceInfo)        // GET — repo root + service dirs
 	mux.HandleFunc("/api/topology/check-path", handleCheckPath)           // GET — check dir existence
 
+	// ── API routes (proxy / API explorer) ───────────────────────
+	mux.HandleFunc("/api/proxy", handleProxy)                        // POST — proxy request to in-cluster service
+	mux.HandleFunc("/api/proxy/services/", handleProxyServiceDetail) // GET — service detail (must come before /services)
+	mux.HandleFunc("/api/proxy/services", handleProxyServices)       // GET — list proxyable services
+
 	// ── Static frontend ─────────────────────────────────────────
 	distFS, err := fs.Sub(dashboardFS, "dashboard-ui/dist")
 	if err != nil {

@@ -14,11 +14,13 @@ import { SecretsPage } from './pages/SecretsPage';
 import { EventsPage } from './pages/EventsPage';
 import { RBACPage } from './pages/RBACPage';
 import { TopologyPage } from './pages/TopologyPage';
+import { ApiExplorerPage } from './pages/ApiExplorerPage';
 import type { K8sList, K8sIngress } from './types';
 
 type Page =
   | 'overview'
   | 'topology'
+  | 'api-explorer'
   | 'dses'
   | 'runners'
   | 'deployments'
@@ -46,6 +48,7 @@ const NAV_GROUPS: NavGroup[] = [
     label: 'Kindling',
     items: [
       { page: 'topology', icon: '◇', label: 'Topology' },
+      { page: 'api-explorer', icon: '⇆', label: 'API Explorer' },
       { page: 'dses', icon: '◆', label: 'Environments' },
       { page: 'runners', icon: '▶', label: 'Runners' },
     ],
@@ -81,6 +84,7 @@ const NAV_GROUPS: NavGroup[] = [
 const PAGES: Record<Page, () => ReactNode> = {
   overview: OverviewPage,
   topology: TopologyPage,
+  'api-explorer': ApiExplorerPage,
   dses: DSEPage,
   runners: RunnersPage,
   deployments: DeploymentsPage,

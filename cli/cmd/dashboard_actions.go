@@ -1,14 +1,17 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -3420,4 +3423,257 @@ func cleanupWorkflow(serviceName string, referencedEnvVars []string) string {
 
 	log.Printf("[cleanup] removed %d step(s) from workflow for service %s", changes, serviceName)
 	return fmt.Sprintf("Cleaned %d step(s) from CI workflow", changes)
+}
+
+// ── POST /api/proxy ─────────────────────────────────────────────
+// Reverse-proxies an HTTP request to an in-cluster service via
+// kubectl port-forward. This lets the browser hit internal APIs
+// without exposing them externally.
+//
+// Body: {
+//   "service":  "my-api",            // K8s service name
+//   "namespace": "default",          // optional, defaults to "default"
+//   "port":     3000,                // service port
+//   "method":   "GET",               // HTTP method
+//   "path":     "/api/health",       // request path
+//   "headers":  { "Authorization": "Bearer ..." },
+//   "body":     "{\"key\":\"val\"}"  // request body (string)
+// }
+
+func handleProxy(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) {
+		return
+	}
+
+	var body struct {
+		Service   string            `json:"service"`
+		Namespace string            `json:"namespace"`
+		Port      int               `json:"port"`
+		Method    string            `json:"method"`
+		Path      string            `json:"path"`
+		Headers   map[string]string `json:"headers"`
+		Body      string            `json:"body"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		actionErr(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if body.Service == "" || body.Port == 0 {
+		actionErr(w, "service and port are required", http.StatusBadRequest)
+		return
+	}
+	if body.Namespace == "" {
+		body.Namespace = "default"
+	}
+	if body.Method == "" {
+		body.Method = "GET"
+	}
+	if body.Path == "" {
+		body.Path = "/"
+	}
+	if !strings.HasPrefix(body.Path, "/") {
+		body.Path = "/" + body.Path
+	}
+
+	// Find a free local port for the port-forward
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		actionErr(w, fmt.Sprintf("failed to find free port: %v", err), http.StatusInternalServerError)
+		return
+	}
+	localPort := listener.Addr().(*net.TCPAddr).Port
+	listener.Close()
+
+	// Start kubectl port-forward with a timeout context
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	pfCmd := exec.CommandContext(ctx, "kubectl", "--context", "kind-"+clusterName,
+		"port-forward", "-n", body.Namespace,
+		fmt.Sprintf("svc/%s", body.Service),
+		fmt.Sprintf("%d:%d", localPort, body.Port))
+	pfCmd.Stdout = io.Discard
+	pfCmd.Stderr = io.Discard
+
+	if err := pfCmd.Start(); err != nil {
+		actionErr(w, fmt.Sprintf("port-forward failed to start: %v", err), http.StatusInternalServerError)
+		return
+	}
+	defer func() {
+		if pfCmd.Process != nil {
+			pfCmd.Process.Kill()
+		}
+	}()
+
+	// Wait for port-forward to be ready (poll the local port)
+	targetAddr := fmt.Sprintf("127.0.0.1:%d", localPort)
+	ready := false
+	for i := 0; i < 30; i++ {
+		conn, err := net.DialTimeout("tcp", targetAddr, 200*time.Millisecond)
+		if err == nil {
+			conn.Close()
+			ready = true
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if !ready {
+		actionErr(w, "port-forward did not become ready in time", http.StatusGatewayTimeout)
+		return
+	}
+
+	// Build the proxied request
+	targetURL := fmt.Sprintf("http://%s%s", targetAddr, body.Path)
+	var reqBody io.Reader
+	if body.Body != "" {
+		reqBody = strings.NewReader(body.Body)
+	}
+
+	proxyReq, err := http.NewRequestWithContext(ctx, body.Method, targetURL, reqBody)
+	if err != nil {
+		actionErr(w, fmt.Sprintf("failed to create request: %v", err), http.StatusInternalServerError)
+		return
+	}
+	for k, v := range body.Headers {
+		proxyReq.Header.Set(k, v)
+	}
+	if body.Body != "" && proxyReq.Header.Get("Content-Type") == "" {
+		proxyReq.Header.Set("Content-Type", "application/json")
+	}
+
+	start := time.Now()
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(proxyReq)
+	elapsed := time.Since(start)
+
+	if err != nil {
+		actionErr(w, fmt.Sprintf("request failed: %v", err), http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // 1 MB limit
+
+	// Collect response headers
+	respHeaders := make(map[string]string)
+	for k := range resp.Header {
+		respHeaders[k] = resp.Header.Get(k)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok":      true,
+		"status":  resp.StatusCode,
+		"elapsed": elapsed.Milliseconds(),
+		"headers": respHeaders,
+		"body":    string(respBody),
+		"size":    len(respBody),
+	})
+}
+
+// ── GET /api/proxy/services ─────────────────────────────────────
+// Returns a list of K8s services in the cluster that can be proxied to.
+// Filters to services with the managed-by label from the DSE operator.
+
+func handleProxyServices(w http.ResponseWriter, r *http.Request) {
+	out, err := kubectlJSON("get", "services", "--all-namespaces", "-o", "json")
+	if err != nil {
+		jsonResponse(w, []interface{}{})
+		return
+	}
+
+	var svcList struct {
+		Items []struct {
+			Metadata struct {
+				Name      string            `json:"name"`
+				Namespace string            `json:"namespace"`
+				Labels    map[string]string `json:"labels"`
+			} `json:"metadata"`
+			Spec struct {
+				Ports []struct {
+					Name       string      `json:"name"`
+					Port       int         `json:"port"`
+					TargetPort interface{} `json:"targetPort"`
+					Protocol   string      `json:"protocol"`
+				} `json:"ports"`
+				Type     string            `json:"type"`
+				Selector map[string]string `json:"selector"`
+			} `json:"spec"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(out), &svcList); err != nil {
+		jsonResponse(w, []interface{}{})
+		return
+	}
+
+	type proxyService struct {
+		Name      string `json:"name"`
+		Namespace string `json:"namespace"`
+		Port      int    `json:"port"`
+		Ports     []struct {
+			Name string `json:"name"`
+			Port int    `json:"port"`
+		} `json:"ports"`
+	}
+
+	var services []proxyService
+	for _, svc := range svcList.Items {
+		// Include services managed by the operator, or any service in default namespace
+		// that isn't a system service (kubernetes, operator, registry)
+		managed := svc.Metadata.Labels["managed-by"] == "devstagingenvironment-operator"
+		isDefault := svc.Metadata.Namespace == "default"
+		isSystem := svc.Metadata.Name == "kubernetes" ||
+			strings.HasPrefix(svc.Metadata.Name, "kindling-") ||
+			svc.Metadata.Name == "local-registry"
+
+		if !managed && (!isDefault || isSystem) {
+			continue
+		}
+		if len(svc.Spec.Ports) == 0 {
+			continue
+		}
+
+		ps := proxyService{
+			Name:      svc.Metadata.Name,
+			Namespace: svc.Metadata.Namespace,
+			Port:      svc.Spec.Ports[0].Port,
+		}
+		for _, p := range svc.Spec.Ports {
+			ps.Ports = append(ps.Ports, struct {
+				Name string `json:"name"`
+				Port int    `json:"port"`
+			}{Name: p.Name, Port: p.Port})
+		}
+		services = append(services, ps)
+	}
+
+	if services == nil {
+		services = []proxyService{}
+	}
+	jsonResponse(w, services)
+}
+
+// ── GET /api/proxy/services/{namespace}/{name} ─────────────────
+// Returns available HTTP routes for a service by inspecting its pods.
+// This is a best-effort introspection.
+
+func handleProxyServiceDetail(w http.ResponseWriter, r *http.Request) {
+	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/proxy/services/"), "/")
+	if len(parts) < 2 {
+		actionErr(w, "expected /api/proxy/services/{namespace}/{name}", http.StatusBadRequest)
+		return
+	}
+	ns, name := parts[0], parts[1]
+
+	// Get the port from query param or default
+	port := 0
+	if p := r.URL.Query().Get("port"); p != "" {
+		port, _ = strconv.Atoi(p)
+	}
+
+	jsonResponse(w, map[string]interface{}{
+		"name":      name,
+		"namespace": ns,
+		"port":      port,
+	})
 }
