@@ -557,8 +557,8 @@ func TestDetectEntryPoints_IfNameMain(t *testing.T) {
 func TestDetectEntryPoints_NestedFilesIgnored(t *testing.T) {
 	ctx := &repoContext{
 		sourceSnippets: map[string]string{
-			"worker.py":          "import redis",
-			"subdir/worker2.py":  "import redis",
+			"worker.py":         "import redis",
+			"subdir/worker2.py": "import redis",
 		},
 		depFiles: map[string]string{},
 	}

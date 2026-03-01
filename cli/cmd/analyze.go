@@ -275,12 +275,12 @@ func checkProjectStructure(repoPath string, ctx *repoContext) []checkResult {
 		})
 
 		results = append(results, checkResult{
-			status: checkInfo,
+			status:  checkInfo,
 			message: "Each independently scalable service should have its own Dockerfile",
 		})
 
 		results = append(results, checkResult{
-			status: checkInfo,
+			status:  checkInfo,
 			message: "This lets Kubernetes scale, restart, and update each service independently",
 		})
 
@@ -310,28 +310,28 @@ func checkProjectStructure(repoPath string, ctx *repoContext) []checkResult {
 
 		// Show what changes
 		results = append(results, checkResult{
-			status: checkInfo,
+			status:  checkInfo,
 			message: "Benefits: independent scaling, isolated failures, faster rebuilds, rolling updates per service",
 		})
 
 		// Shared code guidance
 		if len(sharedModules) > 0 {
 			results = append(results, checkResult{
-				status: checkInfo,
+				status:  checkInfo,
 				message: fmt.Sprintf("Note: %d shared module(s) detected — each Dockerfile must COPY from the repo root", len(sharedModules)),
 			})
 			results = append(results, checkResult{
-				status: checkInfo,
+				status:  checkInfo,
 				message: "Each Dockerfile should use paths relative to repo root (e.g. COPY shared/ shared/)",
 			})
 			results = append(results, checkResult{
-				status: checkInfo,
+				status:  checkInfo,
 				message: "CI build context must be the repo root, with 'dockerfile: <svc>/Dockerfile'",
 			})
 		}
 
 		results = append(results, checkResult{
-			status: checkWarn,
+			status:  checkWarn,
 			message: "Current flat layout will work — but each push rebuilds everything and all services share one pod",
 			fix:     "Restructure into service directories, then re-run 'kindling analyze'",
 		})
@@ -989,7 +989,7 @@ func checkBuildContext(dockerfilePath, content string) []checkResult {
 				dockerfilePath, strings.Join(outsidePaths, ", ")),
 		})
 		results = append(results, checkResult{
-			status: checkInfo,
+			status:  checkInfo,
 			message: fmt.Sprintf("CI build context must be repo root with 'dockerfile: %s'", dockerfilePath),
 		})
 	}
