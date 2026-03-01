@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -1301,6 +1303,563 @@ func handleGenerate(w http.ResponseWriter, r *http.Request) {
 // Topology Editor API
 // ═══════════════════════════════════════════════════════════════
 
+// ── GET /api/topology/status ────────────────────────────────────
+// Returns live pod health for every node in the topology graph.
+// The frontend polls this every few seconds and overlays the result.
+
+type topologyNodeStatus struct {
+	Phase      string                 `json:"phase"`      // aggregate: Running, Pending, Error, CrashLoopBackOff, Unknown
+	Ready      int                    `json:"ready"`      // pods with all containers ready
+	Total      int                    `json:"total"`      // total pods matched
+	Restarts   int                    `json:"restarts"`   // sum of all container restart counts
+	LastDeploy string                 `json:"lastDeploy"` // deployment's last-updated timestamp
+	Containers []topologyContainerInfo `json:"containers,omitempty"`
+}
+
+type topologyContainerInfo struct {
+	Name     string `json:"name"`
+	Ready    bool   `json:"ready"`
+	Restarts int    `json:"restarts"`
+	State    string `json:"state"` // running, waiting, terminated
+	Reason   string `json:"reason,omitempty"`
+}
+
+func handleGetTopologyStatus(w http.ResponseWriter, r *http.Request) {
+	result := make(map[string]*topologyNodeStatus)
+
+	// 1. Get all kindling-managed pods (includes app + dependency pods)
+	podOut, err := kubectlJSON("get", "pods", "--all-namespaces",
+		"-l", "app.kubernetes.io/managed-by=kindling", "-o", "json")
+	if err != nil {
+		// No pods — return empty
+		jsonResponse(w, result)
+		return
+	}
+
+	var podList struct {
+		Items []struct {
+			Metadata struct {
+				Name   string            `json:"name"`
+				Labels map[string]string `json:"labels"`
+			} `json:"metadata"`
+			Status struct {
+				Phase             string `json:"phase"`
+				ContainerStatuses []struct {
+					Name         string `json:"name"`
+					Ready        bool   `json:"ready"`
+					RestartCount int    `json:"restartCount"`
+					State        struct {
+						Running    *struct{} `json:"running"`
+						Waiting    *struct {
+							Reason string `json:"reason"`
+						} `json:"waiting"`
+						Terminated *struct {
+							Reason string `json:"reason"`
+						} `json:"terminated"`
+					} `json:"state"`
+				} `json:"containerStatuses"`
+			} `json:"status"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(podOut), &podList); err != nil {
+		jsonResponse(w, result)
+		return
+	}
+
+	// 2. Get all kindling-managed deployments for lastDeploy timestamps
+	depOut, _ := kubectlJSON("get", "deployments", "--all-namespaces",
+		"-l", "app.kubernetes.io/managed-by=kindling", "-o", "json")
+	deployTimestamps := make(map[string]string) // "partOf/component" → timestamp
+	if depOut != "" {
+		var depList struct {
+			Items []struct {
+				Metadata struct {
+					Labels            map[string]string `json:"labels"`
+					CreationTimestamp  string            `json:"creationTimestamp"`
+				} `json:"metadata"`
+				Status struct {
+					Conditions []struct {
+						Type               string `json:"type"`
+						LastTransitionTime string `json:"lastTransitionTime"`
+						LastUpdateTime     string `json:"lastUpdateTime"`
+					} `json:"conditions"`
+				} `json:"status"`
+			} `json:"items"`
+		}
+		if json.Unmarshal([]byte(depOut), &depList) == nil {
+			for _, d := range depList.Items {
+				partOf := d.Metadata.Labels["app.kubernetes.io/part-of"]
+				component := d.Metadata.Labels["app.kubernetes.io/component"]
+				key := partOf + "/" + component
+
+				// Use the most recent Progressing condition update time
+				ts := d.Metadata.CreationTimestamp
+				for _, c := range d.Status.Conditions {
+					if c.Type == "Progressing" && c.LastUpdateTime != "" {
+						ts = c.LastUpdateTime
+					}
+				}
+				deployTimestamps[key] = ts
+			}
+		}
+	}
+
+	// 3. Map pods to topology node IDs
+	// Service nodes: id = "svc-<dseName>", labels: part-of=<dseName>, component=app (or empty)
+	// Dependency nodes: id = "dep-<depType>", labels: part-of=<dseName>, component=<depType>
+	for _, pod := range podList.Items {
+		partOf := pod.Metadata.Labels["app.kubernetes.io/part-of"]
+		component := pod.Metadata.Labels["app.kubernetes.io/component"]
+		if partOf == "" {
+			continue
+		}
+
+		// Determine topology node ID
+		var nodeID string
+		if component == "" || component == "app" || component == partOf {
+			nodeID = "svc-" + partOf
+		} else {
+			nodeID = "dep-" + component
+		}
+
+		status, exists := result[nodeID]
+		if !exists {
+			status = &topologyNodeStatus{Phase: "Unknown"}
+			result[nodeID] = status
+		}
+
+		status.Total++
+
+		// Check if all containers are ready
+		allReady := true
+		for _, cs := range pod.Status.ContainerStatuses {
+			status.Restarts += cs.RestartCount
+
+			state := "unknown"
+			reason := ""
+			if cs.State.Running != nil {
+				state = "running"
+			} else if cs.State.Waiting != nil {
+				state = "waiting"
+				reason = cs.State.Waiting.Reason
+			} else if cs.State.Terminated != nil {
+				state = "terminated"
+				reason = cs.State.Terminated.Reason
+			}
+
+			if !cs.Ready {
+				allReady = false
+			}
+
+			status.Containers = append(status.Containers, topologyContainerInfo{
+				Name:     cs.Name,
+				Ready:    cs.Ready,
+				Restarts: cs.RestartCount,
+				State:    state,
+				Reason:   reason,
+			})
+		}
+		if allReady && len(pod.Status.ContainerStatuses) > 0 {
+			status.Ready++
+		}
+
+		// Determine aggregate phase (worst wins)
+		podPhase := pod.Status.Phase
+		for _, cs := range pod.Status.ContainerStatuses {
+			if cs.State.Waiting != nil && cs.State.Waiting.Reason == "CrashLoopBackOff" {
+				podPhase = "CrashLoopBackOff"
+				break
+			}
+			if cs.State.Waiting != nil && cs.State.Waiting.Reason == "ImagePullBackOff" {
+				podPhase = "ImagePullBackOff"
+				break
+			}
+		}
+
+		// Phase priority: CrashLoopBackOff > ImagePullBackOff > Failed > Pending > Running > Unknown
+		status.Phase = worstPhase(status.Phase, podPhase)
+
+		// Attach deploy timestamp
+		tsKey := partOf + "/" + component
+		if ts, ok := deployTimestamps[tsKey]; ok && status.LastDeploy == "" {
+			status.LastDeploy = ts
+		}
+		// Also try without component for services
+		if status.LastDeploy == "" {
+			if ts, ok := deployTimestamps[partOf+"/"]; ok {
+				status.LastDeploy = ts
+			}
+		}
+	}
+
+	jsonResponse(w, result)
+}
+
+// ── GET /api/topology/logs?node=<nodeId>&tail=200 ───────────────
+// Returns aggregated logs from all pods matching a topology node.
+
+func handleTopologyLogs(w http.ResponseWriter, r *http.Request) {
+	nodeID := r.URL.Query().Get("node")
+	if nodeID == "" {
+		jsonError(w, "missing ?node= parameter", 400)
+		return
+	}
+
+	tail := r.URL.Query().Get("tail")
+	if tail == "" {
+		tail = "200"
+	}
+
+	// Derive label selector from node ID
+	// Service nodes: svc-<name> → component in (app,<name>), part-of=<name>
+	// Dependency nodes: dep-<type> → component=<type>
+	var labelSelector string
+	if strings.HasPrefix(nodeID, "svc-") {
+		name := strings.TrimPrefix(nodeID, "svc-")
+		labelSelector = "app.kubernetes.io/managed-by=kindling,app.kubernetes.io/part-of=" + name
+	} else if strings.HasPrefix(nodeID, "dep-") {
+		depType := strings.TrimPrefix(nodeID, "dep-")
+		labelSelector = "app.kubernetes.io/managed-by=kindling,app.kubernetes.io/component=" + depType
+	} else {
+		jsonError(w, "invalid node ID format", 400)
+		return
+	}
+
+	// Get matching pod names
+	podOut, err := kubectlJSON("get", "pods", "--all-namespaces",
+		"-l", labelSelector, "-o", "jsonpath={range .items[*]}{.metadata.namespace}/{.metadata.name}\n{end}")
+	if err != nil || strings.TrimSpace(podOut) == "" {
+		jsonResponse(w, map[string]interface{}{
+			"lines": []string{},
+			"pods":  []string{},
+		})
+		return
+	}
+
+	podRefs := strings.Split(strings.TrimSpace(podOut), "\n")
+
+	type logEntry struct {
+		Pod  string `json:"pod"`
+		Line string `json:"line"`
+	}
+
+	var lines []logEntry
+	var podNames []string
+	for _, ref := range podRefs {
+		parts := strings.SplitN(ref, "/", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		ns, podName := parts[0], parts[1]
+		podNames = append(podNames, podName)
+
+		out, err := runCapture("kubectl", "logs", podName, "-n", ns, "--tail="+tail, "--timestamps=true")
+		if err != nil {
+			lines = append(lines, logEntry{Pod: podName, Line: "[error fetching logs: " + err.Error() + "]"})
+			continue
+		}
+		for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+			if line != "" {
+				lines = append(lines, logEntry{Pod: podName, Line: line})
+			}
+		}
+	}
+
+	jsonResponse(w, map[string]interface{}{
+		"lines": lines,
+		"pods":  podNames,
+	})
+}
+
+// ── GET /api/topology/node/detail?node=<nodeId> ─────────────────
+// Returns pods, recent events, and environment variables for a topology node.
+
+func handleTopologyNodeDetail(w http.ResponseWriter, r *http.Request) {
+	nodeID := r.URL.Query().Get("node")
+	if nodeID == "" {
+		jsonError(w, "missing ?node= parameter", 400)
+		return
+	}
+
+	// Derive label selector
+	var labelSelector string
+	if strings.HasPrefix(nodeID, "svc-") {
+		name := strings.TrimPrefix(nodeID, "svc-")
+		labelSelector = "app.kubernetes.io/managed-by=kindling,app.kubernetes.io/part-of=" + name
+	} else if strings.HasPrefix(nodeID, "dep-") {
+		depType := strings.TrimPrefix(nodeID, "dep-")
+		labelSelector = "app.kubernetes.io/managed-by=kindling,app.kubernetes.io/component=" + depType
+	} else {
+		jsonError(w, "invalid node ID format", 400)
+		return
+	}
+
+	type podInfo struct {
+		Name       string `json:"name"`
+		Namespace  string `json:"namespace"`
+		Phase      string `json:"phase"`
+		Ready      string `json:"ready"`
+		Restarts   int    `json:"restarts"`
+		Age        string `json:"age"`
+		Node       string `json:"node"`
+	}
+
+	type eventInfo struct {
+		Type    string `json:"type"`
+		Reason  string `json:"reason"`
+		Message string `json:"message"`
+		Age     string `json:"age"`
+		Count   int    `json:"count"`
+	}
+
+	type envVar struct {
+		Name  string `json:"name"`
+		Value string `json:"value"`
+	}
+
+	type deploymentInfo struct {
+		Name      string `json:"name"`
+		Namespace string `json:"namespace"`
+		Replicas  int    `json:"replicas"`
+		Available int    `json:"available"`
+	}
+
+	type nodeDetail struct {
+		Pods       []podInfo       `json:"pods"`
+		Events     []eventInfo     `json:"events"`
+		Env        []envVar        `json:"env"`
+		Deployment *deploymentInfo `json:"deployment,omitempty"`
+	}
+
+	detail := nodeDetail{}
+
+	// 0. Get deployment info (for scale controls)
+	depOut, err := kubectlJSON("get", "deployments", "--all-namespaces",
+		"-l", labelSelector, "-o", "json")
+	if err == nil && depOut != "" {
+		var depList struct {
+			Items []struct {
+				Metadata struct {
+					Name      string `json:"name"`
+					Namespace string `json:"namespace"`
+				} `json:"metadata"`
+				Spec struct {
+					Replicas int `json:"replicas"`
+				} `json:"spec"`
+				Status struct {
+					AvailableReplicas int `json:"availableReplicas"`
+				} `json:"status"`
+			} `json:"items"`
+		}
+		if json.Unmarshal([]byte(depOut), &depList) == nil && len(depList.Items) > 0 {
+			d := depList.Items[0]
+			detail.Deployment = &deploymentInfo{
+				Name:      d.Metadata.Name,
+				Namespace: d.Metadata.Namespace,
+				Replicas:  d.Spec.Replicas,
+				Available: d.Status.AvailableReplicas,
+			}
+		}
+	}
+
+	// 1. Get pods
+	podOut, err := kubectlJSON("get", "pods", "--all-namespaces",
+		"-l", labelSelector, "-o", "json")
+	if err == nil && podOut != "" {
+		var podList struct {
+			Items []struct {
+				Metadata struct {
+					Name              string `json:"name"`
+					Namespace         string `json:"namespace"`
+					CreationTimestamp string `json:"creationTimestamp"`
+				} `json:"metadata"`
+				Spec struct {
+					NodeName   string `json:"nodeName"`
+					Containers []struct {
+						Env []struct {
+							Name  string `json:"name"`
+							Value string `json:"value"`
+						} `json:"env"`
+					} `json:"containers"`
+				} `json:"spec"`
+				Status struct {
+					Phase             string `json:"phase"`
+					ContainerStatuses []struct {
+						Name         string `json:"name"`
+						Ready        bool   `json:"ready"`
+						RestartCount int    `json:"restartCount"`
+					} `json:"containerStatuses"`
+				} `json:"status"`
+			} `json:"items"`
+		}
+		if json.Unmarshal([]byte(podOut), &podList) == nil {
+			for _, p := range podList.Items {
+				readyCount := 0
+				totalContainers := len(p.Status.ContainerStatuses)
+				restarts := 0
+				for _, cs := range p.Status.ContainerStatuses {
+					if cs.Ready {
+						readyCount++
+					}
+					restarts += cs.RestartCount
+				}
+				detail.Pods = append(detail.Pods, podInfo{
+					Name:      p.Metadata.Name,
+					Namespace: p.Metadata.Namespace,
+					Phase:     p.Status.Phase,
+					Ready:     fmt.Sprintf("%d/%d", readyCount, totalContainers),
+					Restarts:  restarts,
+					Age:       p.Metadata.CreationTimestamp,
+					Node:      p.Spec.NodeName,
+				})
+
+				// Collect env vars from first pod only
+				if len(detail.Env) == 0 {
+					for _, c := range p.Spec.Containers {
+						for _, e := range c.Env {
+							// Skip Kubernetes-injected vars
+							if strings.HasPrefix(e.Name, "KUBERNETES_") {
+								continue
+							}
+							detail.Env = append(detail.Env, envVar{Name: e.Name, Value: e.Value})
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// 2. Get recent events for these pods
+	if len(detail.Pods) > 0 {
+		ns := detail.Pods[0].Namespace
+		evtOut, err := kubectlJSON("get", "events", "-n", ns,
+			"--field-selector=involvedObject.kind=Pod",
+			"--sort-by=.lastTimestamp", "-o", "json")
+		if err == nil && evtOut != "" {
+			var evtList struct {
+				Items []struct {
+					Type    string `json:"type"`
+					Reason  string `json:"reason"`
+					Message string `json:"message"`
+					Count   int    `json:"count"`
+					LastTimestamp string `json:"lastTimestamp"`
+					InvolvedObject struct {
+						Name string `json:"name"`
+					} `json:"involvedObject"`
+				} `json:"items"`
+			}
+			if json.Unmarshal([]byte(evtOut), &evtList) == nil {
+				podSet := map[string]bool{}
+				for _, p := range detail.Pods {
+					podSet[p.Name] = true
+				}
+				for _, e := range evtList.Items {
+					if !podSet[e.InvolvedObject.Name] {
+						continue
+					}
+					detail.Events = append(detail.Events, eventInfo{
+						Type:    e.Type,
+						Reason:  e.Reason,
+						Message: e.Message,
+						Age:     e.LastTimestamp,
+						Count:   e.Count,
+					})
+				}
+				// Keep only last 20 events
+				if len(detail.Events) > 20 {
+					detail.Events = detail.Events[len(detail.Events)-20:]
+				}
+			}
+		}
+	}
+
+	jsonResponse(w, detail)
+}
+
+// worstPhase returns the more severe of two pod phases.
+func worstPhase(current, incoming string) string {
+	priority := map[string]int{
+		"Unknown":          0,
+		"Running":          1,
+		"Succeeded":        2,
+		"Pending":          3,
+		"Failed":           4,
+		"ImagePullBackOff": 5,
+		"CrashLoopBackOff": 6,
+	}
+	cp := priority[current]
+	ip := priority[incoming]
+	if ip > cp {
+		return incoming
+	}
+	return current
+}
+
+// ── Staged-node persistence ─────────────────────────────────────
+// Staged services are saved to .kindling/staged.json so they survive
+// page navigation and dashboard restarts.
+
+func stagedFilePath() string {
+	if out, err := exec.Command("git", "rev-parse", "--show-toplevel").Output(); err == nil {
+		return filepath.Join(strings.TrimSpace(string(out)), ".kindling", "staged.json")
+	}
+	wd, _ := os.Getwd()
+	return filepath.Join(wd, ".kindling", "staged.json")
+}
+
+func loadStagedNodes() []topologyNode {
+	data, err := os.ReadFile(stagedFilePath())
+	if err != nil {
+		return nil
+	}
+	var nodes []topologyNode
+	if err := json.Unmarshal(data, &nodes); err != nil {
+		return nil
+	}
+	return nodes
+}
+
+func saveStagedNodes(nodes []topologyNode) {
+	p := stagedFilePath()
+	os.MkdirAll(filepath.Dir(p), 0755)
+	data, err := json.MarshalIndent(nodes, "", "  ")
+	if err != nil {
+		log.Printf("[staged] marshal error: %v", err)
+		return
+	}
+	if err := os.WriteFile(p, data, 0644); err != nil {
+		log.Printf("[staged] write error: %v", err)
+	}
+}
+
+func addStagedNode(node topologyNode) {
+	nodes := loadStagedNodes()
+	// Replace if same name already staged
+	found := false
+	for i, n := range nodes {
+		if n.Data.Label == node.Data.Label {
+			nodes[i] = node
+			found = true
+			break
+		}
+	}
+	if !found {
+		nodes = append(nodes, node)
+	}
+	saveStagedNodes(nodes)
+}
+
+func removeStagedNode(label string) {
+	nodes := loadStagedNodes()
+	var filtered []topologyNode
+	for _, n := range nodes {
+		if n.Data.Label != label {
+			filtered = append(filtered, n)
+		}
+	}
+	saveStagedNodes(filtered)
+}
+
 // topologyNode is the JSON shape for a node in the topology graph.
 type topologyNode struct {
 	ID       string           `json:"id"`
@@ -1327,17 +1886,27 @@ type topologyData struct {
 	Replicas    int    `json:"replicas,omitempty"`
 	DSEName     string `json:"dseName,omitempty"`
 	IsNew       bool   `json:"isNew,omitempty"`
+	IsDirty     bool   `json:"isDirty,omitempty"`
+	Staged      bool   `json:"staged,omitempty"`
+	Language    string `json:"language,omitempty"`
 }
 
 type topologyEdge struct {
-	ID     string `json:"id"`
-	Source string `json:"source"`
-	Target string `json:"target"`
+	ID     string                 `json:"id"`
+	Source string                 `json:"source"`
+	Target string                 `json:"target"`
+	Data   map[string]interface{} `json:"data,omitempty"`
 }
 
 type topologyGraph struct {
 	Nodes []topologyNode `json:"nodes"`
 	Edges []topologyEdge `json:"edges"`
+}
+
+// svcEnvVar represents a service-to-service env var to inject into a container.
+type svcEnvVar struct {
+	Name  string
+	Value string
 }
 
 // ── GET /api/topology ───────────────────────────────────────────
@@ -1446,6 +2015,20 @@ func handleGetTopology(w http.ResponseWriter, r *http.Request) {
 		yOffset += 200
 	}
 
+	// Merge in any persisted staged nodes that aren't already in the cluster
+	stagedNodes := loadStagedNodes()
+	clusterLabels := make(map[string]bool)
+	for _, n := range graph.Nodes {
+		clusterLabels[n.Data.Label] = true
+	}
+	for _, sn := range stagedNodes {
+		if !clusterLabels[sn.Data.Label] {
+			sn.Position = topologyPosition{X: 300, Y: yOffset}
+			graph.Nodes = append(graph.Nodes, sn)
+			yOffset += 200
+		}
+	}
+
 	jsonResponse(w, graph)
 }
 
@@ -1473,6 +2056,7 @@ func handleDeployTopology(w http.ResponseWriter, r *http.Request) {
 	type serviceBundle struct {
 		service      topologyNode
 		dependencies []topologyNode
+		svcEnvVars   []svcEnvVar // env vars from service-to-service edges
 	}
 	bundles := []serviceBundle{}
 
@@ -1494,6 +2078,32 @@ func handleDeployTopology(w http.ResponseWriter, r *http.Request) {
 			if dep, ok := nodeMap[depID]; ok && dep.Data.Kind == "dependency" {
 				bundle.dependencies = append(bundle.dependencies, dep)
 			}
+			// Service-to-service: if this service is the SOURCE and target is another service
+			if e.Source == n.ID {
+				if target, ok := nodeMap[e.Target]; ok && target.Data.Kind == "service" {
+					envVar := ""
+					envValue := ""
+					if data := e.Data; data != nil {
+						if v, ok := data["_envVar"].(string); ok {
+							envVar = v
+						}
+						if v, ok := data["_envValue"].(string); ok {
+							envValue = v
+						}
+					}
+					if envVar == "" {
+						// Derive from target name
+						tName := strings.ToLower(strings.ReplaceAll(target.Data.Label, " ", "-"))
+						envVar = strings.ToUpper(strings.ReplaceAll(tName, "-", "_")) + "_URL"
+						port := target.Data.ServicePort
+						if port == 0 {
+							port = 3000
+						}
+						envValue = fmt.Sprintf("http://%s:%d", tName, port)
+					}
+					bundle.svcEnvVars = append(bundle.svcEnvVars, svcEnvVar{Name: envVar, Value: envValue})
+				}
+			}
 		}
 		bundles = append(bundles, bundle)
 	}
@@ -1503,16 +2113,156 @@ func handleDeployTopology(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Generate and apply DSE YAML for each service
-	var outputs []string
+	// Log what we received for debugging
+	for _, n := range graph.Nodes {
+		log.Printf("[deploy] node id=%s kind=%s label=%s isNew=%v isDirty=%v", n.ID, n.Data.Kind, n.Data.Label, n.Data.IsNew, n.Data.IsDirty)
+	}
+	for _, e := range graph.Edges {
+		log.Printf("[deploy] edge %s -> %s", e.Source, e.Target)
+	}
+
+	// Detect orphan dependency nodes (not connected to any service)
+	connectedDeps := make(map[string]bool)
 	for _, b := range bundles {
-		yaml := buildDSEYAML(b.service, b.dependencies)
+		for _, d := range b.dependencies {
+			connectedDeps[d.ID] = true
+		}
+	}
+	var orphanNames []string
+	for _, n := range graph.Nodes {
+		if n.Data.Kind == "dependency" && !connectedDeps[n.ID] {
+			orphanNames = append(orphanNames, n.Data.Label)
+		}
+	}
+
+	// If ONLY orphan deps and no other changes, tell the user to connect them
+	if len(orphanNames) > 0 {
+		// Check if there are any actual deployable changes
+		hasDeployable := false
+		for _, b := range bundles {
+			if b.service.Data.IsNew || b.service.Data.IsDirty {
+				hasDeployable = true
+				break
+			}
+			for _, d := range b.dependencies {
+				if d.Data.IsNew || d.Data.IsDirty {
+					hasDeployable = true
+					break
+				}
+			}
+			if hasDeployable {
+				break
+			}
+		}
+		if !hasDeployable {
+			actionErr(w, fmt.Sprintf("%s not connected to any service — draw an edge from a service to the dependency, then deploy again", strings.Join(orphanNames, ", ")), http.StatusBadRequest)
+			return
+		}
+	}
+
+	// Only deploy bundles that contain at least one new or dirty node
+	var deployBundles []serviceBundle
+	for _, b := range bundles {
+		if b.service.Data.IsNew || b.service.Data.IsDirty {
+			deployBundles = append(deployBundles, b)
+			continue
+		}
+		for _, d := range b.dependencies {
+			if d.Data.IsNew || d.Data.IsDirty {
+				deployBundles = append(deployBundles, b)
+				break
+			}
+		}
+	}
+
+	if len(deployBundles) == 0 {
+		actionOK(w, "Nothing to deploy — no changes detected")
+		return
+	}
+
+	// Check for staged services that aren't ready
+	var stagedNames []string
+	var readyBundles []serviceBundle
+	for _, b := range deployBundles {
+		if b.service.Data.Staged {
+			// Staged service — check if it has a path with source files
+			if b.service.Data.Path == "" {
+				stagedNames = append(stagedNames, b.service.Data.Label)
+				continue
+			}
+			// Path exists — check if the directory is actually populated
+			if _, err := os.Stat(b.service.Data.Path); os.IsNotExist(err) {
+				stagedNames = append(stagedNames, b.service.Data.Label)
+				continue
+			}
+		}
+		readyBundles = append(readyBundles, b)
+	}
+
+	if len(readyBundles) == 0 && len(stagedNames) > 0 {
+		actionErr(w, fmt.Sprintf("%s still staged — write your code in the scaffolded directory, then deploy when ready", strings.Join(stagedNames, ", ")), http.StatusBadRequest)
+		return
+	}
+
+	// Build images for new services that have a source path with a Dockerfile.
+	// Track the actual loaded image tags so the DSE uses the right reference.
+	builtImages := make(map[string]string) // service label -> loaded image tag
+	var outputs []string
+	for _, b := range readyBundles {
+		if b.service.Data.IsNew && b.service.Data.Path != "" {
+			dfPath := filepath.Join(b.service.Data.Path, "Dockerfile")
+			if _, err := os.Stat(dfPath); err == nil {
+				safeName := strings.ToLower(strings.ReplaceAll(b.service.Data.Label, " ", "-"))
+				log.Printf("[deploy] building image for %s from %s", safeName, b.service.Data.Path)
+				loadMsgs, err := core.BuildAndLoad(core.LoadConfig{
+					ClusterName: clusterName,
+					Service:     safeName,
+					Context:     b.service.Data.Path,
+					NoDeploy:    true, // we'll apply the DSE ourselves below
+				})
+				if err != nil {
+					actionErr(w, fmt.Sprintf("image build failed for %s: %v", safeName, err), http.StatusInternalServerError)
+					return
+				}
+				// Extract the image tag from the "✓ Image built: <tag>" message
+				for _, m := range loadMsgs {
+					log.Printf("[deploy] %s: %s", safeName, m)
+					if strings.HasPrefix(m, "✓ Image built: ") {
+						builtImages[b.service.Data.Label] = strings.TrimPrefix(m, "✓ Image built: ")
+					}
+				}
+				outputs = append(outputs, fmt.Sprintf("✓ %s image built & loaded", safeName))
+			}
+		}
+	}
+
+	// Generate and apply DSE YAML for each changed service bundle
+	for i, b := range readyBundles {
+		// Override image with the loaded tag if we just built it
+		if tag, ok := builtImages[b.service.Data.Label]; ok {
+			readyBundles[i].service.Data.Image = tag
+			b = readyBundles[i]
+		}
+		yaml := buildDSEYAML(b.service, b.dependencies, b.svcEnvVars)
+		log.Printf("[deploy] applying DSE for %s:\n%s", b.service.Data.Label, yaml)
 		out, err := core.KubectlApplyStdin(clusterName, yaml)
 		if err != nil {
 			actionErr(w, "deploy failed for "+b.service.Data.Label+": "+out, http.StatusInternalServerError)
 			return
 		}
+		// Remove from staged storage once successfully deployed
+		removeStagedNode(b.service.Data.Label)
 		outputs = append(outputs, fmt.Sprintf("✓ %s deployed", b.service.Data.Label))
+	}
+
+	// Append staged warnings
+	for _, name := range stagedNames {
+		outputs = append(outputs, fmt.Sprintf("⏳ %s staged — develop your code, then deploy again", name))
+	}
+
+	// Append orphan warnings if any
+	for _, name := range orphanNames {
+		outputs = append(outputs, fmt.Sprintf("⚠ %s not connected — draw an edge to include it", name))
 	}
 
 	actionOK(w, strings.Join(outputs, "\n"))
@@ -1520,8 +2270,11 @@ func handleDeployTopology(w http.ResponseWriter, r *http.Request) {
 
 // buildDSEYAML generates a DevStagingEnvironment YAML manifest from a
 // service node and its connected dependency nodes.
-func buildDSEYAML(svc topologyNode, deps []topologyNode) string {
-	name := strings.ToLower(strings.ReplaceAll(svc.Data.Label, " ", "-"))
+func buildDSEYAML(svc topologyNode, deps []topologyNode, envVars []svcEnvVar) string {
+	name := svc.Data.DSEName
+	if name == "" {
+		name = strings.ToLower(strings.ReplaceAll(svc.Data.Label, " ", "-"))
+	}
 	image := svc.Data.Image
 	if image == "" {
 		image = fmt.Sprintf("localhost:5001/%s:latest", name)
@@ -1536,19 +2289,29 @@ func buildDSEYAML(svc topologyNode, deps []topologyNode) string {
 	}
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf(`apiVersion: kindling.dev/v1alpha1
+	sb.WriteString(fmt.Sprintf(`apiVersion: apps.example.com/v1alpha1
 kind: DevStagingEnvironment
 metadata:
-  name: %s
+  name: "%s"
   namespace: default
 spec:
   deployment:
-    image: %s
+    image: "%s"
     port: %d
     replicas: %d
-  service:
+`, name, image, port, replicas))
+
+	// Service-to-service env vars (injected into this service's container)
+	if len(envVars) > 0 {
+		sb.WriteString("    env:\n")
+		for _, ev := range envVars {
+			sb.WriteString(fmt.Sprintf("    - name: %s\n      value: \"%s\"\n", ev.Name, ev.Value))
+		}
+	}
+
+	sb.WriteString(fmt.Sprintf(`  service:
     port: %d
-`, name, image, port, replicas, port))
+`, port))
 
 	if len(deps) > 0 {
 		sb.WriteString("  dependencies:\n")
@@ -1569,9 +2332,68 @@ spec:
 	return sb.String()
 }
 
+// ── GET /api/topology/workspace ─────────────────────────────────
+// Returns the detected workspace root (git root or cwd) and existing
+// service directories so the frontend can auto-suggest scaffold paths.
+
+func handleWorkspaceInfo(w http.ResponseWriter, r *http.Request) {
+	// Try git root first
+	root := ""
+	if out, err := exec.Command("git", "rev-parse", "--show-toplevel").Output(); err == nil {
+		root = strings.TrimSpace(string(out))
+	}
+	if root == "" {
+		root, _ = os.Getwd()
+	}
+
+	// Discover existing service-like directories (have Dockerfile or go.mod/package.json)
+	var services []string
+	entries, _ := os.ReadDir(root)
+	for _, e := range entries {
+		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") || e.Name() == "node_modules" || e.Name() == "vendor" {
+			continue
+		}
+		sub := filepath.Join(root, e.Name())
+		if hasServiceMarker(sub) {
+			services = append(services, e.Name())
+		}
+	}
+	// Also check services/ subdirectory (monorepo pattern)
+	servicesDir := filepath.Join(root, "services")
+	if info, err := os.Stat(servicesDir); err == nil && info.IsDir() {
+		entries, _ = os.ReadDir(servicesDir)
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			sub := filepath.Join(servicesDir, e.Name())
+			if hasServiceMarker(sub) {
+				services = append(services, "services/"+e.Name())
+			}
+		}
+	}
+
+	jsonResponse(w, map[string]interface{}{
+		"root":     root,
+		"services": services,
+	})
+}
+
+// hasServiceMarker returns true if a directory looks like a service (has build/dep markers).
+func hasServiceMarker(dir string) bool {
+	markers := []string{"Dockerfile", "package.json", "go.mod", "requirements.txt", "Cargo.toml", "pom.xml"}
+	for _, m := range markers {
+		if _, err := os.Stat(filepath.Join(dir, m)); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
 // ── POST /api/topology/scaffold ─────────────────────────────────
-// Creates a new service directory with a placeholder Dockerfile and source file.
-// Body: { "name": "my-api", "path": "/abs/path", "port": 3000 }
+// Creates a new service directory with a language-appropriate scaffold.
+// Body: { "name": "my-api", "path": "/abs/path", "port": 3000, "language": "node" }
+// Supported languages: node (default), go, python
 
 func handleScaffoldService(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodPost) {
@@ -1579,9 +2401,10 @@ func handleScaffoldService(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var body struct {
-		Name string `json:"name"`
-		Path string `json:"path"`
-		Port int    `json:"port"`
+		Name     string `json:"name"`
+		Path     string `json:"path"`
+		Port     int    `json:"port"`
+		Language string `json:"language"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		actionErr(w, "invalid request body", http.StatusBadRequest)
@@ -1593,6 +2416,9 @@ func handleScaffoldService(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.Port == 0 {
 		body.Port = 3000
+	}
+	if body.Language == "" {
+		body.Language = "node"
 	}
 
 	absPath, err := filepath.Abs(body.Path)
@@ -1607,7 +2433,50 @@ func handleScaffoldService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Write Dockerfile (Kaniko-compatible)
+	var scaffoldErr error
+	switch body.Language {
+	case "go":
+		scaffoldErr = scaffoldGo(absPath, body.Name, body.Port)
+	case "python":
+		scaffoldErr = scaffoldPython(absPath, body.Name, body.Port)
+	default:
+		scaffoldErr = scaffoldNode(absPath, body.Name, body.Port)
+	}
+
+	if scaffoldErr != nil {
+		actionErr(w, "scaffold failed: "+scaffoldErr.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Persist as a staged node so it survives page navigation
+	addStagedNode(topologyNode{
+		ID:   fmt.Sprintf("svc-staged-%s", body.Name),
+		Type: "service",
+		Data: topologyData{
+			Kind:        "service",
+			Label:       body.Name,
+			Image:       fmt.Sprintf("localhost:5001/%s:latest", body.Name),
+			Path:        absPath,
+			ServicePort: body.Port,
+			Replicas:    1,
+			IsNew:       true,
+			Staged:      true,
+			Language:    body.Language,
+		},
+	})
+
+	jsonResponse(w, map[string]interface{}{
+		"ok":       true,
+		"message":  fmt.Sprintf("Service '%s' scaffolded at %s", body.Name, absPath),
+		"path":     absPath,
+		"language": body.Language,
+	})
+}
+
+// ── Scaffold templates ──────────────────────────────────────────
+
+func scaffoldNode(dir, name string, port int) error {
+	// Dockerfile (Kaniko-compatible)
 	dockerfile := fmt.Sprintf(`FROM node:20-alpine
 WORKDIR /app
 COPY package*.json ./
@@ -1616,29 +2485,26 @@ RUN npm ci --only=production 2>/dev/null || true
 COPY . .
 EXPOSE %d
 CMD ["node", "index.js"]
-`, body.Port)
-	if err := os.WriteFile(filepath.Join(absPath, "Dockerfile"), []byte(dockerfile), 0644); err != nil {
-		actionErr(w, "cannot write Dockerfile: "+err.Error(), http.StatusInternalServerError)
-		return
+`, port)
+	if err := os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte(dockerfile), 0644); err != nil {
+		return err
 	}
 
-	// Write package.json
 	pkgJSON := fmt.Sprintf(`{
   "name": "%s",
   "version": "0.1.0",
   "private": true,
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "dev": "node --watch index.js"
   }
 }
-`, body.Name)
-	if err := os.WriteFile(filepath.Join(absPath, "package.json"), []byte(pkgJSON), 0644); err != nil {
-		actionErr(w, "cannot write package.json: "+err.Error(), http.StatusInternalServerError)
-		return
+`, name)
+	if err := os.WriteFile(filepath.Join(dir, "package.json"), []byte(pkgJSON), 0644); err != nil {
+		return err
 	}
 
-	// Write index.js placeholder
 	indexJS := fmt.Sprintf(`const http = require('http');
 
 const PORT = process.env.PORT || %d;
@@ -1656,13 +2522,113 @@ const server = http.createServer((req, res) => {
 server.listen(PORT, () => {
   console.log('%s listening on port ' + PORT);
 });
-`, body.Port, body.Name, body.Name)
-	if err := os.WriteFile(filepath.Join(absPath, "index.js"), []byte(indexJS), 0644); err != nil {
-		actionErr(w, "cannot write index.js: "+err.Error(), http.StatusInternalServerError)
-		return
+`, port, name, name)
+	return os.WriteFile(filepath.Join(dir, "index.js"), []byte(indexJS), 0644)
+}
+
+func scaffoldGo(dir, name string, port int) error {
+	// Dockerfile (Kaniko-compatible, no BuildKit)
+	dockerfile := fmt.Sprintf(`FROM golang:1.23-alpine AS builder
+WORKDIR /src
+COPY go.mod go.sum* ./
+RUN go mod download 2>/dev/null || true
+COPY . .
+RUN CGO_ENABLED=0 go build -buildvcs=false -o /app .
+
+FROM alpine:3.19
+RUN apk add --no-cache ca-certificates
+COPY --from=builder /app /app
+EXPOSE %d
+CMD ["/app"]
+`, port)
+	if err := os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte(dockerfile), 0644); err != nil {
+		return err
 	}
 
-	actionOK(w, fmt.Sprintf("Service '%s' scaffolded at %s", body.Name, absPath))
+	goMod := fmt.Sprintf(`module %s
+
+go 1.23
+`, name)
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(goMod), 0644); err != nil {
+		return err
+	}
+
+	mainGo := fmt.Sprintf(`package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+)
+
+func main() {
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "%d"
+	}
+
+	http.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, "ok")
+	})
+
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{
+			"service": "%s",
+			"status":  "running",
+		})
+	})
+
+	log.Printf("%s listening on port %%s", port)
+	log.Fatal(http.ListenAndServe(":"+port, nil))
+}
+`, port, name, name)
+	return os.WriteFile(filepath.Join(dir, "main.go"), []byte(mainGo), 0644)
+}
+
+func scaffoldPython(dir, name string, port int) error {
+	// Dockerfile (Kaniko-compatible)
+	dockerfile := fmt.Sprintf(`FROM python:3.12-slim
+WORKDIR /app
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt 2>/dev/null || true
+COPY . .
+EXPOSE %d
+CMD ["python", "app.py"]
+`, port)
+	if err := os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte(dockerfile), 0644); err != nil {
+		return err
+	}
+
+	requirements := "flask>=3.0\ngunicorn>=21.2\n"
+	if err := os.WriteFile(filepath.Join(dir, "requirements.txt"), []byte(requirements), 0644); err != nil {
+		return err
+	}
+
+	appPy := fmt.Sprintf(`import os
+from flask import Flask, jsonify
+
+app = Flask(__name__)
+PORT = int(os.environ.get("PORT", %d))
+
+
+@app.route("/healthz")
+def healthz():
+    return "ok"
+
+
+@app.route("/")
+def index():
+    return jsonify(service="%s", status="running")
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=PORT)
+`, port, name)
+	return os.WriteFile(filepath.Join(dir, "app.py"), []byte(appPy), 0644)
 }
 
 // ── GET /api/topology/check-path ────────────────────────────────
@@ -1708,4 +2674,207 @@ func handleCheckPath(w http.ResponseWriter, r *http.Request) {
 		"has_dockerfile": hasDockerfile,
 		"language":       lang,
 	})
+}
+
+// ── POST /api/topology/cleanup ──────────────────────────────────
+// Cleans up resources when a service is deleted from the topology:
+// 1. Removes the scaffolded directory on disk
+// 2. Strips build/deploy steps from the CI workflow
+// 3. Removes env vars referencing the deleted service from other workflow steps
+//
+// Body: { "name": "my-api", "path": "/abs/path/services/my-api",
+//         "referencedBy": ["INVENTORY_URL"] }
+
+func handleCleanupService(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) {
+		return
+	}
+
+	var body struct {
+		Name         string   `json:"name"`
+		Path         string   `json:"path"`
+		DSEName      string   `json:"dseName"`
+		ReferencedBy []string `json:"referencedBy"` // env var names to strip from workflow
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		actionErr(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if body.Name == "" {
+		actionErr(w, "name is required", http.StatusBadRequest)
+		return
+	}
+
+	var cleaned []string
+
+	// 1. Remove scaffolded directory
+	if body.Path != "" {
+		absPath, err := filepath.Abs(body.Path)
+		if err == nil {
+			if info, err := os.Stat(absPath); err == nil && info.IsDir() {
+				if err := os.RemoveAll(absPath); err != nil {
+					log.Printf("[cleanup] failed to remove directory %s: %v", absPath, err)
+				} else {
+					cleaned = append(cleaned, fmt.Sprintf("Removed directory %s", absPath))
+					log.Printf("[cleanup] removed directory %s", absPath)
+				}
+			}
+		}
+	}
+
+	// 2. Delete the DSE from the cluster if it exists
+	if body.DSEName != "" {
+		out, err := core.Kubectl(clusterName, "delete", "devstagingenvironment", body.DSEName, "-n", "default", "--ignore-not-found")
+		if err == nil && !strings.Contains(out, "not found") {
+			cleaned = append(cleaned, fmt.Sprintf("Deleted DSE %s from cluster", body.DSEName))
+			log.Printf("[cleanup] deleted DSE %s", body.DSEName)
+		}
+	}
+
+	// 3. Strip build/deploy steps from CI workflow
+	workflowCleaned := cleanupWorkflow(body.Name, body.ReferencedBy)
+	if workflowCleaned != "" {
+		cleaned = append(cleaned, workflowCleaned)
+	}
+
+	// 4. Remove from staged storage
+	removeStagedNode(body.Name)
+
+	if len(cleaned) == 0 {
+		actionOK(w, fmt.Sprintf("Service '%s' removed from topology (no on-disk cleanup needed)", body.Name))
+		return
+	}
+
+	actionOK(w, strings.Join(cleaned, "\n"))
+}
+
+// cleanupWorkflow finds the dev-deploy.yml workflow and strips steps referencing
+// the given service name, plus any env vars from referencedBy.
+func cleanupWorkflow(serviceName string, referencedEnvVars []string) string {
+	// Find the workflow file
+	root := ""
+	if out, err := exec.Command("git", "rev-parse", "--show-toplevel").Output(); err == nil {
+		root = strings.TrimSpace(string(out))
+	}
+	if root == "" {
+		root, _ = os.Getwd()
+	}
+
+	wfPath := filepath.Join(root, ".github", "workflows", "dev-deploy.yml")
+	data, err := os.ReadFile(wfPath)
+	if err != nil {
+		log.Printf("[cleanup] no workflow found at %s", wfPath)
+		return ""
+	}
+
+	original := string(data)
+	result := original
+	changes := 0
+
+	// Remove build and deploy steps that reference this service.
+	// Steps look like:
+	//   - name: Build <service> image
+	//     ...uses kindling-build...
+	//     with:
+	//       name: <svc-name>
+	//       context: "...<service>..."
+	//
+	// We match step blocks (lines starting with "      - name:" to the next such line)
+	// and remove those whose name/context/with.name references the service.
+	lines := strings.Split(result, "\n")
+	var filtered []string
+	safeName := strings.ToLower(strings.ReplaceAll(serviceName, " ", "-"))
+	skipBlock := false
+	i := 0
+
+	for i < len(lines) {
+		line := lines[i]
+		trimmed := strings.TrimSpace(line)
+
+		// Detect start of a workflow step (leading whitespace + "- name:")
+		if strings.HasPrefix(trimmed, "- name:") && strings.Contains(line, "      - name:") {
+			// Gather the full step block (until next "      - name:" or section heading)
+			block := []string{line}
+			j := i + 1
+			for j < len(lines) {
+				nextTrimmed := strings.TrimSpace(lines[j])
+				// Next step or section starts
+				if (strings.HasPrefix(nextTrimmed, "- name:") && strings.Contains(lines[j], "      - name:")) {
+					break
+				}
+				// Top-level key (no leading space, like "jobs:" or end of steps)
+				if len(lines[j]) > 0 && lines[j][0] != ' ' && lines[j][0] != '#' {
+					break
+				}
+				block = append(block, lines[j])
+				j++
+			}
+
+			// Check if this block references our service
+			blockText := strings.Join(block, "\n")
+			blockLower := strings.ToLower(blockText)
+			matches := strings.Contains(blockLower, safeName)
+
+			if matches {
+				// Skip this block
+				i = j
+				changes++
+				continue
+			}
+
+			// Check if block contains env vars referencing our service and strip them
+			if len(referencedEnvVars) > 0 {
+				blockModified := false
+				var cleanedBlock []string
+				for _, bline := range block {
+					skipLine := false
+					for _, envVar := range referencedEnvVars {
+						if strings.Contains(bline, envVar) {
+							skipLine = true
+							// Also skip the following "value:" line if this is a "- name:" env line
+							break
+						}
+					}
+					if !skipLine {
+						cleanedBlock = append(cleanedBlock, bline)
+					} else {
+						blockModified = true
+					}
+				}
+				if blockModified {
+					// Also clean up orphaned "value:" lines that followed removed "- name:" lines
+					var finalBlock []string
+					for k, bline := range cleanedBlock {
+						btrimmed := strings.TrimSpace(bline)
+						// Skip value: lines that are now orphaned (previous line was removed)
+						if strings.HasPrefix(btrimmed, "value:") && (k == 0 || strings.TrimSpace(cleanedBlock[k-1]) == "") {
+							continue
+						}
+						finalBlock = append(finalBlock, bline)
+					}
+					filtered = append(filtered, finalBlock...)
+					i = j
+					changes++
+					continue
+				}
+			}
+		}
+
+		filtered = append(filtered, line)
+		i++
+		_ = skipBlock
+	}
+
+	if changes == 0 {
+		return ""
+	}
+
+	result = strings.Join(filtered, "\n")
+	if err := os.WriteFile(wfPath, []byte(result), 0644); err != nil {
+		log.Printf("[cleanup] failed to write workflow: %v", err)
+		return ""
+	}
+
+	log.Printf("[cleanup] removed %d step(s) from workflow for service %s", changes, serviceName)
+	return fmt.Sprintf("Cleaned %d step(s) from CI workflow", changes)
 }

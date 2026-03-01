@@ -100,7 +100,7 @@ export function ActionModal({
   children: ReactNode;
   submitLabel?: string;
   loading?: boolean;
-  onSubmit: () => void;
+  onSubmit?: () => void;
   onClose: () => void;
 }) {
   return (
@@ -115,9 +115,11 @@ export function ActionModal({
         </div>
         <div className="modal-footer">
           <button className="btn" onClick={onClose} disabled={loading}>Cancel</button>
-          <button className="btn btn-primary" onClick={onSubmit} disabled={loading}>
-            {loading ? 'Working…' : submitLabel}
-          </button>
+          {onSubmit && (
+            <button className="btn btn-primary" onClick={onSubmit} disabled={loading}>
+              {loading ? 'Working…' : submitLabel}
+            </button>
+          )}
         </div>
       </div>
     </div>

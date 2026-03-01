@@ -545,7 +545,7 @@ function AppSidebar({ activePage, setActivePage }: { activePage: Page; setActive
       {showDeploy && (
         <ActionModal title="Deploy Environment" submitLabel="Deploy" loading={deploying} onSubmit={handleDeploy} onClose={() => setShowDeploy(false)}>
           <label className="form-label">DevStagingEnvironment YAML</label>
-          <textarea className="form-textarea" rows={14} placeholder={"apiVersion: apps.kindling.dev/v1alpha1\nkind: DevStagingEnvironment\nmetadata:\n  name: my-app\nspec:\n  ..."} value={deployYaml} onChange={(e) => setDeployYaml(e.target.value)} />
+          <textarea className="form-textarea" rows={14} placeholder={"apiVersion: apps.example.com/v1alpha1\nkind: DevStagingEnvironment\nmetadata:\n  name: my-app\nspec:\n  ..."} value={deployYaml} onChange={(e) => setDeployYaml(e.target.value)} />
         </ActionModal>
       )}
 

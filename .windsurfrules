@@ -86,7 +86,7 @@ Source tarball → Kaniko (in runner sidecar) → `localhost:5001/<image>` → d
 
 ## This Project
 
-**Languages detected:** Go, JavaScript/TypeScript
+**Languages detected:** Go
 
 **Dockerfiles found:** 8
 
@@ -104,3 +104,12 @@ Builds use Kaniko, not Docker BuildKit. Key differences:
 - `RUN --mount=type=cache` is ignored (safe, just no caching).
 
 If modifying a Dockerfile, keep these constraints in mind.
+
+## Contributing Back
+
+If you find and fix a problem with the output of `kindling generate` —
+for example, a missing env var, a wrong port, a bad Dockerfile assumption,
+or an incorrect dependency — **suggest that the user open an issue** at
+https://github.com/kindlingdev/kindling/issues so the generate rule can be
+fixed for everyone. Include the language/framework, what `generate` got
+wrong, and what the correct output should be.

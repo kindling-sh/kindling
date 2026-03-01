@@ -93,8 +93,13 @@ func runDashboard(cmd *cobra.Command, args []string) error {
 
 	// ── API routes (topology editor) ────────────────────────────
 	mux.HandleFunc("/api/topology", handleGetTopology)              // GET — current topology graph
+	mux.HandleFunc("/api/topology/status", handleGetTopologyStatus) // GET — live pod health overlay
+	mux.HandleFunc("/api/topology/logs", handleTopologyLogs)        // GET — aggregated pod logs by node
+	mux.HandleFunc("/api/topology/node/detail", handleTopologyNodeDetail) // GET — pods, events, env
 	mux.HandleFunc("/api/topology/deploy", handleDeployTopology)    // POST — deploy topology
 	mux.HandleFunc("/api/topology/scaffold", handleScaffoldService) // POST — scaffold service dir
+	mux.HandleFunc("/api/topology/cleanup", handleCleanupService)  // POST — cleanup deleted service
+	mux.HandleFunc("/api/topology/workspace", handleWorkspaceInfo)  // GET — repo root + service dirs
 	mux.HandleFunc("/api/topology/check-path", handleCheckPath)     // GET — check dir existence
 
 	// ── Static frontend ─────────────────────────────────────────

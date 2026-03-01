@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import type { RuntimeInfo, SyncStatus, ServiceDir, IntelStatus, TopologyGraph } from './types';
+import type { RuntimeInfo, SyncStatus, ServiceDir, IntelStatus, TopologyGraph, TopologyStatusMap, TopologyNodeDetail, TopologyLogs } from './types';
 
 const API_BASE = '';
 
@@ -179,14 +179,43 @@ export async function fetchTopology(): Promise<TopologyGraph> {
   return apiFetch<TopologyGraph>('/api/topology');
 }
 
+export async function fetchTopologyStatus(): Promise<TopologyStatusMap> {
+  return apiFetch<TopologyStatusMap>('/api/topology/status');
+}
+
+export async function fetchTopologyLogs(nodeId: string, tail = 200): Promise<TopologyLogs> {
+  return apiFetch<TopologyLogs>(`/api/topology/logs?node=${encodeURIComponent(nodeId)}&tail=${tail}`);
+}
+
+export async function fetchTopologyNodeDetail(nodeId: string): Promise<TopologyNodeDetail> {
+  return apiFetch<TopologyNodeDetail>(`/api/topology/node/detail?node=${encodeURIComponent(nodeId)}`);
+}
+
+export async function scaleDeployment(namespace: string, deployment: string, replicas: number): Promise<ActionResult> {
+  return apiPost(`/api/scale/${encodeURIComponent(namespace)}/${encodeURIComponent(deployment)}`, { replicas });
+}
+
 export async function deployTopology(graph: TopologyGraph): Promise<ActionResult> {
   return apiPost('/api/topology/deploy', graph);
 }
 
-export async function scaffoldService(body: { name: string; path: string; port?: number }): Promise<ActionResult> {
+export async function scaffoldService(body: { name: string; path: string; port?: number; language?: string }): Promise<ActionResult & { path?: string; language?: string }> {
   return apiPost('/api/topology/scaffold', body);
 }
 
 export async function checkPath(path: string): Promise<{ exists: boolean; has_dockerfile: boolean; language: string }> {
   return apiFetch(`/api/topology/check-path?path=${encodeURIComponent(path)}`);
+}
+
+export async function fetchWorkspaceInfo(): Promise<{ root: string; services: string[] }> {
+  return apiFetch('/api/topology/workspace');
+}
+
+export async function cleanupService(body: {
+  name: string;
+  path?: string;
+  dseName?: string;
+  referencedBy?: string[];
+}): Promise<ActionResult> {
+  return apiPost('/api/topology/cleanup', body);
 }

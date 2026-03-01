@@ -2,19 +2,25 @@ import { useState, useCallback, useRef, useEffect, type DragEvent } from 'react'
 import {
   ReactFlow,
   Background,
-  Controls,
   MiniMap,
+  Panel,
+  useReactFlow,
   addEdge,
   useNodesState,
   useEdgesState,
   Handle,
   Position,
+  BaseEdge,
+  EdgeLabelRenderer,
+  getSmoothStepPath,
   type Node,
   type Edge,
   type Connection,
   type NodeTypes,
+  type EdgeTypes,
   type OnConnect,
   type NodeProps,
+  type EdgeProps,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import {
@@ -23,23 +29,101 @@ import {
   type DependencyType,
   type TopologyNodeData,
   type TopologyGraph,
+  type TopologyStatusMap,
+  type TopologyNodeStatus,
+  type TopologyNodeDetail,
+  type TopologyLogEntry,
 } from '../types';
-import { fetchTopology, deployTopology, scaffoldService, checkPath } from '../api';
+import { fetchTopology, fetchTopologyStatus, fetchTopologyLogs, fetchTopologyNodeDetail, deployTopology, scaffoldService, checkPath, scaleDeployment, fetchWorkspaceInfo, cleanupService } from '../api';
 import { ActionModal, useToast } from './actions';
+import { DEP_ICONS, ServiceIcon, BrowserIcon } from '../icons';
+
+// ── Status helpers ─────────────────────────────────────────────
+
+function timeAgo(iso: string | undefined): string {
+  if (!iso) return '';
+  const seconds = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
+function phaseColor(phase: string | undefined): string {
+  switch (phase) {
+    case 'Running': return 'status-running';
+    case 'Succeeded': return 'status-running';
+    case 'Pending': return 'status-pending';
+    case 'CrashLoopBackOff': return 'status-error';
+    case 'ImagePullBackOff': return 'status-error';
+    case 'Failed': return 'status-error';
+    default: return 'status-unknown';
+  }
+}
+
+function StatusDot({ status }: { status?: TopologyNodeStatus }) {
+  if (!status) return <div className="topo-status-dot status-none" title="No cluster data" />;
+  const cls = phaseColor(status.phase);
+  const title = `${status.phase} — ${status.ready}/${status.total} pods ready`;
+  return <div className={`topo-status-dot ${cls}`} title={title} />;
+}
+
+function RestartBadge({ count }: { count: number }) {
+  if (count === 0) return null;
+  return (
+    <span className={`topo-restart-badge ${count >= 5 ? 'high' : ''}`} title={`${count} restart${count !== 1 ? 's' : ''}`}>
+      ↻{count}
+    </span>
+  );
+}
 
 // ── Custom Node: Service ────────────────────────────────────────
 
 function ServiceNodeComponent({ data, selected }: NodeProps<Node<TopologyNodeData>>) {
+  const status = data._status as TopologyNodeStatus | undefined;
+  const isStaged = data.staged && !data.dseName;
   return (
-    <div className={`topo-node topo-node-service ${selected ? 'selected' : ''} ${data.isNew ? 'is-new' : ''}`}>
+    <div className={`topo-node topo-node-service ${selected ? 'selected' : ''} ${data.isNew ? 'is-new' : ''} ${isStaged ? 'is-staged' : ''}`}>
       <Handle type="target" position={Position.Left} className="topo-handle" />
-      <div className="topo-node-icon">⬡</div>
+      {isStaged ? (
+        <span className="topo-staged-badge">staged</span>
+      ) : (
+        <StatusDot status={status} />
+      )}
+      <div className="topo-node-icon"><ServiceIcon /></div>
       <div className="topo-node-body">
-        <div className="topo-node-label">{data.label}</div>
-        <div className="topo-node-detail">
-          {data.image || 'custom service'}
-          {data.servicePort ? ` :${data.servicePort}` : ''}
+        <div className="topo-node-label">
+          {data.label}
+          <RestartBadge count={status?.restarts ?? 0} />
         </div>
+        <div className="topo-node-detail">
+          {isStaged ? (
+            <>{data.language || 'node'} scaffold · :{data.servicePort || 3000}</>
+          ) : (
+            <>
+              {data.image || 'custom service'}
+              {data.servicePort ? ` :${data.servicePort}` : ''}
+            </>
+          )}
+        </div>
+        {isStaged && data.path && (
+          <div className="topo-node-path" title={data.path}>
+            {(data.path as string).split('/').slice(-2).join('/')}
+          </div>
+        )}
+        {status && !isStaged && (
+          <div className="topo-node-status-row">
+            <span className={`topo-phase-label ${phaseColor(status.phase)}`}>
+              {status.ready}/{status.total}
+            </span>
+            {status.lastDeploy && (
+              <span className="topo-deploy-time">{timeAgo(status.lastDeploy)}</span>
+            )}
+          </div>
+        )}
       </div>
       <Handle type="source" position={Position.Right} className="topo-handle" />
     </div>
@@ -51,29 +135,468 @@ function ServiceNodeComponent({ data, selected }: NodeProps<Node<TopologyNodeDat
 function DependencyNodeComponent({ data, selected }: NodeProps<Node<TopologyNodeData>>) {
   const meta = data.depType ? DEP_META[data.depType] : null;
   const color = meta?.color || '#666';
+  const status = data._status as TopologyNodeStatus | undefined;
   return (
     <div
       className={`topo-node topo-node-dep ${selected ? 'selected' : ''} ${data.isNew ? 'is-new' : ''}`}
       style={{ borderColor: color }}
     >
       <Handle type="target" position={Position.Left} className="topo-handle" />
-      <div className="topo-node-icon">{meta?.icon || '◆'}</div>
+      <StatusDot status={status} />
+      <div className="topo-node-icon">{meta?.icon ? (DEP_ICONS[data.depType!]?.() || meta.icon) : '◆'}</div>
       <div className="topo-node-body">
-        <div className="topo-node-label">{data.label}</div>
+        <div className="topo-node-label">
+          {data.label}
+          <RestartBadge count={status?.restarts ?? 0} />
+        </div>
         <div className="topo-node-detail">
           {data.depType}{data.version ? `:${data.version}` : ''}
           {data.port ? ` :${data.port}` : ''}
         </div>
+        {status && (
+          <div className="topo-node-status-row">
+            <span className={`topo-phase-label ${phaseColor(status.phase)}`}>
+              {status.ready}/{status.total}
+            </span>
+            {status.lastDeploy && (
+              <span className="topo-deploy-time">{timeAgo(status.lastDeploy)}</span>
+            )}
+          </div>
+        )}
       </div>
       <Handle type="source" position={Position.Right} className="topo-handle" />
     </div>
   );
 }
 
+// ── Custom Edge: connection label ───────────────────────────────
+
+// ── Custom Node: External Client ────────────────────────────────
+
+function ExternalNodeComponent({ data, selected }: NodeProps<Node<TopologyNodeData>>) {
+  return (
+    <div className={`topo-node topo-node-external ${selected ? 'selected' : ''}`}>
+      <div className="topo-node-icon"><BrowserIcon /></div>
+      <div className="topo-node-body">
+        <div className="topo-node-label">{data.label || 'Browser'}</div>
+        <div className="topo-node-detail">external client</div>
+      </div>
+      <Handle type="source" position={Position.Right} className="topo-handle" />
+    </div>
+  );
+}
+
+function ConnectionEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, data, style, markerEnd }: EdgeProps) {
+  const [edgePath, labelX, labelY] = getSmoothStepPath({
+    sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition,
+  });
+
+  const edgeData = data as Record<string, unknown> | undefined;
+  const label = edgeData?._label as string | undefined;
+  const envValue = edgeData?._envValue as string | undefined;
+
+  return (
+    <>
+      <BaseEdge id={id} path={edgePath} style={style} markerEnd={markerEnd} />
+      {label && (
+        <EdgeLabelRenderer>
+          <div
+            className={`topo-edge-label ${envValue ? 'has-url' : ''}`}
+            style={{ transform: `translate(-50%, -50%) translate(${labelX}px,${labelY}px)` }}
+            title={envValue ? `${label}=${envValue}\nInjected into source container` : label}
+          >
+            {label}
+            {envValue && <span className="topo-edge-url">{envValue}</span>}
+          </div>
+        </EdgeLabelRenderer>
+      )}
+    </>
+  );
+}
+
 const nodeTypes: NodeTypes = {
   service: ServiceNodeComponent,
   dependency: DependencyNodeComponent,
+  external: ExternalNodeComponent,
 };
+
+const edgeTypes: EdgeTypes = {
+  connection: ConnectionEdge,
+};
+
+// ── Terminal Log Viewer ─────────────────────────────────────────
+
+function TerminalLog({ nodeId }: { nodeId: string }) {
+  const [logs, setLogs] = useState<TopologyLogEntry[]>([]);
+  const [pods, setPods] = useState<string[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [autoScroll, setAutoScroll] = useState(true);
+  const [filter, setFilter] = useState('');
+  const termRef = useRef<HTMLDivElement>(null);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const fetchLogs = useCallback(async () => {
+    try {
+      const result = await fetchTopologyLogs(nodeId);
+      setLogs(result.lines || []);
+      setPods(result.pods || []);
+    } catch { /* ignore */ }
+    setLoading(false);
+  }, [nodeId]);
+
+  useEffect(() => {
+    setLoading(true);
+    setLogs([]);
+    fetchLogs();
+    intervalRef.current = setInterval(fetchLogs, 4000);
+    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
+  }, [fetchLogs]);
+
+  useEffect(() => {
+    if (autoScroll && termRef.current) {
+      termRef.current.scrollTop = termRef.current.scrollHeight;
+    }
+  }, [logs, autoScroll]);
+
+  const handleScroll = useCallback(() => {
+    if (!termRef.current) return;
+    const { scrollTop, scrollHeight, clientHeight } = termRef.current;
+    setAutoScroll(scrollHeight - scrollTop - clientHeight < 40);
+  }, []);
+
+  const filteredLogs = filter
+    ? logs.filter(l => l.line.toLowerCase().includes(filter.toLowerCase()) || l.pod.toLowerCase().includes(filter.toLowerCase()))
+    : logs;
+
+  const multiPod = pods.length > 1;
+  // Assign stable colors to pod names
+  const podColors = useRef(new Map<string, string>());
+  const colorPalette = ['#60a5fa', '#34d399', '#fbbf24', '#f87171', '#a78bfa', '#fb923c', '#2dd4bf', '#e879f9'];
+  pods.forEach((p, i) => {
+    if (!podColors.current.has(p)) {
+      podColors.current.set(p, colorPalette[i % colorPalette.length]);
+    }
+  });
+
+  return (
+    <div className="topo-terminal">
+      <div className="topo-terminal-toolbar">
+        <input
+          className="topo-terminal-filter"
+          placeholder="Filter logs…"
+          value={filter}
+          onChange={e => setFilter(e.target.value)}
+        />
+        <button
+          className={`topo-terminal-btn ${autoScroll ? 'active' : ''}`}
+          onClick={() => {
+            setAutoScroll(true);
+            if (termRef.current) termRef.current.scrollTop = termRef.current.scrollHeight;
+          }}
+          title="Auto-scroll"
+        >
+          ↓
+        </button>
+        <button className="topo-terminal-btn" onClick={fetchLogs} title="Refresh">⟳</button>
+      </div>
+      <div className="topo-terminal-body" ref={termRef} onScroll={handleScroll}>
+        {loading && <div className="topo-terminal-loading">Loading logs…</div>}
+        {!loading && filteredLogs.length === 0 && (
+          <div className="topo-terminal-empty">No logs available</div>
+        )}
+        {filteredLogs.map((entry, i) => (
+          <div key={i} className="topo-terminal-line">
+            {multiPod && (
+              <span className="topo-terminal-pod" style={{ color: podColors.current.get(entry.pod) }}>
+                {entry.pod.slice(0, 24)}
+              </span>
+            )}
+            <span className="topo-terminal-text">{entry.line}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── Detail Sidebar ──────────────────────────────────────────────
+
+type DetailTab = 'logs' | 'status' | 'config';
+
+function DetailSidebar({ node, onClose, onUpdate, onDelete }: {
+  node: Node<TopologyNodeData>;
+  onClose: () => void;
+  onUpdate: (updates: Partial<TopologyNodeData>) => void;
+  onDelete: () => void;
+}) {
+  const data = node.data;
+  const isDep = data.kind === 'dependency';
+  const meta = isDep && data.depType ? DEP_META[data.depType] : null;
+  const status = data._status as TopologyNodeStatus | undefined;
+  const hasClusterData = !!status;
+
+  const [tab, setTab] = useState<DetailTab>(hasClusterData ? 'logs' : 'config');
+  const [detail, setDetail] = useState<TopologyNodeDetail | null>(null);
+  const [loadingDetail, setLoadingDetail] = useState(false);
+  const [scaling, setScaling] = useState(false);
+
+  const refreshDetail = useCallback(() => {
+    setLoadingDetail(true);
+    fetchTopologyNodeDetail(node.id)
+      .then(setDetail)
+      .catch(() => {})
+      .finally(() => setLoadingDetail(false));
+  }, [node.id]);
+
+  // Fetch detail when Status tab is shown
+  useEffect(() => {
+    if (tab === 'status' && !detail && !loadingDetail) {
+      refreshDetail();
+    }
+  }, [tab, detail, loadingDetail, refreshDetail]);
+
+  // Reset detail when node changes
+  useEffect(() => {
+    setDetail(null);
+  }, [node.id]);
+
+  return (
+    <div className="topo-detail-sidebar">
+      {/* Header */}
+      <div className="topo-detail-header">
+        <span className="topo-detail-icon">{isDep ? (meta?.icon || '◆') : '⬡'}</span>
+        <div className="topo-detail-title">
+          <h3>{data.label}</h3>
+          {status && (
+            <span className={`topo-detail-phase ${phaseColor(status.phase)}`}>
+              {status.phase} · {status.ready}/{status.total}
+            </span>
+          )}
+        </div>
+        <button className="btn btn-sm btn-ghost" onClick={onClose} title="Close (Esc)">✕</button>
+      </div>
+
+      {/* Tabs */}
+      <div className="topo-detail-tabs">
+        {hasClusterData && (
+          <>
+            <button className={`topo-detail-tab ${tab === 'logs' ? 'active' : ''}`} onClick={() => setTab('logs')}>
+              Logs
+            </button>
+            <button className={`topo-detail-tab ${tab === 'status' ? 'active' : ''}`} onClick={() => setTab('status')}>
+              Status
+            </button>
+          </>
+        )}
+        <button className={`topo-detail-tab ${tab === 'config' ? 'active' : ''}`} onClick={() => setTab('config')}>
+          Config
+        </button>
+      </div>
+
+      {/* Tab Content */}
+      <div className="topo-detail-content">
+        {/* ── Logs Tab ── */}
+        {tab === 'logs' && <TerminalLog nodeId={node.id} />}
+
+        {/* ── Status Tab ── */}
+        {tab === 'status' && (
+          <div className="topo-detail-status">
+            {loadingDetail ? (
+              <div className="topo-detail-loading">Loading…</div>
+            ) : detail ? (
+              <>
+                {/* Scale Controls */}
+                {detail.deployment && (
+                  <div className="topo-detail-section">
+                    <h4>Replicas</h4>
+                    <div className="topo-scale-control">
+                      <button
+                        className="topo-scale-btn"
+                        disabled={scaling || detail.deployment.replicas <= 0}
+                        onClick={async () => {
+                          if (!detail.deployment) return;
+                          const n = Math.max(0, detail.deployment.replicas - 1);
+                          setScaling(true);
+                          await scaleDeployment(detail.deployment.namespace, detail.deployment.name, n);
+                          setTimeout(refreshDetail, 1500);
+                          setScaling(false);
+                        }}
+                      >
+                        −
+                      </button>
+                      <div className="topo-scale-value">
+                        <span className="topo-scale-current">{detail.deployment.replicas}</span>
+                        <span className="topo-scale-available">{detail.deployment.available} available</span>
+                      </div>
+                      <button
+                        className="topo-scale-btn"
+                        disabled={scaling}
+                        onClick={async () => {
+                          if (!detail.deployment) return;
+                          const n = detail.deployment.replicas + 1;
+                          setScaling(true);
+                          await scaleDeployment(detail.deployment.namespace, detail.deployment.name, n);
+                          setTimeout(refreshDetail, 1500);
+                          setScaling(false);
+                        }}
+                      >
+                        +
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Pods */}
+                <div className="topo-detail-section">
+                  <h4>Pods</h4>
+                  {(detail.pods || []).length === 0 ? (
+                    <div className="topo-detail-empty">No pods found</div>
+                  ) : (
+                    <div className="topo-detail-pods">
+                      {detail.pods.map(p => (
+                        <div key={p.name} className="topo-detail-pod-row">
+                          <span className={`topo-detail-pod-phase ${p.phase === 'Running' ? 'running' : p.phase === 'Pending' ? 'pending' : 'error'}`}>●</span>
+                          <span className="topo-detail-pod-name" title={p.name}>{p.name}</span>
+                          <span className="topo-detail-pod-ready">{p.ready}</span>
+                          {p.restarts > 0 && <span className="topo-restart-badge">{`↻${p.restarts}`}</span>}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Events */}
+                {(detail.events || []).length > 0 && (
+                  <div className="topo-detail-section">
+                    <h4>Recent Events</h4>
+                    <div className="topo-detail-events">
+                      {detail.events.map((e, i) => (
+                        <div key={i} className={`topo-detail-event ${e.type === 'Warning' ? 'warning' : ''}`}>
+                          <span className="topo-detail-event-reason">{e.reason}</span>
+                          <span className="topo-detail-event-msg">{e.message}</span>
+                          {e.count > 1 && <span className="topo-detail-event-count">×{e.count}</span>}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Environment */}
+                {(detail.env || []).length > 0 && (
+                  <div className="topo-detail-section">
+                    <h4>Environment</h4>
+                    <div className="topo-detail-env">
+                      {detail.env.map((e, i) => (
+                        <div key={i} className="topo-detail-env-row">
+                          <code className="topo-detail-env-name">{e.name}</code>
+                          <span className="topo-detail-env-val">{e.value || '(empty)'}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="topo-detail-empty">No cluster data yet — deploy first</div>
+            )}
+          </div>
+        )}
+
+        {/* ── Config Tab ── */}
+        {tab === 'config' && (
+          <div className="topo-detail-config">
+            {isDep ? (
+              <>
+                <label className="form-label">Type</label>
+                <div className="topo-config-value">{meta?.label || data.depType}</div>
+
+                <label className="form-label">Version</label>
+                <input
+                  className="form-input"
+                  placeholder="latest"
+                  value={data.version || ''}
+                  onChange={(e) => onUpdate({ version: e.target.value })}
+                />
+
+                <label className="form-label">Port</label>
+                <input
+                  className="form-input"
+                  type="number"
+                  value={data.port || meta?.defaultPort || ''}
+                  onChange={(e) => onUpdate({ port: parseInt(e.target.value) || undefined })}
+                />
+
+                <label className="form-label">Env Var Name</label>
+                <input
+                  className="form-input"
+                  placeholder={meta?.envVar || 'CONNECTION_URL'}
+                  value={data.envVarName || ''}
+                  onChange={(e) => onUpdate({ envVarName: e.target.value })}
+                />
+
+                {meta && (
+                  <div className="topo-config-info">
+                    <span className="text-dim">Auto-injected as </span>
+                    <code>{data.envVarName || meta.envVar}</code>
+                  </div>
+                )}
+              </>
+            ) : (
+              <>
+                <label className="form-label">Service Name</label>
+                <input
+                  className="form-input"
+                  value={data.label}
+                  onChange={(e) => onUpdate({ label: e.target.value })}
+                />
+
+                <label className="form-label">Image</label>
+                <input
+                  className="form-input"
+                  placeholder="localhost:5001/my-app:latest"
+                  value={data.image || ''}
+                  onChange={(e) => onUpdate({ image: e.target.value })}
+                />
+
+                <label className="form-label">Source Directory</label>
+                <input
+                  className="form-input"
+                  placeholder="/path/to/source"
+                  value={data.path || ''}
+                  onChange={(e) => onUpdate({ path: e.target.value })}
+                />
+
+                <label className="form-label">Port</label>
+                <input
+                  className="form-input"
+                  type="number"
+                  value={data.servicePort || ''}
+                  onChange={(e) => onUpdate({ servicePort: parseInt(e.target.value) || undefined })}
+                />
+
+                <label className="form-label">Replicas</label>
+                <input
+                  className="form-input"
+                  type="number"
+                  min="1"
+                  value={data.replicas || 1}
+                  onChange={(e) => onUpdate({ replicas: parseInt(e.target.value) || 1 })}
+                />
+              </>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Footer */}
+      <div className="topo-detail-footer">
+        <button className="btn btn-danger btn-sm" onClick={onDelete}>
+          Remove
+        </button>
+      </div>
+    </div>
+  );
+}
 
 // ── Palette Item ────────────────────────────────────────────────
 
@@ -83,16 +606,107 @@ function PaletteItem({ depType, label, icon, onDragStart }: {
   icon: string;
   onDragStart: (e: DragEvent, data: { kind: string; depType?: string }) => void;
 }) {
+  const SvgIcon = DEP_ICONS[depType];
   return (
     <div
       className="topo-palette-item"
       draggable
       onDragStart={(e) => onDragStart(e, { kind: 'dependency', depType })}
     >
-      <span className="topo-palette-icon">{icon}</span>
+      <span className="topo-palette-icon">{SvgIcon ? SvgIcon() : icon}</span>
       <span className="topo-palette-label">{label}</span>
     </div>
   );
+}
+
+// ── Auto-Layout Utility ─────────────────────────────────────────
+// Positions nodes in clean left-to-right columns:
+//   External (col 0) → Services (col 1) → Dependencies (col 2)
+// Within each column, nodes are stacked top-down with consistent spacing.
+
+const LAYOUT = {
+  colExternal: 60,
+  colService: 380,
+  colDep: 740,
+  rowStart: 60,
+  rowGapService: 180,   // vertical gap between services
+  rowGapDep: 120,       // vertical gap between deps
+  rowGapExternal: 160,  // vertical gap between external nodes
+};
+
+function autoLayoutNodes(
+  nodes: Node<TopologyNodeData>[],
+  edges: Edge[],
+): Node<TopologyNodeData>[] {
+  const externals = nodes.filter((n) => n.data.kind === 'external');
+  const services = nodes.filter((n) => n.data.kind === 'service');
+  const deps = nodes.filter((n) => n.data.kind === 'dependency');
+
+  // Build a map: depId → which service(s) connect to it
+  const depToServices = new Map<string, string[]>();
+  for (const e of edges) {
+    const srcNode = nodes.find((n) => n.id === e.source);
+    const tgtNode = nodes.find((n) => n.id === e.target);
+    if (srcNode?.data.kind === 'service' && tgtNode?.data.kind === 'dependency') {
+      const list = depToServices.get(e.target) || [];
+      list.push(e.source);
+      depToServices.set(e.target, list);
+    }
+  }
+
+  // Position services in the center column, stacked top-down
+  let svcY = LAYOUT.rowStart;
+  const svcPositions = new Map<string, { x: number; y: number }>();
+  for (const svc of services) {
+    const pos = { x: LAYOUT.colService, y: svcY };
+    svcPositions.set(svc.id, pos);
+    svcY += LAYOUT.rowGapService;
+  }
+
+  // Position dependencies in the right column, grouped near their connected services
+  // Sort deps: those connected to earlier services come first
+  const svcOrder = new Map(services.map((s, i) => [s.id, i]));
+  const sortedDeps = [...deps].sort((a, b) => {
+    const aServices = depToServices.get(a.id) || [];
+    const bServices = depToServices.get(b.id) || [];
+    const aMin = aServices.length > 0 ? Math.min(...aServices.map((s) => svcOrder.get(s) ?? 999)) : 999;
+    const bMin = bServices.length > 0 ? Math.min(...bServices.map((s) => svcOrder.get(s) ?? 999)) : 999;
+    return aMin - bMin;
+  });
+
+  let depY = LAYOUT.rowStart;
+  const depPositions = new Map<string, { x: number; y: number }>();
+  for (const dep of sortedDeps) {
+    // Try to vertically align near the connected service
+    const connectedSvcs = depToServices.get(dep.id) || [];
+    if (connectedSvcs.length > 0) {
+      const avgY = connectedSvcs.reduce((sum, sId) => sum + (svcPositions.get(sId)?.y ?? 0), 0) / connectedSvcs.length;
+      depY = Math.max(depY, avgY);
+    }
+    depPositions.set(dep.id, { x: LAYOUT.colDep, y: depY });
+    depY += LAYOUT.rowGapDep;
+  }
+
+  // Position external nodes in the left column, aligned with their connected service
+  let extY = LAYOUT.rowStart;
+  const extPositions = new Map<string, { x: number; y: number }>();
+  for (const ext of externals) {
+    // Find connected service
+    const connEdge = edges.find((e) => e.source === ext.id);
+    if (connEdge) {
+      const svcPos = svcPositions.get(connEdge.target);
+      if (svcPos) extY = svcPos.y;
+    }
+    extPositions.set(ext.id, { x: LAYOUT.colExternal, y: extY });
+    extY += LAYOUT.rowGapExternal;
+  }
+
+  // Apply positions
+  return nodes.map((n) => {
+    const pos = svcPositions.get(n.id) || depPositions.get(n.id) || extPositions.get(n.id);
+    if (pos) return { ...n, position: pos };
+    return n;
+  });
 }
 
 // ── Pending Changes Tracker ─────────────────────────────────────
@@ -101,6 +715,37 @@ interface PendingChange {
   id: string;
   type: 'add-node' | 'remove-node' | 'add-edge' | 'remove-edge' | 'move-node';
   description: string;
+}
+
+// ── Zoom Controls ───────────────────────────────────────────────
+
+function ZoomControls() {
+  const { zoomIn, zoomOut, fitView } = useReactFlow();
+  return (
+    <Panel position="bottom-right" className="topo-zoom-panel">
+      <div className="topo-zoom-controls">
+        <button className="topo-zoom-btn" onClick={() => zoomIn({ duration: 200 })} title="Zoom in">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+            <line x1="10" y1="5" x2="10" y2="15" />
+            <line x1="5" y1="10" x2="15" y2="10" />
+          </svg>
+        </button>
+        <button className="topo-zoom-btn" onClick={() => zoomOut({ duration: 200 })} title="Zoom out">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+            <line x1="5" y1="10" x2="15" y2="10" />
+          </svg>
+        </button>
+        <button className="topo-zoom-btn" onClick={() => fitView({ duration: 300, padding: 0.15 })} title="Fit view">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="3,7 3,3 7,3" />
+            <polyline points="13,3 17,3 17,7" />
+            <polyline points="17,13 17,17 13,17" />
+            <polyline points="7,17 3,17 3,13" />
+          </svg>
+        </button>
+      </div>
+    </Panel>
+  );
 }
 
 // ── Main Component ──────────────────────────────────────────────
@@ -115,11 +760,14 @@ export function TopologyPage() {
   const [loading, setLoading] = useState(true);
   const [selectedNode, setSelectedNode] = useState<Node<TopologyNodeData> | null>(null);
   const [showCustomService, setShowCustomService] = useState(false);
-  const [showNodeConfig, setShowNodeConfig] = useState(false);
+  const [showDetailSidebar, setShowDetailSidebar] = useState(false);
   const [initialGraph, setInitialGraph] = useState<TopologyGraph | null>(null);
 
   // Track the react-flow instance for project/screenToFlowPosition
   const [reactFlowInstance, setReactFlowInstance] = useState<any>(null);
+
+  // Live status map — keyed by topology node ID
+  const [statusMap, setStatusMap] = useState<TopologyStatusMap>({});
 
   // ── Load initial topology from cluster ──────────────────────
 
@@ -128,7 +776,9 @@ export function TopologyPage() {
       .then((graph) => {
         setInitialGraph(graph);
         if (graph.nodes.length > 0) {
-          setNodes(graph.nodes as Node<TopologyNodeData>[]);
+          const rawNodes = graph.nodes as Node<TopologyNodeData>[];
+          const layoutNodes = autoLayoutNodes(rawNodes, graph.edges);
+          setNodes(layoutNodes);
           setEdges(graph.edges);
         }
       })
@@ -137,6 +787,37 @@ export function TopologyPage() {
       })
       .finally(() => setLoading(false));
   }, []);
+
+  // ── Poll live status every 5 seconds ────────────────────────
+
+  useEffect(() => {
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const status = await fetchTopologyStatus();
+        if (!cancelled) setStatusMap(status);
+      } catch { /* ignore — cluster may be down */ }
+    };
+
+    poll(); // initial fetch
+    const interval = setInterval(poll, 5000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, []);
+
+  // ── Merge status into node data ─────────────────────────────
+  // When statusMap or nodes change, inject _status into each node's data
+  // so the custom node components can render it.
+
+  useEffect(() => {
+    if (Object.keys(statusMap).length === 0) return;
+    setNodes((nds) =>
+      nds.map((n) => {
+        const st = statusMap[n.id];
+        if (st === n.data._status) return n; // skip if unchanged
+        return { ...n, data: { ...n.data, _status: st } };
+      }),
+    );
+  }, [statusMap]);
 
   // ── Pending change helpers ──────────────────────────────────
 
@@ -159,15 +840,38 @@ export function TopologyPage() {
   // ── Connect handler (draw edge) ────────────────────────────
 
   const onConnect: OnConnect = useCallback((connection: Connection) => {
-    const newEdge = {
+    // Derive a label for the edge — if target is a dep, show its injected env var
+    const targetNode = nodes.find((n) => n.id === connection.target);
+    const sourceNode = nodes.find((n) => n.id === connection.source);
+    let edgeLabel = '';
+    let edgeData: Record<string, unknown> = {};
+    if (targetNode?.data?.kind === 'dependency' && targetNode.data.depType) {
+      const meta = DEP_META[targetNode.data.depType];
+      edgeLabel = targetNode.data.envVarName || meta?.envVar || '';
+    } else if (sourceNode?.data?.kind === 'dependency' && sourceNode.data.depType) {
+      const meta = DEP_META[sourceNode.data.depType];
+      edgeLabel = sourceNode.data.envVarName || meta?.envVar || '';
+    } else if (sourceNode?.data?.kind === 'service' && targetNode?.data?.kind === 'service') {
+      // Service-to-service edge — generate env var with in-cluster URL
+      const targetName = (targetNode.data.dseName || targetNode.data.label || 'service').toLowerCase().replace(/[^a-z0-9]+/g, '-');
+      const port = targetNode.data.servicePort || 3000;
+      const envVarName = targetName.toUpperCase().replace(/-/g, '_') + '_URL';
+      const envVarValue = `http://${targetName}:${port}`;
+      edgeLabel = envVarName;
+      edgeData = { _label: envVarName, _envVar: envVarName, _envValue: envVarValue, _targetPort: port };
+    } else if (sourceNode?.data?.kind === 'external') {
+      // External client → service
+      edgeLabel = 'ingress';
+    }
+
+    const newEdge: Edge = {
       ...connection,
       id: `e-${connection.source}-${connection.target}`,
-    };
+      type: 'connection',
+      data: Object.keys(edgeData).length > 0 ? edgeData : { _label: edgeLabel },
+    } as Edge;
     setEdges((eds) => addEdge(newEdge, eds as any));
 
-    // Find source and target labels for description
-    const sourceNode = nodes.find((n) => n.id === connection.source);
-    const targetNode = nodes.find((n) => n.id === connection.target);
     addChange({
       type: 'add-edge',
       description: `Connect ${sourceNode?.data?.label || connection.source} → ${targetNode?.data?.label || connection.target}`,
@@ -214,11 +918,75 @@ export function TopologyPage() {
       };
       setNodes((nds) => [...nds, newNode]);
       addChange({ type: 'add-node', description: `Add ${meta.label} dependency` });
+
+      // Auto-connect to nearest service node
+      const serviceNodes = nodes.filter((n) => n.data.kind === 'service');
+      if (serviceNodes.length > 0) {
+        let nearest = serviceNodes[0];
+        let minDist = Infinity;
+        for (const sn of serviceNodes) {
+          const dx = sn.position.x - position.x;
+          const dy = sn.position.y - position.y;
+          const dist = dx * dx + dy * dy;
+          if (dist < minDist) {
+            minDist = dist;
+            nearest = sn;
+          }
+        }
+        // Reposition dep to the right of the nearest service, in the dependency column
+        const existingDeps = nodes.filter((n) => n.data.kind === 'dependency');
+        const snapPosition = {
+          x: LAYOUT.colDep,
+          y: nearest.position.y + existingDeps.length * LAYOUT.rowGapDep,
+        };
+        // Update the node position we just added
+        setNodes((nds) =>
+          nds.map((n) => n.id === nodeId ? { ...n, position: snapPosition } : n)
+        );
+        const edgeId = `e-${nearest.id}-${nodeId}`;
+        const edgeLabel = meta.envVar || '';
+        setEdges((eds) => [...eds, { id: edgeId, source: nearest.id, target: nodeId, type: 'connection', data: { _label: edgeLabel } }]);
+        addChange({ type: 'add-edge', description: `Connect ${nearest.data.label} → ${meta.label}` });
+      }
     } else if (kind === 'service') {
       // Open custom service dialog
       setShowCustomService(true);
+    } else if (kind === 'external') {
+      const nodeId = nextId('ext');
+      const newNode: Node<TopologyNodeData> = {
+        id: nodeId,
+        type: 'external',
+        position,
+        data: {
+          kind: 'external',
+          label: 'Browser',
+          isNew: true,
+        },
+      };
+      setNodes((nds) => [...nds, newNode]);
+      addChange({ type: 'add-node', description: 'Add Browser Client' });
+
+      // Auto-connect to nearest service
+      const serviceNodes = nodes.filter((n) => n.data.kind === 'service' && n.type === 'service');
+      if (serviceNodes.length > 0) {
+        let nearest = serviceNodes[0];
+        let minDist = Infinity;
+        for (const sn of serviceNodes) {
+          const dx = sn.position.x - position.x;
+          const dy = sn.position.y - position.y;
+          const dist = dx * dx + dy * dy;
+          if (dist < minDist) { minDist = dist; nearest = sn; }
+        }
+        // Position in the external column, aligned with the service
+        setNodes((nds) =>
+          nds.map((n) => n.id === nodeId ? { ...n, position: { x: LAYOUT.colExternal, y: nearest.position.y } } : n)
+        );
+        const edgeId = `e-${nodeId}-${nearest.id}`;
+        setEdges((eds) => [...eds, { id: edgeId, source: nodeId, target: nearest.id, type: 'connection', data: { _label: 'ingress' } }]);
+        addChange({ type: 'add-edge', description: `Browser → ${nearest.data.label}` });
+      }
     }
-  }, [reactFlowInstance, nextId, setNodes, addChange]);
+  }, [reactFlowInstance, nextId, setNodes, setEdges, addChange, nodes]);
 
   const onDragStart = useCallback((event: DragEvent, data: { kind: string; depType?: string }) => {
     event.dataTransfer.setData('application/kindling-topology', JSON.stringify(data));
@@ -231,9 +999,30 @@ export function TopologyPage() {
   const [customPath, setCustomPath] = useState('');
   const [customImage, setCustomImage] = useState('');
   const [customPort, setCustomPort] = useState('3000');
+  const [customLanguage, setCustomLanguage] = useState<'node' | 'go' | 'python'>('node');
+  const [hasExistingSource, setHasExistingSource] = useState(false);
+  const [workspaceRoot, setWorkspaceRoot] = useState('');
   const [pathStatus, setPathStatus] = useState<{ exists: boolean; has_dockerfile: boolean; language: string } | null>(null);
   const [checkingPath, setCheckingPath] = useState(false);
   const [scaffolding, setScaffolding] = useState(false);
+  const pathManuallyEdited = useRef(false);
+
+  // Fetch workspace root when dialog opens
+  useEffect(() => {
+    if (showCustomService && !workspaceRoot) {
+      fetchWorkspaceInfo().then((info) => {
+        setWorkspaceRoot(info.root);
+      }).catch(() => {});
+    }
+  }, [showCustomService, workspaceRoot]);
+
+  // Auto-suggest path when name changes (only for new scaffolds, and only if user hasn't manually edited)
+  useEffect(() => {
+    if (!hasExistingSource && customName.trim() && workspaceRoot && !pathManuallyEdited.current) {
+      const safeName = customName.trim().toLowerCase().replace(/\s+/g, '-');
+      setCustomPath(`${workspaceRoot}/services/${safeName}`);
+    }
+  }, [customName, workspaceRoot, hasExistingSource]);
 
   const handleCheckPath = useCallback(async (path: string) => {
     if (!path.trim()) return;
@@ -247,33 +1036,73 @@ export function TopologyPage() {
     setCheckingPath(false);
   }, []);
 
-  const handleScaffold = useCallback(async () => {
-    if (!customPath.trim() || !customName.trim()) return;
+  // Scaffold + add to canvas as staged in one step
+  const handleScaffoldAndStage = useCallback(async () => {
+    if (!customName.trim()) return;
+    const port = parseInt(customPort) || 3000;
+    const safeName = customName.trim().toLowerCase().replace(/\s+/g, '-');
+    const path = customPath || `${workspaceRoot}/services/${safeName}`;
+
     setScaffolding(true);
     const result = await scaffoldService({
-      name: customName,
-      path: customPath,
-      port: parseInt(customPort) || 3000,
+      name: safeName,
+      path,
+      port,
+      language: customLanguage,
     });
     setScaffolding(false);
-    if (result.ok) {
-      toast('Service scaffolded', 'success');
-      setPathStatus({ exists: true, has_dockerfile: true, language: 'unknown' });
-    } else {
+
+    if (!result.ok) {
       toast(result.error || 'Scaffold failed', 'error');
+      return;
     }
-  }, [customName, customPath, customPort, toast]);
+
+    // Add staged node to canvas
+    const nodeId = nextId('svc');
+    const svcCount = nodes.filter((n) => n.data.kind === 'service').length;
+    const newNode: Node<TopologyNodeData> = {
+      id: nodeId,
+      type: 'service',
+      position: { x: LAYOUT.colService, y: LAYOUT.rowStart + svcCount * LAYOUT.rowGapService },
+      data: {
+        kind: 'service',
+        label: customName.trim(),
+        image: `localhost:5001/${safeName}:latest`,
+        path,
+        servicePort: port,
+        replicas: 1,
+        isNew: true,
+        staged: true,
+        language: customLanguage,
+      },
+    };
+    setNodes((nds) => [...nds, newNode]);
+    addChange({ type: 'add-node', description: `Stage "${customName.trim()}" (${customLanguage})` });
+    toast(`${customName.trim()} scaffolded → develop your code, deploy when ready`, 'success');
+
+    // Reset form
+    setCustomName('');
+    setCustomPath('');
+    setCustomImage('');
+    setCustomPort('3000');
+    setCustomLanguage('node');
+    setHasExistingSource(false);
+    setPathStatus(null);
+    pathManuallyEdited.current = false;
+    setShowCustomService(false);
+  }, [customName, customPath, customPort, customLanguage, workspaceRoot, nodes.length, nextId, setNodes, addChange, toast]);
 
   const handleAddCustomService = useCallback(() => {
     if (!customName.trim()) return;
     const nodeId = nextId('svc');
     const port = parseInt(customPort) || 3000;
     const image = customImage || `localhost:5001/${customName}:latest`;
+    const svcCount = nodes.filter((n) => n.data.kind === 'service').length;
 
     const newNode: Node<TopologyNodeData> = {
       id: nodeId,
       type: 'service',
-      position: { x: 300, y: 100 + nodes.length * 120 },
+      position: { x: LAYOUT.colService, y: LAYOUT.rowStart + svcCount * LAYOUT.rowGapService },
       data: {
         kind: 'service',
         label: customName,
@@ -292,28 +1121,72 @@ export function TopologyPage() {
     setCustomPath('');
     setCustomImage('');
     setCustomPort('3000');
+    setCustomLanguage('node');
+    setHasExistingSource(false);
     setPathStatus(null);
     setShowCustomService(false);
   }, [customName, customPath, customImage, customPort, nodes.length, nextId, setNodes, addChange]);
 
-  // ── Node selection (for config panel) ──────────────────────
+  // ── Node selection (for detail sidebar) ─────────────────────
 
   const onNodeClick = useCallback((_: any, node: Node<TopologyNodeData>) => {
     setSelectedNode(node);
-    setShowNodeConfig(true);
+    setShowDetailSidebar(true);
   }, []);
+
+  // ── Edge click → open target node detail ──────────────────
+
+  const onEdgeClick = useCallback((_: any, edge: Edge) => {
+    // Find the target node (usually the dependency) and open its detail
+    const targetNode = nodes.find((n) => n.id === edge.target);
+    if (targetNode) {
+      setSelectedNode(targetNode);
+      setShowDetailSidebar(true);
+    }
+  }, [nodes]);
 
   // ── Delete node ────────────────────────────────────────────
 
-  const handleDeleteNode = useCallback((nodeId: string) => {
+  const handleDeleteNode = useCallback(async (nodeId: string) => {
     const node = nodes.find((n) => n.id === nodeId);
     if (!node) return;
+
+    // For service nodes, clean up on-disk resources
+    if (node.data.kind === 'service') {
+      // Collect env var names that OTHER services use to reach this one
+      // (edges where this service is the TARGET from another service)
+      const referencedBy: string[] = [];
+      for (const e of edges) {
+        if (e.target === nodeId) {
+          const sourceNode = nodes.find((n) => n.id === e.source);
+          if (sourceNode?.data.kind === 'service' && e.data) {
+            const envVar = (e.data as Record<string, unknown>)?._envVar as string | undefined;
+            if (envVar) referencedBy.push(envVar);
+          }
+        }
+      }
+
+      try {
+        const result = await cleanupService({
+          name: node.data.label,
+          path: node.data.path as string | undefined,
+          dseName: node.data.dseName as string | undefined,
+          referencedBy,
+        });
+        if (result.ok && result.output) {
+          toast(result.output, 'success');
+        }
+      } catch {
+        // Cleanup is best-effort — still remove from canvas
+      }
+    }
+
     setNodes((nds) => nds.filter((n) => n.id !== nodeId));
     setEdges((eds) => eds.filter((e) => e.source !== nodeId && e.target !== nodeId));
     addChange({ type: 'remove-node', description: `Remove ${node.data?.label || nodeId}` });
-    setShowNodeConfig(false);
+    setShowDetailSidebar(false);
     setSelectedNode(null);
-  }, [nodes, setNodes, setEdges, addChange]);
+  }, [nodes, edges, setNodes, setEdges, addChange, toast]);
 
   // ── Update node data ──────────────────────────────────────
 
@@ -321,11 +1194,12 @@ export function TopologyPage() {
     setNodes((nds) =>
       nds.map((n) =>
         n.id === nodeId
-          ? { ...n, data: { ...n.data, ...updates } }
+          ? { ...n, data: { ...n.data, ...updates, isDirty: true } }
           : n,
       ),
     );
-  }, [setNodes]);
+    addChange({ type: 'add-edge', description: `Update ${updates.label || 'node'} config` });
+  }, [setNodes, addChange]);
 
   // ── Deploy ─────────────────────────────────────────────────
 
@@ -342,6 +1216,7 @@ export function TopologyPage() {
         id: e.id,
         source: e.source,
         target: e.target,
+        data: e.data as Record<string, unknown> | undefined,
       })),
     };
 
@@ -349,13 +1224,13 @@ export function TopologyPage() {
     setDeploying(false);
 
     if (result.ok) {
-      toast('Topology deployed successfully', 'success');
+      toast(result.output || 'Topology deployed successfully', 'success');
       clearChanges();
-      // Mark all nodes as not new
+      // Mark all nodes as not new / not dirty
       setNodes((nds) =>
         nds.map((n) => ({
           ...n,
-          data: { ...n.data, isNew: false },
+          data: { ...n.data, isNew: false, isDirty: false },
         })),
       );
     } else {
@@ -375,7 +1250,7 @@ export function TopologyPage() {
     }
     clearChanges();
     setSelectedNode(null);
-    setShowNodeConfig(false);
+    setShowDetailSidebar(false);
   }, [initialGraph, setNodes, setEdges, clearChanges]);
 
   // ── Keyboard shortcuts ─────────────────────────────────────
@@ -383,19 +1258,19 @@ export function TopologyPage() {
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Delete' || e.key === 'Backspace') {
-        if (selectedNode && !showCustomService && !showNodeConfig) {
+        if (selectedNode && !showCustomService && !showDetailSidebar) {
           handleDeleteNode(selectedNode.id);
         }
       }
       if (e.key === 'Escape') {
-        setShowNodeConfig(false);
+        setShowDetailSidebar(false);
         setShowCustomService(false);
         setSelectedNode(null);
       }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [selectedNode, showCustomService, showNodeConfig, handleDeleteNode]);
+  }, [selectedNode, showCustomService, showDetailSidebar, handleDeleteNode]);
 
   // ── Minimap node color ─────────────────────────────────────
 
@@ -404,6 +1279,7 @@ export function TopologyPage() {
       const depType = (node.data as unknown as TopologyNodeData)?.depType;
       return depType ? DEP_META[depType]?.color || '#666' : '#666';
     }
+    if (node.type === 'external') return '#8b5cf6';
     return '#3b82f6';
   }, []);
 
@@ -431,8 +1307,20 @@ export function TopologyPage() {
             draggable
             onDragStart={(e) => onDragStart(e, { kind: 'service' })}
           >
-            <span className="topo-palette-icon">⬡</span>
+            <span className="topo-palette-icon"><ServiceIcon /></span>
             <span className="topo-palette-label">Drag Service</span>
+          </div>
+        </div>
+
+        <div className="topo-palette-section">
+          <div className="topo-palette-section-label">External</div>
+          <div
+            className="topo-palette-item"
+            draggable
+            onDragStart={(e) => onDragStart(e, { kind: 'external' })}
+          >
+            <span className="topo-palette-icon"><BrowserIcon /></span>
+            <span className="topo-palette-label">Browser Client</span>
           </div>
         </div>
 
@@ -465,22 +1353,21 @@ export function TopologyPage() {
           onDrop={onDrop}
           onInit={setReactFlowInstance}
           onNodeClick={onNodeClick}
+          onEdgeClick={onEdgeClick}
           nodeTypes={nodeTypes}
+          edgeTypes={edgeTypes}
           fitView
           snapToGrid
           snapGrid={[16, 16]}
           defaultEdgeOptions={{
-            type: 'smoothstep',
+            type: 'connection',
             animated: true,
             style: { stroke: '#3b82f6', strokeWidth: 2 },
           }}
           proOptions={{ hideAttribution: true }}
         >
           <Background gap={16} size={1} color="rgba(255,255,255,0.03)" />
-          <Controls
-            position="bottom-right"
-            showInteractive={false}
-          />
+          <ZoomControls />
           <MiniMap
             nodeColor={minimapNodeColor}
             maskColor="rgba(0,0,0,0.7)"
@@ -498,11 +1385,11 @@ export function TopologyPage() {
         )}
       </div>
 
-      {/* ── Node Config Panel ─────────────────────────────────── */}
-      {showNodeConfig && selectedNode && (
-        <NodeConfigPanel
+      {/* ── Detail Sidebar ──────────────────────────────────────── */}
+      {showDetailSidebar && selectedNode && (
+        <DetailSidebar
           node={selectedNode}
-          onClose={() => { setShowNodeConfig(false); setSelectedNode(null); }}
+          onClose={() => { setShowDetailSidebar(false); setSelectedNode(null); }}
           onUpdate={(updates) => updateNodeData(selectedNode.id, updates)}
           onDelete={() => handleDeleteNode(selectedNode.id)}
         />
@@ -511,16 +1398,19 @@ export function TopologyPage() {
       {/* ── Custom Service Dialog ─────────────────────────────── */}
       {showCustomService && (
         <ActionModal
-          title="Add Custom Service"
-          submitLabel="Add to Canvas"
-          onSubmit={handleAddCustomService}
+          title="Add Service"
+          submitLabel={hasExistingSource ? 'Add to Canvas' : undefined}
+          onSubmit={hasExistingSource ? handleAddCustomService : undefined}
           onClose={() => {
             setShowCustomService(false);
             setCustomName('');
             setCustomPath('');
             setCustomImage('');
             setCustomPort('3000');
+            setCustomLanguage('node');
+            setHasExistingSource(false);
             setPathStatus(null);
+            pathManuallyEdited.current = false;
           }}
         >
           <label className="form-label">Service Name</label>
@@ -532,64 +1422,123 @@ export function TopologyPage() {
             autoFocus
           />
 
-          <label className="form-label">Source Directory (optional)</label>
-          <div className="form-row">
-            <input
-              className="form-input"
-              placeholder="/Users/you/project/my-api"
-              value={customPath}
-              onChange={(e) => {
-                setCustomPath(e.target.value);
-                setPathStatus(null);
-              }}
-            />
+          {/* ── Source toggle ──────────────────────────────── */}
+          <div className="topo-source-toggle">
             <button
-              className="btn btn-sm"
-              onClick={() => handleCheckPath(customPath)}
-              disabled={!customPath.trim() || checkingPath}
+              className={`topo-toggle-btn ${!hasExistingSource ? 'active' : ''}`}
+              onClick={() => { setHasExistingSource(false); setPathStatus(null); }}
             >
-              {checkingPath ? '…' : 'Check'}
+              New Scaffold
+            </button>
+            <button
+              className={`topo-toggle-btn ${hasExistingSource ? 'active' : ''}`}
+              onClick={() => { setHasExistingSource(true); setPathStatus(null); setCustomPath(''); pathManuallyEdited.current = false; }}
+            >
+              Existing Source
             </button>
           </div>
-          {pathStatus && (
-            <div className={`topo-path-status ${pathStatus.exists ? 'exists' : 'missing'}`}>
-              {pathStatus.exists ? (
-                <>
-                  <span>✓ Directory exists</span>
-                  {pathStatus.has_dockerfile && <span className="tag">Dockerfile</span>}
-                  {pathStatus.language && <span className="tag">{pathStatus.language}</span>}
-                </>
-              ) : (
-                <>
-                  <span>Directory not found</span>
+
+          {/* ── New scaffold mode ─────────────────────────── */}
+          {!hasExistingSource && (
+            <>
+              <label className="form-label">Language</label>
+              <div className="topo-lang-picker">
+                {(['node', 'go', 'python'] as const).map((lang) => (
                   <button
-                    className="btn btn-sm btn-primary"
-                    onClick={handleScaffold}
-                    disabled={scaffolding || !customName.trim()}
+                    key={lang}
+                    className={`topo-lang-btn ${customLanguage === lang ? 'active' : ''}`}
+                    onClick={() => setCustomLanguage(lang)}
                   >
-                    {scaffolding ? 'Creating…' : 'Create with scaffold'}
+                    {lang === 'node' ? 'Node.js' : lang === 'go' ? 'Go' : 'Python'}
                   </button>
-                </>
-              )}
-            </div>
+                ))}
+              </div>
+
+              <label className="form-label">Port</label>
+              <input
+                className="form-input"
+                type="number"
+                placeholder="3000"
+                value={customPort}
+                onChange={(e) => setCustomPort(e.target.value)}
+              />
+
+              <label className="form-label">Scaffold Path</label>
+              <input
+                className="form-input form-input-dim"
+                value={customPath}
+                onChange={(e) => { pathManuallyEdited.current = true; setCustomPath(e.target.value); }}
+                placeholder={workspaceRoot ? `${workspaceRoot}/services/...` : 'loading...'}
+              />
+              <div className="topo-scaffold-hint">
+                Scaffolds a {customLanguage === 'node' ? 'Node.js' : customLanguage === 'go' ? 'Go' : 'Python'} service with Dockerfile, health check, and entry point.
+                Write your code, then deploy when ready.
+              </div>
+
+              <button
+                className="btn btn-primary btn-full"
+                onClick={handleScaffoldAndStage}
+                disabled={scaffolding || !customName.trim()}
+              >
+                {scaffolding ? 'Scaffolding…' : '⬡ Scaffold & Stage'}
+              </button>
+            </>
           )}
 
-          <label className="form-label">Container Image</label>
-          <input
-            className="form-input"
-            placeholder={`localhost:5001/${customName || 'my-api'}:latest`}
-            value={customImage}
-            onChange={(e) => setCustomImage(e.target.value)}
-          />
+          {/* ── Existing source mode ──────────────────────── */}
+          {hasExistingSource && (
+            <>
+              <label className="form-label">Source Directory</label>
+              <div className="form-row">
+                <input
+                  className="form-input"
+                  placeholder="/Users/you/project/my-api"
+                  value={customPath}
+                  onChange={(e) => {
+                    setCustomPath(e.target.value);
+                    setPathStatus(null);
+                  }}
+                />
+                <button
+                  className="btn btn-sm"
+                  onClick={() => handleCheckPath(customPath)}
+                  disabled={!customPath.trim() || checkingPath}
+                >
+                  {checkingPath ? '…' : 'Check'}
+                </button>
+              </div>
+              {pathStatus && (
+                <div className={`topo-path-status ${pathStatus.exists ? 'exists' : 'missing'}`}>
+                  {pathStatus.exists ? (
+                    <>
+                      <span>✓ Directory exists</span>
+                      {pathStatus.has_dockerfile && <span className="tag">Dockerfile</span>}
+                      {pathStatus.language && <span className="tag">{pathStatus.language}</span>}
+                    </>
+                  ) : (
+                    <span>⚠ Directory not found — switch to "New Scaffold" to create one</span>
+                  )}
+                </div>
+              )}
 
-          <label className="form-label">Port</label>
-          <input
-            className="form-input"
-            type="number"
-            placeholder="3000"
-            value={customPort}
-            onChange={(e) => setCustomPort(e.target.value)}
-          />
+              <label className="form-label">Container Image</label>
+              <input
+                className="form-input"
+                placeholder={`localhost:5001/${customName || 'my-api'}:latest`}
+                value={customImage}
+                onChange={(e) => setCustomImage(e.target.value)}
+              />
+
+              <label className="form-label">Port</label>
+              <input
+                className="form-input"
+                type="number"
+                placeholder="3000"
+                value={customPort}
+                onChange={(e) => setCustomPort(e.target.value)}
+              />
+            </>
+          )}
         </ActionModal>
       )}
 
@@ -622,117 +1571,6 @@ export function TopologyPage() {
           </div>
         </div>
       )}
-    </div>
-  );
-}
-
-// ── Node Config Panel ───────────────────────────────────────────
-
-function NodeConfigPanel({ node, onClose, onUpdate, onDelete }: {
-  node: Node<TopologyNodeData>;
-  onClose: () => void;
-  onUpdate: (updates: Partial<TopologyNodeData>) => void;
-  onDelete: () => void;
-}) {
-  const data = node.data;
-  const isDep = data.kind === 'dependency';
-  const meta = isDep && data.depType ? DEP_META[data.depType] : null;
-
-  return (
-    <div className="topo-config-panel">
-      <div className="topo-config-header">
-        <span className="topo-config-icon">{isDep ? (meta?.icon || '◆') : '⬡'}</span>
-        <h3>{data.label}</h3>
-        <button className="btn btn-sm btn-ghost" onClick={onClose}>✕</button>
-      </div>
-
-      <div className="topo-config-body">
-        {isDep ? (
-          <>
-            <label className="form-label">Type</label>
-            <div className="topo-config-value">{meta?.label || data.depType}</div>
-
-            <label className="form-label">Version</label>
-            <input
-              className="form-input"
-              placeholder="latest"
-              value={data.version || ''}
-              onChange={(e) => onUpdate({ version: e.target.value })}
-            />
-
-            <label className="form-label">Port</label>
-            <input
-              className="form-input"
-              type="number"
-              value={data.port || meta?.defaultPort || ''}
-              onChange={(e) => onUpdate({ port: parseInt(e.target.value) || undefined })}
-            />
-
-            <label className="form-label">Env Var Name</label>
-            <input
-              className="form-input"
-              placeholder={meta?.envVar || 'CONNECTION_URL'}
-              value={data.envVarName || ''}
-              onChange={(e) => onUpdate({ envVarName: e.target.value })}
-            />
-
-            {meta && (
-              <div className="topo-config-info">
-                <span className="text-dim">Auto-injected as </span>
-                <code>{data.envVarName || meta.envVar}</code>
-              </div>
-            )}
-          </>
-        ) : (
-          <>
-            <label className="form-label">Service Name</label>
-            <input
-              className="form-input"
-              value={data.label}
-              onChange={(e) => onUpdate({ label: e.target.value })}
-            />
-
-            <label className="form-label">Image</label>
-            <input
-              className="form-input"
-              placeholder="localhost:5001/my-app:latest"
-              value={data.image || ''}
-              onChange={(e) => onUpdate({ image: e.target.value })}
-            />
-
-            <label className="form-label">Source Directory</label>
-            <input
-              className="form-input"
-              placeholder="/path/to/source"
-              value={data.path || ''}
-              onChange={(e) => onUpdate({ path: e.target.value })}
-            />
-
-            <label className="form-label">Port</label>
-            <input
-              className="form-input"
-              type="number"
-              value={data.servicePort || ''}
-              onChange={(e) => onUpdate({ servicePort: parseInt(e.target.value) || undefined })}
-            />
-
-            <label className="form-label">Replicas</label>
-            <input
-              className="form-input"
-              type="number"
-              min="1"
-              value={data.replicas || 1}
-              onChange={(e) => onUpdate({ replicas: parseInt(e.target.value) || 1 })}
-            />
-          </>
-        )}
-      </div>
-
-      <div className="topo-config-footer">
-        <button className="btn btn-danger btn-sm" onClick={onDelete}>
-          Remove
-        </button>
-      </div>
     </div>
   );
 }

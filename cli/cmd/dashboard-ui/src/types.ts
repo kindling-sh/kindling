@@ -397,7 +397,7 @@ export const DEP_META: Record<DependencyType, { icon: string; label: string; col
 };
 
 export interface TopologyNodeData {
-  kind: 'service' | 'dependency';
+  kind: 'service' | 'dependency' | 'external';
   label: string;
   // dependency-specific
   depType?: DependencyType;
@@ -412,6 +412,9 @@ export interface TopologyNodeData {
   // tracking
   dseName?: string;  // links to an existing DSE
   isNew?: boolean;
+  isDirty?: boolean;
+  staged?: boolean;   // scaffolded but not yet deployed
+  language?: string;  // scaffold language template (node/go/python)
   // index signature for React Flow compatibility
   [key: string]: unknown;
 }
@@ -427,5 +430,76 @@ export interface TopologyGraph {
     id: string;
     source: string;
     target: string;
+    data?: Record<string, unknown>;
   }[];
+}
+
+// ── Topology Live Status ────────────────────────────────────────
+
+export interface TopologyContainerInfo {
+  name: string;
+  ready: boolean;
+  restarts: number;
+  state: 'running' | 'waiting' | 'terminated' | 'unknown';
+  reason?: string;
+}
+
+export interface TopologyNodeStatus {
+  phase: string;      // Running, Pending, CrashLoopBackOff, ImagePullBackOff, Failed, Unknown
+  ready: number;      // pods with all containers ready
+  total: number;      // total pods matched
+  restarts: number;   // sum of container restart counts
+  lastDeploy: string; // ISO timestamp
+  containers?: TopologyContainerInfo[];
+}
+
+export type TopologyStatusMap = Record<string, TopologyNodeStatus>;
+
+// ── Topology Node Detail ────────────────────────────────────────
+
+export interface TopologyPodInfo {
+  name: string;
+  namespace: string;
+  phase: string;
+  ready: string;   // "1/1"
+  restarts: number;
+  age: string;     // ISO timestamp
+  node: string;
+}
+
+export interface TopologyEventInfo {
+  type: string;    // Normal, Warning
+  reason: string;
+  message: string;
+  age: string;     // ISO timestamp
+  count: number;
+}
+
+export interface TopologyEnvVar {
+  name: string;
+  value: string;
+}
+
+export interface TopologyDeploymentInfo {
+  name: string;
+  namespace: string;
+  replicas: number;
+  available: number;
+}
+
+export interface TopologyNodeDetail {
+  pods: TopologyPodInfo[];
+  events: TopologyEventInfo[];
+  env: TopologyEnvVar[];
+  deployment?: TopologyDeploymentInfo;
+}
+
+export interface TopologyLogEntry {
+  pod: string;
+  line: string;
+}
+
+export interface TopologyLogs {
+  lines: TopologyLogEntry[];
+  pods: string[];
 }
