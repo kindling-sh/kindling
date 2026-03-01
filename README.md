@@ -31,8 +31,8 @@ kindling is a complete development lifecycle tool. It takes your project from fi
   Have a project?                              Starting fresh?
        │                                            │
        ▼                                            ▼
-  kindling analyze                          kindling scaffold (coming soon)
-  (check readiness)                         (opinionated project structure)
+  kindling analyze                          kindling scaffold
+  (check readiness)                       (minimal app creation)
        │                                            │
        ▼                                            ▼
   kindling generate ◄───────────────────────────────┘
@@ -40,23 +40,23 @@ kindling is a complete development lifecycle tool. It takes your project from fi
        │
        ▼
   ┌─────────────────── Dev Loop ───────────────────┐
-  │                                                 │
+  │                                                │
   │  push → build → deploy (outer loop)            │
-  │       ↕                                         │
+  │       ↕                                        │
   │  edit → sync → reload (inner loop)             │
-  │       ↕                                         │
+  │       ↕                                        │
   │  expose → test OAuth / webhooks                │
-  │       ↕                                         │
+  │       ↕                                        │
   │  add services → debug → iterate                │
-  │                                                 │
-  └─────────────────────────────────────────────────┘
+  │                                                │
+  └────────────────────────────────────────────────┘
        │
        ▼
   kindling promote (coming soon)
   (graduate to production with TLS)
 ```
 
-Zero cloud CI minutes. Sub-second iteration. Full Kubernetes fidelity.
+Zero cloud CI minutes. Immediate iteration. Full Kubernetes everything.
 
 ### Lightweight by Design
 
