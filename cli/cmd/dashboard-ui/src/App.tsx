@@ -13,10 +13,12 @@ import { IngressesPage } from './pages/IngressesPage';
 import { SecretsPage } from './pages/SecretsPage';
 import { EventsPage } from './pages/EventsPage';
 import { RBACPage } from './pages/RBACPage';
+import { TopologyPage } from './pages/TopologyPage';
 import type { K8sList, K8sIngress } from './types';
 
 type Page =
   | 'overview'
+  | 'topology'
   | 'dses'
   | 'runners'
   | 'deployments'
@@ -43,6 +45,7 @@ const NAV_GROUPS: NavGroup[] = [
   {
     label: 'Kindling',
     items: [
+      { page: 'topology', icon: '◇', label: 'Topology' },
       { page: 'dses', icon: '◆', label: 'Environments' },
       { page: 'runners', icon: '▶', label: 'Runners' },
     ],
@@ -77,6 +80,7 @@ const NAV_GROUPS: NavGroup[] = [
 
 const PAGES: Record<Page, () => ReactNode> = {
   overview: OverviewPage,
+  topology: TopologyPage,
   dses: DSEPage,
   runners: RunnersPage,
   deployments: DeploymentsPage,
@@ -541,7 +545,7 @@ function AppSidebar({ activePage, setActivePage }: { activePage: Page; setActive
       {showDeploy && (
         <ActionModal title="Deploy Environment" submitLabel="Deploy" loading={deploying} onSubmit={handleDeploy} onClose={() => setShowDeploy(false)}>
           <label className="form-label">DevStagingEnvironment YAML</label>
-          <textarea className="form-textarea" rows={14} placeholder={"apiVersion: apps.kindling.dev/v1alpha1\nkind: DevStagingEnvironment\nmetadata:\n  name: my-app\nspec:\n  ..."} value={deployYaml} onChange={(e) => setDeployYaml(e.target.value)} />
+          <textarea className="form-textarea" rows={14} placeholder={"apiVersion: apps.example.com/v1alpha1\nkind: DevStagingEnvironment\nmetadata:\n  name: my-app\nspec:\n  ..."} value={deployYaml} onChange={(e) => setDeployYaml(e.target.value)} />
         </ActionModal>
       )}
 

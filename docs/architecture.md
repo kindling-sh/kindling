@@ -1,661 +1,418 @@
-# Architecture
+# Architecture — Internal Reference
+
+This document describes kindling's system design from the inside. It's
+written for maintainers who need to understand *why* things work the way
+they do, not just *what* they do.
+
+---
+
+## System overview
 
 kindling implements a **dev-in-CI** workflow — two nested development
 loops running on a local [Kind](https://kind.sigs.k8s.io) cluster. The
 **outer loop** provides full CI/CD (push → build → deploy), and the
 **inner loop** provides live sync with sub-second feedback.
 
----
-
-## System overview
-
-```mermaid
-%%{init: {'theme': 'dark'}}%%
-flowchart TB
-    dev(("👩‍💻 Developer"))
-
-    subgraph laptop["💻 Developer Laptop"]
-        subgraph kind["⎈ Kind Cluster"]
-
-            subgraph system["kindling-system namespace"]
-                operator["🎛️ Operator\n(controller-manager)"]
-            end
-
-            subgraph ns_default["default namespace"]
-                runner["🏃 Runner Pod"]
-                kaniko["📦 Kaniko Sidecar\n(build-agent)"]
-                registry["🗄️ Registry\n(registry:5000)"]
-
-                subgraph env1["DevStagingEnvironment: myapp"]
-                    app["🔷 App\nDeployment"]
-                    svc["🔶 Service"]
-                    ing["🌐 Ingress"]
-                    pg["🐘 Postgres"]
-                    rd["⚡ Redis"]
-                end
-            end
-
-            ingress_ctrl["🔶 ingress-nginx\ncontroller"]
-        end
-
-        dashboard["🖥️ Dashboard\n(localhost:9090)"]
-        sync_engine["🔄 kindling sync\n(file watch + hot reload)"]
-    end
-
-    dev -- "git push" --> gh["🐙 GitHub"]
-    gh -- "dispatches job" --> runner
-    runner -- "signal files\n(/builds/*)" --> kaniko
-    kaniko -- "pushes image" --> registry
-    runner -- "kubectl apply\nDSE CR" --> operator
-    operator -- "creates" --> app
-    operator -- "creates" --> svc
-    operator -- "creates" --> ing
-    operator -- "provisions" --> pg
-    operator -- "provisions" --> rd
-    dev -- "http://myapp.localhost" --> ingress_ctrl
-    ingress_ctrl --> svc
-    dev -- "browser" --> dashboard
-    dashboard -. "sync / load\nAPI calls" .-> app
-    dev -- "edit files" --> sync_engine
-    sync_engine -. "kubectl cp +\nrestart" .-> app
-
-    style laptop fill:#1a1a2e,stroke:#FF6B35,color:#e0e0e0,stroke-width:2px
-    style kind fill:#0f3460,stroke:#326CE5,color:#e0e0e0,stroke-width:2px
-    style system fill:#112240,stroke:#6e40c9,color:#e0e0e0
-    style ns_default fill:#112240,stroke:#2ea043,color:#e0e0e0
-    style env1 fill:#0a1628,stroke:#F7931E,color:#e0e0e0
-    style operator fill:#6e40c9,stroke:#6e40c9,color:#fff
-    style runner fill:#2ea043,stroke:#2ea043,color:#fff
-    style kaniko fill:#326CE5,stroke:#326CE5,color:#fff
-    style registry fill:#F7931E,stroke:#F7931E,color:#fff
-    style ingress_ctrl fill:#FF6B35,stroke:#FF6B35,color:#fff
-    style dev fill:#6e40c9,stroke:#6e40c9,color:#fff
-    style ci fill:#24292f,stroke:#e0e0e0,color:#fff
-    style app fill:#326CE5,stroke:#326CE5,color:#fff
-    style svc fill:#F7931E,stroke:#F7931E,color:#fff
-    style ing fill:#FF6B35,stroke:#FF6B35,color:#fff
-    style pg fill:#336791,stroke:#336791,color:#fff
-    style rd fill:#DC382D,stroke:#DC382D,color:#fff
-    style dashboard fill:#FFD23F,stroke:#FFD23F,color:#000
-    style sync_engine fill:#e040fb,stroke:#e040fb,color:#fff
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Developer Laptop                                           │
+│                                                             │
+│  ┌───────────────────────────────────────────────────────┐  │
+│  │  Kind Cluster ("dev")                                 │  │
+│  │                                                       │  │
+│  │  ┌──────────────────┐  ┌────────────────────────────┐ │  │
+│  │  │ kindling-system  │  │ default namespace          │ │  │
+│  │  │                  │  │                            │ │  │
+│  │  │  Operator        │  │  Runner Pod                │ │  │
+│  │  │  (controller-    │  │  ├─ runner container       │ │  │
+│  │  │   manager)       │  │  └─ build-agent sidecar    │ │  │
+│  │  └────────┬─────────┘  │      (Kaniko + kubectl)    │ │  │
+│  │           │            │                            │ │  │
+│  │           │ reconciles │  Registry (registry:5000)  │ │  │
+│  │           ▼            │                            │ │  │
+│  │  ┌──────────────────┐  │  DSE "my-app"              │ │  │
+│  │  │ DSE CR applied   │──│  ├─ Deployment             │ │  │
+│  │  │ by runner or CLI │  │  ├─ Service                │ │  │
+│  │  └──────────────────┘  │  ├─ Ingress                │ │  │
+│  │                        │  ├─ postgres Deployment    │ │  │
+│  │                        │  └─ redis Deployment       │ │  │
+│  │                        └────────────────────────────┘ │  │
+│  │                                                       │  │
+│  │  ingress-nginx controller                             │  │
+│  │  (localhost:80/443 → *.localhost)                     │  │
+│  └───────────────────────────────────────────────────────┘  │
+│                                                             │
+│  CLI: kindling push / sync / load / status / expose         │
+│  Dashboard: localhost:9090                                  │
+└─────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## The Two Loops
+## Resource footprint
 
-### Outer loop: CI on your laptop
+kindling is designed to add minimal overhead to the Kind cluster. The
+operator and infrastructure pods have a fixed, constant footprint
+regardless of how many services you deploy.
+
+### kindling infrastructure (constant)
+
+| Pod | CPU request | Memory request | Purpose |
+|---|---|---|---|
+| controller-manager | 15m | 128 Mi | Operator + kube-rbac-proxy |
+| registry | ~5m | ~30 Mi | In-cluster image registry |
+| ingress-nginx | ~10m | ~90 Mi | Localhost HTTP routing |
+| **Total** | **~30m** | **~250 Mi** | |
+
+### Per-service overhead
+
+Each `DevStagingEnvironment` creates:
+- 1 Deployment + 1 Service + 1 Ingress for the application
+- 1 Deployment + 1 Service per dependency
+- No sidecars, no DaemonSets, no per-service operators
+
+The operator manages all services through a single reconciliation loop.
+There is no per-service control plane cost.
+
+### CLI binary
+
+The `kindling` binary is a 14 MB statically-linked Go executable. It
+has zero runtime dependencies — no Python, no Node.js, no JVM. It
+communicates with the cluster via `kubectl` and with CI via the
+respective platform's API.
+
+---
+
+## The two loops
+
+### Outer loop — CI on your laptop
 
 ```
-git push → CI Platform (GitHub Actions / GitLab CI) → self-hosted runner → Kaniko build → registry:5000 → operator deploys DSE
+git push → CI platform dispatches job → self-hosted runner pod picks it up
+→ Kaniko builds image → pushes to registry:5000 → applies DSE CR
+→ operator reconciles Deployment + Service + Ingress + dependencies
 ```
 
 The outer loop uses **GitHub Actions** or **GitLab CI** as the trigger
-mechanism, but the actual compute runs locally. The self-hosted runner
-picks up jobs, builds containers via Kaniko (no Docker daemon), pushes
-to the in-cluster registry, and applies DevStagingEnvironment CRs that
-the operator reconciles into running Deployments.
+mechanism, but all compute runs locally. Key design decisions:
 
-### Inner loop: Live sync + hot reload
+1. **Kaniko over Docker** — no Docker daemon required inside the
+   cluster. Kaniko runs as a sidecar to the runner pod. This avoids
+   DinD security issues and Docker socket mounting.
+
+2. **In-cluster registry** — images are pushed to `registry:5000`
+   (accessible from the host as `localhost:5001`). No DockerHub or
+   ECR credentials needed.
+
+3. **Signal-file protocol** — the runner communicates with the Kaniko
+   sidecar via files in a shared `/builds` volume:
+   - Runner writes `<name>.tar.gz` (build context) + `<name>.dest`
+     (target image) + `<name>.request` (trigger)
+   - Sidecar detects `.request`, runs Kaniko, writes `.exitcode` + `.done`
+   - Runner polls for `.done`, reads `.exitcode`
+
+4. **DSE CR as deployment unit** — the CI workflow applies a
+   `DevStagingEnvironment` CR. The operator handles all the K8s
+   resource creation. This keeps CI workflows simple and declarative.
+
+### Inner loop — live sync + hot reload
 
 ```
-edit file → kindling sync → kubectl cp → auto-detected restart → see changes → (stop → rollback)
+edit file locally → fsnotify detects change → kubectl cp into pod
+→ runtime-specific restart (signal, wrapper loop, or none)
 ```
 
-The inner loop bypasses CI entirely. `kindling sync` watches local
-files, copies them directly into the running container, and restarts
-the process using a strategy matched to the runtime. When sync stops,
-the deployment rolls back automatically.
+The inner loop (`kindling sync`) bypasses CI entirely for rapid
+iteration. Key design decisions:
 
-Both loops operate on the same Kind cluster and the same deployments.
-The inner loop is nested inside the outer loop — you iterate fast with
-sync, then commit and push when ready.
+1. **Runtime auto-detection** — reads `/proc/1/cmdline` from the
+   container to identify the runtime (node, python, uvicorn, etc.)
+   and selects the appropriate restart strategy.
+
+2. **Four restart modes:**
+   - `ModeWrapper` — wraps the process in a `while true; do CMD & PID=$!; wait; done` loop, kills child on sync
+   - `ModeSignal` — sends SIGHUP/SIGUSR2 to PID 1 (uvicorn, gunicorn, nginx, puma)
+   - `ModeNone` — no restart needed (PHP, nodemon with built-in watch)
+   - `ModeCompiled` — cross-compiles locally, syncs binary, restarts
+
+3. **Debounced batching** — file changes within a configurable window
+   (default 500ms) are batched into a single sync operation.
+
+4. **Frontend detection** — for React/Vue/Angular projects, sync
+   automatically runs `npm run build` locally and syncs the output
+   directory to the nginx container's webroot.
 
 ---
 
-## Components
+## Cluster topology
 
-### 1. Kind cluster
+### What `kindling init` creates
 
-A local Kubernetes cluster created by [Kind](https://kind.sigs.k8s.io).
-The cluster configuration ([kind-config.yaml](../kind-config.yaml))
-includes:
+1. **Kind cluster** — single control-plane node with ingress-ready
+   label and port mappings (80/443). Uses `kind-config.yaml` at the
+   repo root.
 
-- **Single control-plane node** with the `ingress-ready` label
-- **Port mappings** for HTTP (80) and HTTPS (443) on the host
-- **Containerd mirror** pointing `registry:5000` to the in-cluster
-  registry, so Kubernetes can pull images built by Kaniko
+2. **In-cluster registry** — `registry:5000` Deployment + Service in
+   the default namespace. containerd is configured via `hosts.toml`
+   to mirror `registry:5000` to `localhost:5000`.
 
-### 2. Operator (controller-manager)
+3. **ingress-nginx** — the standard Kind-compatible nginx ingress
+   controller. Routes `*.localhost` → Services via Ingress rules.
 
-A [Kubebuilder](https://book.kubebuilder.io)-based Go controller in
-the `kindling-system` namespace. It watches two CRDs:
+4. **kindling operator** — `kindling-controller-manager` Deployment in
+   `kindling-system` namespace. Watches `DevStagingEnvironment` and
+   `CIRunnerPool` CRDs.
 
-| CRD | Purpose |
-|---|---|
-| `DevStagingEnvironment` | Declares an app + its backing services |
-| `CIRunnerPool` | Declares a self-hosted CI runner pool (GitHub Actions or GitLab CI) |
-
-**Reconcile loop for DevStagingEnvironment:**
-
-```
-CR applied → reconcileDeployment
-           → reconcileService
-           → reconcileIngress (if enabled)
-           → reconcileDependencies (for each dep: Secret + Deployment + Service)
-           → updateStatus
-```
-
-All child resources have `OwnerReferences` pointing back to the CR, so
-deleting the CR garbage-collects everything.
-
-**Spec-hash annotations:** The operator computes a SHA-256 hash of each
-sub-spec and stores it as the `apps.example.com/spec-hash` annotation.
-On reconcile, if the hash hasn't changed, the update is skipped.
-
-### 3. CI Runner Pod
-
-Created by the `CIRunnerPool` controller. Each runner pod has:
-
-| Container | Image | Purpose |
-|---|---|---|
-| **runner** | Platform-specific runner image | Registers with CI platform (GitHub or GitLab), polls for jobs |
-| **build-agent** | `bitnami/kubectl` | Watches `/builds/` for build requests, launches Kaniko pods |
-
-The two containers share an `emptyDir` volume mounted at `/builds/`.
-
-### 4. Kaniko build-agent (sidecar)
-
-The build-agent sidecar watches for signal files in `/builds/`.
-
-```
-Signal file protocol:
-
-  Runner writes:                    Build-agent reads & acts:
-  ──────────────                    ─────────────────────────
-  /builds/<name>.tar.gz             Build context (tarball)
-  /builds/<name>.dest               Target image reference
-  /builds/<name>.dockerfile         Dockerfile path (optional)
-  /builds/<name>.request            Trigger → start build
-
-  Build-agent writes back:
-  ────────────────────────
-  /builds/<name>.done               Build finished
-  /builds/<name>.exitcode           Exit code (0 = success)
-  /builds/<name>.log                Build log output
-```
-
-### 5. In-cluster registry
-
-A standard Docker registry (`registry:2`) running at `registry:5000`.
-The Kind node's containerd is configured to mirror this registry.
-
-### 6. Ingress-nginx controller
-
-Routes `*.localhost` hostnames to in-cluster Services. The Kind config
-maps host ports 80/443 → the ingress controller pod.
-
-### 7. Live sync engine (`kindling sync`)
-
-The sync engine is built into the CLI. It operates outside the cluster,
-using `kubectl cp` and `kubectl exec` to interact with running pods.
-
-**Architecture:**
-
-```
-┌─────────────────────────────────────────────────────┐
-│ kindling sync                                       │
-│                                                     │
-│  ┌──────────────┐   ┌──────────────┐   ┌─────────┐ │
-│  │ File Watcher  │──►│ Debouncer    │──►│ Sync    │ │
-│  │ (fsnotify)    │   │ (500ms)      │   │ Engine  │ │
-│  └──────────────┘   └──────────────┘   └────┬────┘ │
-│                                              │      │
-│  ┌──────────────────────────────────────────┐│      │
-│  │ Runtime Detector                         ││      │
-│  │ • Reads /proc/1/cmdline from container   ││      │
-│  │ • Matches 30+ process signatures         ││      │
-│  │ • Determines restart mode:               ││      │
-│  │   - modeSignal (SIGHUP/SIGUSR2)         ││      │
-│  │   - modeKill (wrapper + kill)            ││      │
-│  │   - modeRebuild (cross-compile + sync)   ││      │
-│  │   - modeAutoReload (sync only)           ││      │
-│  └──────────────────────────────────────────┘│      │
-│                                              │      │
-│  ┌──────────────────────────────────────────┐│      │
-│  │ Restart Strategies                       ││      │
-│  │                                          ▼│      │
-│  │ signalReload: kubectl exec kill -HUP 1   │      │
-│  │ wrapperKill:  patch deployment with       │      │
-│  │               restart-loop wrapper,       │      │
-│  │               kubectl exec kill <child>   │      │
-│  │ rebuild:      cross-compile locally,      │      │
-│  │               kubectl cp binary,          │      │
-│  │               patch + restart via wrapper │      │
-│  │ frontendBuild: npm/yarn build locally,    │      │
-│  │               kubectl cp dist/ to nginx   │      │
-│  └──────────────────────────────────────────┘│      │
-│                                              │      │
-│  ┌──────────────────────────────────────────┐│      │
-│  │ Deployment Rollback (on stop)            ││      │
-│  │                                          ▼│      │
-│  │ • Saves deployment revision before sync   │      │
-│  │ • Compares revision after sync starts     │      │
-│  │ • If patched: rollout undo --to-revision  │      │
-│  │ • If not: rollout restart                 │      │
-│  └──────────────────────────────────────────┘│      │
-└─────────────────────────────────────────────────────┘
-```
-
-**Runtime detection table (subset):**
-
-| Process signature | Mode | Interpreted? |
-|---|---|---|
-| `node`, `deno`, `bun` | modeKill | yes |
-| `python`, `python3` | modeKill | yes |
-| `ruby`, `perl`, `lua` | modeKill | yes |
-| `uvicorn`, `gunicorn` | modeSignal | yes |
-| `puma`, `unicorn` | modeSignal | yes |
-| `nginx`, `httpd` | modeSignal | no |
-| `php-fpm`, `php` | modeAutoReload | yes |
-| `go` binary (detected) | modeRebuild | no |
-| `cargo`, `rustc` | modeRebuild | no |
-| `java`, `dotnet` | modeRebuild | no |
-
-**Frontend detection:** When a project has `package.json` with a build
-script and the container runs nginx, the sync engine runs the local
-build (npm/yarn/pnpm), then syncs only the built output (dist/build)
-into the nginx html root — never the source tree.
-
-**Cross-compilation:** For compiled languages, the sync engine queries
-`kubectl get nodes -o jsonpath='{.items[0].status.nodeInfo.architecture}'`
-and generates the correct cross-compilation command:
-- **Go** — `CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o <tmp> .`
-- **Rust** — `cargo build --release --target aarch64-unknown-linux-gnu`
-- **Java** — `mvn package -DskipTests` or `gradle build -x test`
-- **.NET** — `dotnet publish -r linux-arm64 -c Release --self-contained`
-
-### 8. Web dashboard
-
-The dashboard is a React/TypeScript SPA embedded in the CLI binary via
-Go's `embed` package. It runs as an HTTP server on `localhost:9090`.
-
-**Architecture:**
-
-```
-┌──────────────────────────────────────────────────────┐
-│ kindling dashboard                                   │
-│                                                      │
-│  ┌─────────────────────────────────────────────────┐ │
-│  │ HTTP Server (Go net/http)                       │ │
-│  │                                                 │ │
-│  │ Read-only API (dashboard_api.go):               │ │
-│  │   /api/cluster, /api/pods, /api/dses,           │ │
-│  │   /api/services, /api/ingresses, /api/events,   │ │
-│  │   /api/logs/, /api/runtime/{ns}/{dep}, ...      │ │
-│  │                                                 │ │
-│  │ Action API (dashboard_actions.go):              │ │
-│  │   POST /api/sync      — start sync session      │ │
-│  │   DELETE /api/sync    — stop sync (auto rollback)│ │
-│  │   GET /api/sync/status — poll sync state        │ │
-│  │   POST /api/load      — docker build + load     │ │
-│  │   GET /api/load-context — discover service dirs │ │
-│  │   GET /api/runtime/{ns}/{dep} — detect runtime  │ │
-│  │   POST /api/deploy    — apply DSE YAML          │ │
-│  │   POST /api/env/set   — set env vars            │ │
-│  │   ...                                           │ │
-│  │                                                 │ │
-│  │ Static files (embedded React SPA):              │ │
-│  │   / → dashboard-ui/dist/index.html              │ │
-│  └─────────────────────────────────────────────────┘ │
-│                                                      │
-│  ┌─────────────────────────────────────────────────┐ │
-│  │ React Frontend (dashboard-ui/)                  │ │
-│  │                                                 │ │
-│  │ Components:                                     │ │
-│  │   SyncModal — runtime detection, dir picker,    │ │
-│  │              sync status, stop button           │ │
-│  │   LoadModal — docker build + kind load flow     │ │
-│  │   Runtime badges — per-service runtime labels   │ │
-│  │   Log viewer — real-time container log tailing  │ │
-│  │   Resource panels — pods, services, ingresses   │ │
-│  └─────────────────────────────────────────────────┘ │
-└──────────────────────────────────────────────────────┘
-```
-
-The dashboard calls the same sync logic as the CLI — the action API
-handlers in `dashboard_actions.go` invoke `syncAndRestart` from
-`sync.go`, including all runtime detection, restart strategy selection,
-and automatic rollback on stop.
-
----
-
-## Data flow: Outer loop (git push → running app)
-
-```mermaid
-%%{init: {'theme': 'dark', 'themeVariables': {'actorBkg': '#FF6B35', 'actorTextColor': '#fff', 'actorBorder': '#FF6B35', 'signalColor': '#e0e0e0', 'noteBkgColor': '#112240', 'noteTextColor': '#e0e0e0'}}}%%
-sequenceDiagram
-    participant Dev as 👩‍💻 Developer
-    participant GH as 🐙 GitHub
-    participant Runner as 🏃 Runner Pod
-    participant Kaniko as 📦 Kaniko Sidecar
-    participant Registry as 🗄️ registry:5000
-    participant Operator as 🔥 Operator
-    participant K8s as ⎈ Kubernetes
-
-    Dev->>GH: git push
-    GH->>Runner: Dispatch workflow job
-    Runner->>Runner: Checkout code
-    Runner->>Runner: tar -czf /builds/app.tar.gz
-    Runner->>Kaniko: touch /builds/app.request
-    Kaniko->>Kaniko: Build image from tarball
-    Kaniko->>Registry: Push image
-    Kaniko->>Runner: touch /builds/app.done
-    Runner->>Kaniko: Write DSE YAML + touch .apply
-    Kaniko->>K8s: kubectl apply -f dse.yaml
-    K8s->>Operator: DSE CR created/updated
-    Operator->>K8s: Create Deployment + Service + Ingress + Dependencies
-    K8s->>Dev: http://user-app.localhost
-```
-
-## Data flow: Inner loop (sync → instant feedback)
-
-```mermaid
-%%{init: {'theme': 'dark', 'themeVariables': {'actorBkg': '#e040fb', 'actorTextColor': '#fff', 'actorBorder': '#e040fb', 'signalColor': '#e0e0e0', 'noteBkgColor': '#112240', 'noteTextColor': '#e0e0e0'}}}%%
-sequenceDiagram
-    participant Dev as 👩‍💻 Developer
-    participant Sync as 🔄 kindling sync
-    participant Pod as ⎈ App Pod
-    participant K8s as ⎈ Kubernetes API
-
-    Note over Sync: Save deployment revision
-    Dev->>Sync: Edit file locally
-    Sync->>Sync: File watcher detects change
-    Sync->>Sync: Debounce (500ms)
-
-    alt Interpreted language (Node, Python, Ruby)
-        Sync->>K8s: Patch deployment with wrapper (first sync only)
-        Sync->>Pod: kubectl cp files → /app
-        Sync->>Pod: kubectl exec kill <child PID>
-        Note over Pod: Wrapper loop respawns process
-    else Signal-reload server (uvicorn, nginx)
-        Sync->>Pod: kubectl cp files → /app
-        Sync->>Pod: kubectl exec kill -HUP 1
-        Note over Pod: Zero-downtime reload
-    else Compiled language (Go, Rust)
-        Sync->>Sync: Cross-compile locally (GOOS/GOARCH)
-        Sync->>K8s: Patch deployment with wrapper (first sync only)
-        Sync->>Pod: kubectl cp binary → container
-        Sync->>Pod: kubectl exec kill <child PID>
-        Note over Pod: Wrapper respawns with new binary
-    else Frontend (React → nginx)
-        Sync->>Sync: npm/yarn build locally
-        Sync->>Pod: kubectl cp dist/ → /usr/share/nginx/html
-        Sync->>Pod: kubectl exec kill -HUP 1
-        Note over Pod: nginx reloads with new assets
-    end
-
-    Dev->>Sync: Ctrl+C (stop sync)
-    Note over Sync: Compare deployment revision
-    alt Deployment was patched
-        Sync->>K8s: rollout undo --to-revision=<saved>
-        Note over Pod: Original deployment restored
-    else Files only (signal reload)
-        Sync->>K8s: rollout restart
-        Note over Pod: Fresh pod with original image
-    end
-```
-
----
-
-## Namespace layout
+### Namespaces
 
 | Namespace | Contents |
 |---|---|
-| `kindling-system` | Operator Deployment, ServiceAccount, RBAC |
-| `default` | Runner pods, DSE resources (apps, deps, services, ingresses), registry |
-| `ingress-nginx` | ingress-nginx controller pods |
+| `kindling-system` | Operator Deployment, kube-rbac-proxy sidecar |
+| `default` | Registry, runner pods, DSE workloads, dependencies |
+| `ingress-nginx` | Ingress controller pods |
+
+### Networking
+
+- **Host → Cluster:** `localhost:80` and `localhost:443` map to the
+  Kind node's ports, which route through ingress-nginx.
+- **Cluster internal:** Services use ClusterIP. Dependencies are
+  addressed by DNS name (e.g., `myapp-postgres:5432`).
+- **Registry:** In-cluster `registry:5000`, host-accessible as
+  `localhost:5001`. containerd mirror handles the translation.
+- **Tunnels:** `kindling expose` creates a cloudflared/ngrok tunnel
+  from the public internet to `localhost:80`. The command patches
+  Ingress hosts to match the tunnel hostname.
 
 ---
 
-## Dependency provisioning
+## Operator design
 
-When the operator encounters a `dependencies:` block in a DSE CR, for
-**each** dependency it creates:
+The operator follows the standard Kubernetes operator pattern using
+`controller-runtime`. Two reconcilers:
 
-1. **Secret** (`<name>-<type>-credentials`) — credential key/values
-   plus the computed `CONNECTION_URL`
-2. **Deployment** (`<name>-<type>`) — single-replica pod running the
-   service image
-3. **Service** (`<name>-<type>`) — ClusterIP service exposing the
-   default port
+### DevStagingEnvironmentReconciler
 
-The operator then injects connection-string env vars (e.g.
-`DATABASE_URL`, `REDIS_URL`) directly into the app container.
+Watches `DevStagingEnvironment` CRs and reconciles into:
+- 1 Deployment (app container + init containers for dep readiness)
+- 1 Service (ClusterIP by default)
+- 1 Ingress (optional, only if `spec.ingress.enabled`)
+- N dependency bundles (Secret + Deployment + Service per dependency)
 
-See [dependencies.md](dependencies.md) for the full reference.
+**Change detection:** Every child resource is annotated with a SHA-256
+hash of the relevant spec section (`apps.example.com/spec-hash`). On
+reconcile, the operator compares the desired hash against the existing
+annotation. If they match, the update is skipped entirely. This prevents
+unnecessary rolling restarts and reconcile loops.
 
----
+**Dependency ordering:** Dependencies are reconciled *before* the app
+Deployment. Each dependency gets a busybox init container in the app
+pod that blocks until the dependency Service accepts TCP connections.
 
-## AI workflow generation pipeline
+**Status updates:** After reconciling all child resources, the operator
+fetches their current state and updates the CR status:
+- `deploymentReady` — Deployment has desired replicas available
+- `serviceReady` — Service exists
+- `ingressReady` — Ingress exists (if enabled)
+- `dependenciesReady` — all dependency Deployments have ≥1 available replica
+- `conditions` — standard K8s conditions with `Ready` aggregate
 
-`kindling generate` uses a multi-stage pipeline:
+**Orphan pruning:** When a dependency is removed from the CR spec,
+the operator lists all child Deployments labeled `part-of: <cr-name>`
+and deletes any whose `component` label doesn't match a current dep.
 
-```
-Repo scan → docker-compose analysis → Helm/Kustomize render → .env scan → Credential detection → OAuth detection → Prompt assembly → AI call → YAML output
-```
+**OwnerReferences:** All child resources have `controllerReference` set
+to the CR, so K8s garbage collection handles cleanup when the CR is
+deleted.
 
-1. **Repo scan** — Walks directory tree collecting Dockerfiles, dependency manifests, source files
-2. **docker-compose analysis** — Uses docker-compose as source of truth for build contexts, dependencies, env vars
-3. **Helm & Kustomize** — Renders charts/overlays for accurate context
-4. **`.env` scanning** — Distinguishes external credentials from app config
-5. **Credential detection** — Flags `*_API_KEY`, `*_SECRET`, `*_TOKEN` patterns
-6. **OAuth detection** — Flags Auth0, Okta, Firebase Auth, etc.
-7. **Prompt assembly** — Builds system + user prompt with all context
-8. **AI call** — OpenAI or Anthropic (supports reasoning models: o3, o3-mini)
+### CIRunnerPoolReconciler
 
----
+Watches `CIRunnerPool` CRs and reconciles into:
+- 1 ServiceAccount
+- 1 ClusterRole (pods, deployments, DSEs, ingresses, secrets, events)
+- 1 ClusterRoleBinding
+- 1 Deployment (runner container + build-agent sidecar)
 
-## Secrets management
+**Provider abstraction:** The reconciler delegates to a `RunnerAdapter`
+interface (in `pkg/ci`) that handles GitHub vs GitLab differences:
+- Runner image, work directory, token key
+- Environment variables and registration script
+- Label format
 
-```
-kindling secrets set STRIPE_KEY sk_live_...
-       │
-       ├──→ kubectl create secret generic kindling-secret-stripe-key
-       │       --from-literal=value=sk_live_...
-       │       -l app.kubernetes.io/managed-by=kindling
-       │
-       └──→ .kindling/secrets.yaml  (base64-encoded local backup)
-```
-
-The local backup survives cluster rebuilds. After `kindling init`, run
-`kindling secrets restore` to re-create all secrets.
-
----
-
-## Public HTTPS tunnels
-
-```
-Internet → Tunnel Provider (TLS) → localhost:80 → ingress-nginx → App Pod
-```
-
-Supported: cloudflared (free, no account) and ngrok (free account required).
+**Build-agent sidecar:** A `bitnami/kubectl` container that watches
+the `/builds` shared volume for signal files. It:
+- Creates Kaniko pods for `.request` files
+- Runs `kubectl apply` for `.apply` files
+- Executes arbitrary scripts for `.kubectl` files
 
 ---
 
-## Owner references and garbage collection
+## CLI architecture
 
-Every resource the operator creates has an `OwnerReference` pointing to
-the parent `DevStagingEnvironment` CR. Deleting the CR garbage-collects
-all child resources automatically.
+### Module structure
+
+The CLI is a separate Go module (`github.com/jeffvincent/kindling/cli`)
+with a `replace` directive pointing to `../pkg/ci` for the shared CI
+provider package.
+
+```
+cli/
+├── main.go          ← entry point
+├── cmd/             ← all cobra commands
+│   ├── root.go      ← root command, global flags, intel PersistentPreRun
+│   ├── init.go      ← cluster bootstrap
+│   ├── runners.go   ← CI runner pool creation
+│   ├── analyze.go   ← project readiness checks
+│   ├── generate.go  ← AI workflow generation
+│   ├── deploy.go    ← DSE YAML apply
+│   ├── push.go      ← git push with selective rebuild
+│   ├── sync.go      ← live file sync (1796 lines — the biggest file)
+│   ├── load.go      ← build + load + deploy inner loop
+│   ├── expose.go    ← public HTTPS tunnel
+│   ├── env.go       ← env var management
+│   ├── secrets.go   ← secret CRUD + local persistence
+│   ├── status.go    ← cluster overview
+│   ├── logs.go      ← controller log streaming
+│   ├── intel.go     ← agent context management
+│   ├── destroy.go   ← cluster teardown
+│   ├── reset.go     ← runner pool cleanup
+│   ├── version.go   ← version display
+│   ├── helpers.go   ← shared utilities, colors, exec helpers
+│   ├── dashboard.go ← dashboard server + mux
+│   ├── dashboard_api.go    ← read-only API handlers
+│   ├── dashboard_actions.go ← mutation API handlers + topology
+│   └── dashboard-ui/       ← React + Vite frontend
+└── core/            ← business logic (no user-facing output)
+    ├── kubectl.go   ← low-level kubectl wrappers
+    ├── secrets.go   ← K8s secret CRUD
+    ├── runners.go   ← runner pool CRUD
+    ├── tunnel.go    ← tunnel process management
+    ├── env.go       ← deployment env var management
+    └── load.go      ← build + load + deploy pipeline
+```
+
+### cmd/core separation
+
+The `cmd` package handles user-facing concerns: colored output, emoji,
+interactive prompts, progress messages, error formatting.
+
+The `core` package handles business logic: kubectl invocations,
+resource creation, process management. Functions return structured
+results and errors — they never print to stdout/stderr.
+
+This separation means core functions are testable without stdout
+capture, and the dashboard (which also uses core functions) doesn't
+inherit CLI formatting.
+
+### Global hooks
+
+`rootCmd.PersistentPreRun` calls `autoIntel()` — the automatic agent
+context lifecycle manager. On every CLI command (except `intel`,
+`version`, `help`, `completion`), it:
+1. Skips if intel was explicitly disabled
+2. Restores if stale (>1 hour since last interaction)
+3. Activates if not active
+4. Touches the interaction timestamp
+
+### Project directory resolution
+
+`resolveProjectDir()` uses a 3-tier fallback:
+1. `--project-dir` flag if set
+2. Current working directory if it contains `kind-config.yaml`
+3. Auto-clone to `~/.kindling` from the GitHub repo
+
+This allows the CLI to work outside the kindling checkout.
 
 ---
 
-## CI Provider Abstraction
+## Build protocol
 
-kindling has decoupled all CI/CD-platform-specific code behind a
-provider interface layer in `pkg/ci`. Two implementations are shipped:
-**GitHub Actions** and **GitLab CI**. The interfaces are designed so
-that additional providers (Bitbucket Pipelines, Gitea Actions, etc.)
-can be added without touching the operator or CLI code.
+### Kaniko builds (CI outer loop)
 
-### Provider registry
-
-Providers register themselves at init-time via `ci.Register()`. All
-consumers call `ci.Default()` to get the active provider — by default
-that returns the GitHub Actions provider. Use `ci.Get("gitlab")` or
-the `--ci-provider gitlab` CLI flag to select GitLab.
-
-```go
-provider := ci.Default()              // → GitHubProvider
-provider.Name()                        // "github"
-provider.DisplayName()                 // "GitHub Actions"
-provider.Runner()                      // → RunnerAdapter
-provider.Workflow()                    // → WorkflowGenerator
-provider.CLILabels()                   // → CLILabels
+```
+Source tarball → /builds/<name>.tar.gz
+Target image  → /builds/<name>.dest
+Trigger       → /builds/<name>.request (touch)
+Wait           → poll for /builds/<name>.done
+Result        → /builds/<name>.exitcode (0 = success)
 ```
 
-### Interface: `Provider`
+The build-agent sidecar creates a Kaniko pod with:
+- `--context=tar:///workspace/<name>.tar.gz`
+- `--destination=<image>` (from .dest file)
+- `--cache=true --cache-repo=registry:5000/cache`
+- `--insecure` (in-cluster registry has no TLS)
+- `--push-retry=3`
 
-Top-level interface that wraps all provider-specific functionality.
+**Kaniko compatibility constraints:**
+- No BuildKit platform ARGs (`TARGETARCH`, `BUILDPLATFORM`)
+- No `.git` directory — Go builds need `-buildvcs=false`
+- Poetry needs `--no-root` flag
+- npm needs `ENV npm_config_cache=/tmp/.npm`
+- `RUN --mount=type=cache` is silently ignored (no caching benefit)
 
-| Method | Returns | Description |
-|---|---|---|
-| `Name()` | `string` | Short identifier (`"github"`, `"gitlab"`) |
-| `DisplayName()` | `string` | Human-readable name (`"GitHub Actions"`) |
-| `Runner()` | `RunnerAdapter` | Runner registration and lifecycle |
-| `Workflow()` | `WorkflowGenerator` | AI workflow file generation |
-| `CLILabels()` | `CLILabels` | Human-facing labels for CLI prompts |
+### Docker builds (CLI inner loop)
 
-### Interface: `RunnerAdapter`
+`kindling load` uses `docker build` locally (not Kaniko), then
+`kind load docker-image` to transfer into the cluster. The image tag
+uses a Unix timestamp for cache-busting:
 
-Abstracts CI runner registration and lifecycle management. The operator
-controller uses this interface to build runner Deployments, RBAC
-resources, and startup scripts without knowing which CI platform is in use.
-
-| Method | Signature | Description |
-|---|---|---|
-| `DefaultImage` | `() string` | Container image for self-hosted runners |
-| `DefaultTokenKey` | `() string` | Key name within the CI token Secret |
-| `APIBaseURL` | `(platformURL string) string` | Compute platform API URL from base URL |
-| `RunnerEnvVars` | `(cfg RunnerEnvConfig) []ContainerEnvVar` | Env vars for the runner container |
-| `StartupScript` | `() string` | Shell script to register, run, and de-register the runner |
-| `RunnerLabels` | `(username, crName string) map[string]string` | Kubernetes labels for runner resources |
-| `DeploymentName` | `(username string) string` | Runner Deployment name |
-| `ServiceAccountName` | `(username string) string` | Runner ServiceAccount name |
-| `ClusterRoleName` | `(username string) string` | Runner ClusterRole name |
-| `ClusterRoleBindingName` | `(username string) string` | Runner ClusterRoleBinding name |
-
-**Supporting types:**
-
-```go
-// RunnerEnvConfig — provider-agnostic runner configuration
-type RunnerEnvConfig struct {
-    Username, Repository, PlatformURL string
-    TokenSecretName, TokenSecretKey   string
-    Labels                            []string
-    RunnerGroup, WorkDir, CRName      string
-}
-
-// ContainerEnvVar — either a plain value or a Secret reference
-type ContainerEnvVar struct {
-    Name      string
-    Value     string      // plain text
-    SecretRef *SecretRef  // mutually exclusive with Value
-}
-
-type SecretRef struct { Name, Key string }
+```
+localhost:5001/<service>:<unix-timestamp>
 ```
 
-### Interface: `WorkflowGenerator`
-
-Abstracts CI workflow file generation for `kindling generate`.
-
-| Method | Signature | Description |
-|---|---|---|
-| `DefaultOutputPath` | `() string` | Default workflow file path (e.g. `.github/workflows/dev-deploy.yml`) |
-| `PromptContext` | `() PromptContext` | CI-specific values interpolated into the AI system prompt |
-| `ExampleWorkflows` | `() (single, multi string)` | Reference workflow examples for the AI prompt |
-| `StripTemplateExpressions` | `(content string) string` | Remove CI-specific template expressions (for fuzz/analysis) |
-
-**`PromptContext` struct:**
-
-| Field | Type | Example (GitHub) |
-|---|---|---|
-| `PlatformName` | `string` | `"GitHub Actions"` |
-| `WorkflowNoun` | `string` | `"workflow"` |
-| `BuildActionRef` | `string` | `"kindling-sh/kindling/.github/actions/kindling-build@main"` |
-| `DeployActionRef` | `string` | `"kindling-sh/kindling/.github/actions/kindling-deploy@main"` |
-| `CheckoutAction` | `string` | `"actions/checkout@v4"` |
-| `ActorExpr` | `string` | `"${{ github.actor }}"` |
-| `SHAExpr` | `string` | `"${{ github.sha }}"` |
-| `WorkspaceExpr` | `string` | `"${{ github.workspace }}"` |
-| `RunnerSpec` | `string` | `[self-hosted, "${{ github.actor }}"]` |
-| `EnvTagExpr` | `string` | `"${{ github.actor }}-${{ github.sha }}"` |
-| `TriggerBlock` | `func(branch) string` | YAML trigger block for a given branch |
-| `WorkflowFileDescription` | `string` | `"GitHub Actions workflow"` |
-
-### Struct: `CLILabels`
-
-Human-facing labels used throughout CLI commands for prompts, output,
-and resource naming.
-
-| Field | Type | Example (GitHub) |
-|---|---|---|
-| `Username` | `string` | `"GitHub username"` |
-| `Repository` | `string` | `"GitHub repository (owner/repo)"` |
-| `Token` | `string` | `"GitHub PAT (repo scope)"` |
-| `SecretName` | `string` | `"github-runner-token"` |
-| `CRDKind` | `string` | `"CIRunnerPool"` |
-| `CRDPlural` | `string` | `"cirunnerpools"` |
-| `CRDListHeader` | `string` | `"GitHub Actions Runner Pools"` |
-| `RunnerComponent` | `string` | `"github-actions-runner"` |
-| `ActionsURLFmt` | `string` | `"https://github.com/%s/actions"` |
-| `CRDAPIVersion` | `string` | `"apps.example.com/v1alpha1"` |
-
-### Adding a new provider
-
-To add support for a new CI platform (e.g. GitLab CI):
-
-1. Create `pkg/ci/gitlab.go` implementing `Provider`, `RunnerAdapter`,
-   and `WorkflowGenerator`
-2. Register it in an `init()` function: `Register(&GitLabProvider{})`
-3. No changes needed in the operator controller or CLI commands — they
-   call `ci.Default()` and use the interfaces
+After loading, it patches the DSE CR (or falls back to patching the
+Deployment directly) with the new image tag.
 
 ---
 
-## Project layout
+## Design decisions and rationale
 
-```
-kindling/
-├── api/v1alpha1/                   # CRD type definitions
-├── internal/controller/            # Operator reconcile logic
-├── cmd/main.go                     # Operator entrypoint
-├── pkg/ci/                         # CI provider abstraction
-│   ├── types.go                    # Provider, RunnerAdapter, WorkflowGenerator interfaces
-│   ├── registry.go                 # Provider registry (Register, Default, Get)
-│   ├── github.go                   # GitHub Actions implementation
-│   └── gitlab.go                   # GitLab CI implementation
-├── cli/                            # CLI tool (separate Go module)
-│   ├── cmd/
-│   │   ├── root.go
-│   │   ├── sync.go                 # Live sync + hot reload engine
-│   │   ├── dashboard.go            # Web dashboard HTTP server
-│   │   ├── dashboard_api.go        # Read-only API handlers
-│   │   ├── dashboard_actions.go    # Mutation API (sync, load, deploy)
-│   │   ├── dashboard-ui/          # React/TypeScript SPA
-│   │   ├── generate.go             # AI workflow generation
-│   │   ├── secrets.go
-│   │   ├── expose.go
-│   │   └── ...
-│   └── main.go
-├── config/                         # Kustomize manifests
-├── .github/actions/                # Reusable composite actions
-├── examples/                       # Example apps
-├── docs/                           # Documentation
-├── kind-config.yaml
-├── setup-ingress.sh
-├── Makefile
-└── Dockerfile
-```
+### Why Kind over Minikube/k3s/Docker Compose?
+
+- **Full Kubernetes API** — CRDs, RBAC, Ingress, PVCs work identically
+  to production clusters
+- **Multi-node capable** — can simulate realistic topologies (though
+  we default to single-node for speed)
+- **ingress-nginx** — `*.localhost` routing works out of the box
+- **Registry support** — containerd mirror configuration is clean
+- **Docker Desktop integration** — resource limits via Docker Desktop
+  settings, no separate VM management
+
+### Why a Kubernetes operator over plain kubectl scripts?
+
+- **Declarative reconciliation** — apply a DSE CR and the operator
+  handles all resource creation, updates, and cleanup
+- **Status tracking** — CR status reflects actual cluster state
+- **Dependency management** — operator provisions databases, caches,
+  queues with correct connection strings
+- **Garbage collection** — OwnerReferences ensure cleanup on CR deletion
+- **Idempotency** — spec-hash annotations prevent unnecessary updates
+
+### Why Kaniko over Docker-in-Docker?
+
+- **No privileged containers** — Kaniko runs as a regular pod
+- **No Docker socket** — no security risks from DinD
+- **Layer caching** — Kaniko's `--cache` flag stores layers in the
+  in-cluster registry
+- **Deterministic builds** — no Docker daemon state to worry about
+
+### Why separate Go modules for CLI and operator?
+
+- **Dependency isolation** — the CLI doesn't need controller-runtime,
+  the operator doesn't need cobra/fsnotify
+- **Build speed** — `make cli` is fast; `make build` (operator) pulls
+  heavier K8s dependencies
+- **Shared package** — `pkg/ci` is the only shared dependency, used
+  by both the operator's runner controller and the CLI's generate/runners
+  commands
+
+### Why auto-inject connection strings?
+
+- **Zero config for common patterns** — declaring `type: postgres`
+  gives you `DATABASE_URL` with zero additional configuration
+- **Convention over configuration** — every dependency type has a
+  well-known env var name, port, and credential set
+- **Overridable** — `envVarName`, `port`, `env`, `image` fields let
+  you customize everything
+- **Init container readiness** — busybox TCP probes prevent app
+  crashes during dependency startup

@@ -375,6 +375,8 @@ the Dockerfile is not at the root of the build context:
 
 ` + PromptOAuth + `
 
+` + PromptMultiAgentArchitecture + `
+
 ` + PromptFinalValidation
 
 	return strings.ReplaceAll(prompt, "HOSTARCH", hostArch)

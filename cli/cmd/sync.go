@@ -299,7 +299,13 @@ Examples:
   kindling sync -d orders --dest /opt/app/src --restart
 
   # Target a specific container in a multi-container pod
-  kindling sync -d orders --container app --restart`,
+  kindling sync -d orders --container app --restart
+
+  # Multi-service debugging: run sync in parallel terminals
+  # Terminal 1 (primary service):
+  kindling sync -d orders --restart --src ./services/orders
+  # Terminal 2 (debug a dependency):
+  kindling sync -d inventory --restart --src ./services/inventory`,
 	RunE: runSync,
 }
 
