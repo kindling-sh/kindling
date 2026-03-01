@@ -35,7 +35,7 @@ import {
   type TopologyNodeDetail,
   type TopologyLogEntry,
 } from '../types';
-import { fetchTopology, fetchTopologyStatus, fetchTopologyLogs, fetchTopologyNodeDetail, deployTopology, scaffoldService, checkPath, scaleDeployment, fetchWorkspaceInfo, cleanupService, saveCanvas, removeEdgeFromCluster } from '../api';
+import { fetchTopology, fetchTopologyStatus, fetchTopologyLogs, fetchTopologyNodeDetail, deployTopology, scaffoldService, checkPath, scaleDeployment, fetchWorkspaceInfo, cleanupService, saveCanvas, removeEdgeFromCluster, startDebugSession, stopDebugSession, fetchDebugStatus } from '../api';
 import { ActionModal, useToast } from './actions';
 import { DEP_ICONS, ServiceIcon, BrowserIcon } from '../icons';
 
@@ -413,6 +413,52 @@ function DetailSidebar({ node, onClose, onUpdate, onDelete, edges, allNodes }: {
   const [scaling, setScaling] = useState(false);
   const [scaffoldingInSidebar, setScaffoldingInSidebar] = useState(false);
 
+  // ── Debug state ───────────────────────────────────────────────
+  const [debugActive, setDebugActive] = useState(false);
+  const [debugPort, setDebugPort] = useState<number | null>(null);
+  const [debugRuntime, setDebugRuntime] = useState('');
+  const [debugLoading, setDebugLoading] = useState(false);
+  const [debugLaunch, setDebugLaunch] = useState<Record<string, unknown> | null>(null);
+
+  // Check debug status on mount
+  useEffect(() => {
+    if (!isDep && data.fromCluster && data.dseName) {
+      fetchDebugStatus(data.dseName, 'default').then((res) => {
+        if ('active' in res && res.active) {
+          setDebugActive(true);
+          setDebugPort(res.localPort ?? null);
+          setDebugRuntime(res.runtime ?? '');
+        }
+      }).catch(() => {});
+    }
+  }, [data.dseName, data.fromCluster, isDep]);
+
+  const handleDebugToggle = async () => {
+    if (!data.dseName) return;
+    setDebugLoading(true);
+    try {
+      if (debugActive) {
+        await stopDebugSession(data.dseName, 'default');
+        setDebugActive(false);
+        setDebugPort(null);
+        setDebugRuntime('');
+        setDebugLaunch(null);
+      } else {
+        const res = await startDebugSession(data.dseName, 'default');
+        if (res.status === 'started' || res.status === 'already_active') {
+          setDebugActive(true);
+          setDebugPort(res.localPort);
+          setDebugRuntime(res.runtime);
+          setDebugLaunch(res.launchConfig ?? null);
+        }
+      }
+    } catch {
+      // ignore
+    } finally {
+      setDebugLoading(false);
+    }
+  };
+
   // Collect connected env vars for this service from edges
   const connectedDeps = edges
     .filter((e) => e.source === node.id || e.target === node.id)
@@ -761,6 +807,35 @@ function DetailSidebar({ node, onClose, onUpdate, onDelete, edges, allNodes }: {
           >
             ⇆ Test API
           </button>
+        )}
+        {/* Debug button for deployed services */}
+        {!isDep && data.fromCluster && data.dseName && (
+          <>
+            <button
+              className={`btn btn-sm ${debugActive ? 'btn-warning' : 'btn-ghost'}`}
+              style={{ marginBottom: 8 }}
+              onClick={handleDebugToggle}
+              disabled={debugLoading}
+            >
+              {debugLoading ? '⏳ …' : debugActive ? '🛑 Stop Debugger' : '🔧 Debug'}
+            </button>
+            {debugActive && debugPort && (
+              <div className="topo-debug-status">
+                <span className="topo-debug-badge">● {debugRuntime} on localhost:{debugPort}</span>
+                {debugLaunch && (
+                  <button
+                    className="btn btn-xs btn-ghost"
+                    title="Copy launch.json config"
+                    onClick={() => {
+                      navigator.clipboard.writeText(JSON.stringify(debugLaunch, null, 2));
+                    }}
+                  >
+                    📋 Copy launch config
+                  </button>
+                )}
+              </div>
+            )}
+          </>
         )}
         <button className="btn btn-danger btn-sm" onClick={onDelete}>
           Remove

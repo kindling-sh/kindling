@@ -271,3 +271,46 @@ export async function proxyRequest(body: {
   });
   return res.json();
 }
+
+// ── Debug API ───────────────────────────────────────────────────
+
+export interface DebugSession {
+  deployment: string;
+  namespace?: string;
+  runtime: string;
+  localPort: number;
+  remotePort?: number;
+  launchConfig?: Record<string, unknown>;
+}
+
+export interface DebugStatus {
+  active: boolean;
+  deployment: string;
+  runtime?: string;
+  localPort?: number;
+}
+
+export async function startDebugSession(deployment: string, namespace = 'default'): Promise<DebugSession & { status: string }> {
+  const res = await fetch(`${API_BASE}/api/debug`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ deployment, namespace }),
+  });
+  return res.json();
+}
+
+export async function stopDebugSession(deployment: string, namespace = 'default'): Promise<{ status: string }> {
+  const res = await fetch(`${API_BASE}/api/debug`, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ deployment, namespace }),
+  });
+  return res.json();
+}
+
+export async function fetchDebugStatus(deployment?: string, namespace = 'default'): Promise<DebugStatus | { sessions: DebugSession[] }> {
+  const params = new URLSearchParams();
+  if (deployment) params.set('deployment', deployment);
+  params.set('namespace', namespace);
+  return apiFetch(`/api/debug/status?${params}`);
+}

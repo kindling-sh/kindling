@@ -3677,3 +3677,344 @@ func handleProxyServiceDetail(w http.ResponseWriter, r *http.Request) {
 		"port":      port,
 	})
 }
+
+// ════════════════════════════════════════════════════════════════════
+// Debug handlers — POST=start, DELETE=stop, GET /api/debug/status
+// ════════════════════════════════════════════════════════════════════
+
+// activeDebugSessions tracks running debug port-forward processes
+// keyed by "namespace/deployment".
+var activeDebugSessions = map[string]*debugSessionInfo{}
+
+type debugSessionInfo struct {
+	Deployment string    `json:"deployment"`
+	Namespace  string    `json:"namespace"`
+	Runtime    string    `json:"runtime"`
+	LocalPort  int       `json:"localPort"`
+	RemotePort int       `json:"remotePort"`
+	OrigCmd    string    `json:"origCmd"`
+	HadCommand bool      `json:"hadCommand"` // true if deployment spec had .command before debug
+	PfCmd      *exec.Cmd `json:"-"`
+}
+
+func handleDebugAction(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodPost:
+		handleDebugStart(w, r)
+	case http.MethodDelete:
+		handleDebugStop(w, r)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func handleDebugStart(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Deployment string `json:"deployment"`
+		Namespace  string `json:"namespace"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		actionErr(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if body.Deployment == "" {
+		actionErr(w, "deployment is required", http.StatusBadRequest)
+		return
+	}
+	ns := body.Namespace
+	if ns == "" {
+		ns = "default"
+	}
+
+	key := ns + "/" + body.Deployment
+
+	// Already active?
+	if sess, ok := activeDebugSessions[key]; ok {
+		jsonResponse(w, map[string]interface{}{
+			"status":    "already_active",
+			"runtime":   sess.Runtime,
+			"localPort": sess.LocalPort,
+		})
+		return
+	}
+
+	// 1. Find pod + detect runtime
+	pod, err := findPodForDeployment(body.Deployment, ns)
+	if err != nil {
+		actionErr(w, "cannot find pod: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	container := containerNameForDeployment(body.Deployment, ns, "")
+	profile, cmdline := detectRuntime(pod, ns, container)
+	debugProf, runtimeKey := matchDebugProfile(profile.Name, cmdline)
+	if debugProf == nil {
+		actionErr(w, "unsupported runtime for debugging: "+profile.Name, http.StatusBadRequest)
+		return
+	}
+
+	// 2. Check if deployment spec has an explicit command override
+	specCmd, _ := runCapture("kubectl", "get", fmt.Sprintf("deployment/%s", body.Deployment),
+		"-n", ns, "--context", kindContext(),
+		"-o", "jsonpath={.spec.template.spec.containers[0].command}")
+	hadCommand := strings.TrimSpace(specCmd) != "" && specCmd != "[]"
+
+	// 3. Read original command
+	origCmd := readContainerCommand(body.Deployment, pod, ns, container)
+	if origCmd == "" {
+		actionErr(w, "cannot determine container command", http.StatusInternalServerError)
+		return
+	}
+	if strings.Contains(origCmd, ".kindling-sync-wrapper") {
+		if inner := extractInnerCommand(origCmd); inner != "" {
+			origCmd = inner
+		}
+	}
+
+	// 4. Build debug command + patch deployment
+	debugCmdStr := buildDebugCommand(debugProf, runtimeKey, origCmd)
+	cName := containerNameForDeployment(body.Deployment, ns, "")
+	patch := fmt.Sprintf(`{"spec":{"template":{"metadata":{"annotations":{"kindling.dev/debug":"true"}},"spec":{"containers":[{"name":"%s","command":["sh","-c","%s"]}]}}}}`,
+		cName, strings.ReplaceAll(debugCmdStr, `"`, `\"`))
+
+	if err := run("kubectl", "patch", fmt.Sprintf("deployment/%s", body.Deployment),
+		"-n", ns, "--context", kindContext(),
+		"--type=strategic", "-p", patch); err != nil {
+		actionErr(w, "failed to patch deployment: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// 5. Wait for rollout
+	run("kubectl", "rollout", "status", fmt.Sprintf("deployment/%s", body.Deployment),
+		"-n", ns, "--context", kindContext(), "--timeout=120s")
+	time.Sleep(3 * time.Second)
+
+	// 6. Find a free local port
+	localPort := debugProf.Port
+	if ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", localPort)); err != nil {
+		ln2, _ := net.Listen("tcp", "127.0.0.1:0")
+		if ln2 != nil {
+			localPort = ln2.Addr().(*net.TCPAddr).Port
+			ln2.Close()
+		}
+	} else {
+		ln.Close()
+	}
+
+	// 7. Start port-forward
+	pfCmd := exec.Command("kubectl", "port-forward",
+		fmt.Sprintf("deployment/%s", body.Deployment),
+		fmt.Sprintf("%d:%d", localPort, debugProf.Port),
+		"-n", ns,
+		"--context", kindContext())
+	pfCmd.Start()
+
+	// 8. Save session
+	sess := &debugSessionInfo{
+		Deployment: body.Deployment,
+		Namespace:  ns,
+		Runtime:    debugProf.Name,
+		LocalPort:  localPort,
+		RemotePort: debugProf.Port,
+		OrigCmd:    origCmd,
+		HadCommand: hadCommand,
+		PfCmd:      pfCmd,
+	}
+	activeDebugSessions[key] = sess
+
+	// 9. Build launch config snippet
+	launchConfig := map[string]interface{}{
+		"name":    fmt.Sprintf("kindling: debug %s", body.Deployment),
+		"type":    debugProf.LaunchType,
+		"request": debugProf.Request,
+	}
+	for k, v := range debugProf.Extra {
+		launchConfig[k] = v
+	}
+	if _, ok := launchConfig["port"]; ok {
+		launchConfig["port"] = localPort
+	}
+	if connect, ok := launchConfig["connect"].(map[string]interface{}); ok {
+		connect["port"] = localPort
+		launchConfig["connect"] = connect
+	}
+
+	jsonResponse(w, map[string]interface{}{
+		"status":       "started",
+		"runtime":      debugProf.Name,
+		"localPort":    localPort,
+		"remotePort":   debugProf.Port,
+		"deployment":   body.Deployment,
+		"launchConfig": launchConfig,
+	})
+}
+
+func handleDebugStop(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Deployment string `json:"deployment"`
+		Namespace  string `json:"namespace"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		actionErr(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	ns := body.Namespace
+	if ns == "" {
+		ns = "default"
+	}
+	key := ns + "/" + body.Deployment
+
+	// Try in-memory session first
+	sess, ok := activeDebugSessions[key]
+	if ok {
+		// Kill port-forward
+		if sess.PfCmd != nil && sess.PfCmd.Process != nil {
+			sess.PfCmd.Process.Kill()
+		}
+	}
+
+	// Also try file-based state (from CLI-started sessions)
+	var origCmd string
+	hadCommand := true // assume true unless we know otherwise
+	if sess != nil {
+		origCmd = sess.OrigCmd
+		hadCommand = sess.HadCommand
+	}
+	if origCmd == "" {
+		if fileState, err := loadDebugState(body.Deployment); err == nil {
+			origCmd = fileState.OrigCmd
+			hadCommand = fileState.HadCommand
+			// Kill file-tracked port-forward too
+			if fileState.PfPid > 0 {
+				if proc, err := os.FindProcess(fileState.PfPid); err == nil {
+					proc.Kill()
+				}
+			}
+		}
+	}
+
+	// If we still don't have state, check if the deployment spec even has
+	// a command field. If it does, it's our debug wrapper and we need to
+	// figure out hadCommand; if it doesn't, nothing to restore.
+	if origCmd == "" {
+		specCmd, _ := runCapture("kubectl", "get", fmt.Sprintf("deployment/%s", body.Deployment),
+			"-n", ns, "--context", kindContext(),
+			"-o", "jsonpath={.spec.template.spec.containers[0].command}")
+		if strings.TrimSpace(specCmd) == "" || specCmd == "[]" {
+			// No command in spec — deployment is already using image defaults
+			// Just clean up the annotation
+			hadCommand = false
+			origCmd = "_none_"
+		} else {
+			// Has a command — try to strip debug wrapper
+			pod, podErr := findPodForDeployment(body.Deployment, ns)
+			if podErr == nil {
+				container := containerNameForDeployment(body.Deployment, ns, "")
+				current := readContainerCommand(body.Deployment, pod, ns, container)
+				origCmd = stripDebugWrapper(current)
+			}
+			// If the spec command looks like our debug wrapper (starts with pip/gem install
+			// or contains debugpy/dlv/rdbg), the original likely had no command override
+			if strings.Contains(specCmd, "debugpy") || strings.Contains(specCmd, "dlv") ||
+				strings.Contains(specCmd, "rdbg") || strings.Contains(specCmd, "--inspect=") {
+				hadCommand = false
+				origCmd = "_none_"
+			}
+		}
+	}
+
+	if origCmd == "" {
+		actionErr(w, "cannot determine original command to restore for "+body.Deployment, http.StatusInternalServerError)
+		return
+	}
+
+	// Restore original state
+	if !hadCommand {
+		// Check if there's actually a command to remove before patching
+		currentCmd, _ := runCapture("kubectl", "get", fmt.Sprintf("deployment/%s", body.Deployment),
+			"-n", ns, "--context", kindContext(),
+			"-o", "jsonpath={.spec.template.spec.containers[0].command}")
+		if strings.TrimSpace(currentCmd) != "" && currentCmd != "[]" {
+			run("kubectl", "patch", fmt.Sprintf("deployment/%s", body.Deployment),
+				"-n", ns, "--context", kindContext(),
+				"--type=json", "-p",
+				`[{"op":"remove","path":"/spec/template/spec/containers/0/command"}]`)
+		}
+	} else {
+		cName := containerNameForDeployment(body.Deployment, ns, "")
+		patch := fmt.Sprintf(`{"spec":{"template":{"metadata":{"annotations":{"kindling.dev/debug":null}},"spec":{"containers":[{"name":"%s","command":["sh","-c","%s"]}]}}}}`,
+			cName, strings.ReplaceAll(origCmd, `"`, `\"`))
+		run("kubectl", "patch", fmt.Sprintf("deployment/%s", body.Deployment),
+			"-n", ns, "--context", kindContext(),
+			"--type=strategic", "-p", patch)
+	}
+
+	run("kubectl", "rollout", "status", fmt.Sprintf("deployment/%s", body.Deployment),
+		"-n", ns, "--context", kindContext(), "--timeout=60s")
+
+	delete(activeDebugSessions, key)
+	clearDebugState(body.Deployment)
+
+	jsonResponse(w, map[string]interface{}{
+		"status":     "stopped",
+		"deployment": body.Deployment,
+	})
+}
+
+func handleDebugStatus(w http.ResponseWriter, r *http.Request) {
+	dep := r.URL.Query().Get("deployment")
+	ns := r.URL.Query().Get("namespace")
+	if ns == "" {
+		ns = "default"
+	}
+
+	if dep != "" {
+		key := ns + "/" + dep
+		// Check in-memory sessions
+		if sess, ok := activeDebugSessions[key]; ok {
+			jsonResponse(w, map[string]interface{}{
+				"active":     true,
+				"deployment": sess.Deployment,
+				"runtime":    sess.Runtime,
+				"localPort":  sess.LocalPort,
+			})
+			return
+		}
+		// Check file-based state (CLI-started sessions)
+		if fileState, err := loadDebugState(dep); err == nil {
+			jsonResponse(w, map[string]interface{}{
+				"active":     true,
+				"deployment": fileState.Deployment,
+				"runtime":    fileState.Runtime,
+				"localPort":  fileState.LocalPort,
+			})
+			return
+		}
+		// Check cluster annotation as last resort
+		ann, _ := runCapture("kubectl", "get", fmt.Sprintf("deployment/%s", dep),
+			"-n", ns, "--context", kindContext(),
+			"-o", "jsonpath={.spec.template.metadata.annotations.kindling\\.dev/debug}")
+		if strings.TrimSpace(ann) == "true" {
+			jsonResponse(w, map[string]interface{}{
+				"active":     true,
+				"deployment": dep,
+				"runtime":    "unknown",
+				"localPort":  0,
+			})
+			return
+		}
+		jsonResponse(w, map[string]interface{}{"active": false, "deployment": dep})
+		return
+	}
+
+	// Return all active sessions
+	sessions := []map[string]interface{}{}
+	for _, sess := range activeDebugSessions {
+		sessions = append(sessions, map[string]interface{}{
+			"deployment": sess.Deployment,
+			"namespace":  sess.Namespace,
+			"runtime":    sess.Runtime,
+			"localPort":  sess.LocalPort,
+		})
+	}
+	jsonResponse(w, map[string]interface{}{"sessions": sessions})
+}

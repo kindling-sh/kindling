@@ -109,6 +109,10 @@ func runDashboard(cmd *cobra.Command, args []string) error {
 	mux.HandleFunc("/api/proxy/services/", handleProxyServiceDetail) // GET — service detail (must come before /services)
 	mux.HandleFunc("/api/proxy/services", handleProxyServices)       // GET — list proxyable services
 
+	// ── API routes (debug) ──────────────────────────────────────
+	mux.HandleFunc("/api/debug", handleDebugAction)        // POST=start, DELETE=stop
+	mux.HandleFunc("/api/debug/status", handleDebugStatus) // GET — active debug sessions
+
 	// ── Static frontend ─────────────────────────────────────────
 	distFS, err := fs.Sub(dashboardFS, "dashboard-ui/dist")
 	if err != nil {
