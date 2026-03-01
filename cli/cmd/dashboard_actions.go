@@ -1329,7 +1329,7 @@ func handleGetTopologyStatus(w http.ResponseWriter, r *http.Request) {
 
 	// 1. Get all kindling-managed pods (includes app + dependency pods)
 	podOut, err := kubectlJSON("get", "pods", "--all-namespaces",
-		"-l", "app.kubernetes.io/managed-by=kindling", "-o", "json")
+		"-l", "app.kubernetes.io/managed-by=devstagingenvironment-operator", "-o", "json")
 	if err != nil {
 		// No pods — return empty
 		jsonResponse(w, result)
@@ -1368,7 +1368,7 @@ func handleGetTopologyStatus(w http.ResponseWriter, r *http.Request) {
 
 	// 2. Get all kindling-managed deployments for lastDeploy timestamps
 	depOut, _ := kubectlJSON("get", "deployments", "--all-namespaces",
-		"-l", "app.kubernetes.io/managed-by=kindling", "-o", "json")
+		"-l", "app.kubernetes.io/managed-by=devstagingenvironment-operator", "-o", "json")
 	deployTimestamps := make(map[string]string) // "partOf/component" → timestamp
 	if depOut != "" {
 		var depList struct {
@@ -1390,7 +1390,13 @@ func handleGetTopologyStatus(w http.ResponseWriter, r *http.Request) {
 			for _, d := range depList.Items {
 				partOf := d.Metadata.Labels["app.kubernetes.io/part-of"]
 				component := d.Metadata.Labels["app.kubernetes.io/component"]
-				key := partOf + "/" + component
+				appName := d.Metadata.Labels["app.kubernetes.io/name"]
+				// Build key: prefer part-of, fall back to name
+				owner := partOf
+				if owner == "" {
+					owner = appName
+				}
+				key := owner + "/" + component
 
 				// Use the most recent Progressing condition update time
 				ts := d.Metadata.CreationTimestamp
@@ -1405,21 +1411,26 @@ func handleGetTopologyStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 3. Map pods to topology node IDs
-	// Service nodes: id = "svc-<dseName>", labels: part-of=<dseName>, component=app (or empty)
+	// Service nodes: id = "svc-<dseName>", labels: name=<dseName>, component="" or "app"
 	// Dependency nodes: id = "dep-<depType>", labels: part-of=<dseName>, component=<depType>
 	for _, pod := range podList.Items {
 		partOf := pod.Metadata.Labels["app.kubernetes.io/part-of"]
 		component := pod.Metadata.Labels["app.kubernetes.io/component"]
-		if partOf == "" {
-			continue
-		}
+		appName := pod.Metadata.Labels["app.kubernetes.io/name"]
 
 		// Determine topology node ID
 		var nodeID string
-		if component == "" || component == "app" || component == partOf {
-			nodeID = "svc-" + partOf
-		} else {
+		if component != "" && component != "app" && component != appName && component != partOf {
+			// Dependency pod: has a component label like "redis", "postgres", etc.
 			nodeID = "dep-" + component
+		} else if partOf != "" {
+			// Service pod with part-of label
+			nodeID = "svc-" + partOf
+		} else if appName != "" {
+			// Service pod without part-of — use name label
+			nodeID = "svc-" + appName
+		} else {
+			continue
 		}
 
 		status, exists := result[nodeID]
@@ -1480,13 +1491,17 @@ func handleGetTopologyStatus(w http.ResponseWriter, r *http.Request) {
 		status.Phase = worstPhase(status.Phase, podPhase)
 
 		// Attach deploy timestamp
-		tsKey := partOf + "/" + component
+		owner := partOf
+		if owner == "" {
+			owner = appName
+		}
+		tsKey := owner + "/" + component
 		if ts, ok := deployTimestamps[tsKey]; ok && status.LastDeploy == "" {
 			status.LastDeploy = ts
 		}
 		// Also try without component for services
 		if status.LastDeploy == "" {
-			if ts, ok := deployTimestamps[partOf+"/"]; ok {
+			if ts, ok := deployTimestamps[owner+"/"]; ok {
 				status.LastDeploy = ts
 			}
 		}
@@ -1516,10 +1531,10 @@ func handleTopologyLogs(w http.ResponseWriter, r *http.Request) {
 	var labelSelector string
 	if strings.HasPrefix(nodeID, "svc-") {
 		name := strings.TrimPrefix(nodeID, "svc-")
-		labelSelector = "app.kubernetes.io/managed-by=kindling,app.kubernetes.io/part-of=" + name
+		labelSelector = "app.kubernetes.io/managed-by=devstagingenvironment-operator,app.kubernetes.io/name=" + name
 	} else if strings.HasPrefix(nodeID, "dep-") {
 		depType := strings.TrimPrefix(nodeID, "dep-")
-		labelSelector = "app.kubernetes.io/managed-by=kindling,app.kubernetes.io/component=" + depType
+		labelSelector = "app.kubernetes.io/managed-by=devstagingenvironment-operator,app.kubernetes.io/component=" + depType
 	} else {
 		jsonError(w, "invalid node ID format", 400)
 		return
@@ -1585,10 +1600,10 @@ func handleTopologyNodeDetail(w http.ResponseWriter, r *http.Request) {
 	var labelSelector string
 	if strings.HasPrefix(nodeID, "svc-") {
 		name := strings.TrimPrefix(nodeID, "svc-")
-		labelSelector = "app.kubernetes.io/managed-by=kindling,app.kubernetes.io/part-of=" + name
+		labelSelector = "app.kubernetes.io/managed-by=devstagingenvironment-operator,app.kubernetes.io/name=" + name
 	} else if strings.HasPrefix(nodeID, "dep-") {
 		depType := strings.TrimPrefix(nodeID, "dep-")
-		labelSelector = "app.kubernetes.io/managed-by=kindling,app.kubernetes.io/component=" + depType
+		labelSelector = "app.kubernetes.io/managed-by=devstagingenvironment-operator,app.kubernetes.io/component=" + depType
 	} else {
 		jsonError(w, "invalid node ID format", 400)
 		return
@@ -1980,6 +1995,10 @@ func handleGetTopology(w http.ResponseWriter, r *http.Request) {
 					Image    string `json:"image"`
 					Port     int    `json:"port"`
 					Replicas *int   `json:"replicas"`
+					Env      []struct {
+						Name  string `json:"name"`
+						Value string `json:"value"`
+					} `json:"env"`
 				} `json:"deployment"`
 				Service struct {
 					Port int `json:"port"`
@@ -2059,30 +2078,102 @@ func handleGetTopology(w http.ResponseWriter, r *http.Request) {
 				depY += 160
 			}
 
+			// Determine the env var label for this dependency edge
+			depLabel := dep.EnvVarName
+			if depLabel == "" {
+				// Fall back to well-known auto-injected env var names
+				depAutoEnv := map[string]string{
+					"postgres": "DATABASE_URL", "redis": "REDIS_URL",
+					"mysql": "DATABASE_URL", "mongodb": "MONGO_URL",
+					"rabbitmq": "AMQP_URL", "minio": "S3_ENDPOINT",
+					"elasticsearch": "ELASTICSEARCH_URL", "kafka": "KAFKA_BROKER_URL",
+					"nats": "NATS_URL", "memcached": "MEMCACHED_URL",
+					"cassandra": "CASSANDRA_URL", "consul": "CONSUL_URL",
+					"vault": "VAULT_ADDR", "influxdb": "INFLUXDB_URL",
+					"jaeger": "JAEGER_URL",
+				}
+				depLabel = depAutoEnv[dep.Type]
+			}
 			graph.Edges = append(graph.Edges, topologyEdge{
 				ID:     fmt.Sprintf("e-%s-%s", svcID, depID),
 				Type:   "connection",
 				Source: svcID,
 				Target: depID,
+				Data: map[string]interface{}{
+					"_label": depLabel,
+				},
 			})
+		}
+	}
+
+	// Reconstruct service-to-service edges from deployed env vars.
+	// Pattern: if DSE "A" has env var *_URL=http://<other-svc-name>:<port>,
+	// and "svc-<other-svc-name>" exists, create a service-edge.
+	svcNodeIDs := make(map[string]bool)    // set of service node IDs
+	svcNameToID := make(map[string]string) // svc name → node ID
+	for _, n := range graph.Nodes {
+		if n.Data.Kind == "service" {
+			svcNodeIDs[n.ID] = true
+			svcNameToID[n.Data.DSEName] = n.ID
+		}
+	}
+	for _, dse := range dseList.Items {
+		srcID := "svc-" + dse.Metadata.Name
+		for _, ev := range dse.Spec.Deployment.Env {
+			if !strings.HasSuffix(ev.Name, "_URL") {
+				continue
+			}
+			// Try to match the value against another service: http://<name>:<port>
+			for targetName, targetID := range svcNameToID {
+				if targetID == srcID {
+					continue
+				}
+				if strings.Contains(ev.Value, "://"+targetName+":") {
+					edgeID := fmt.Sprintf("e-%s-%s", srcID, targetID)
+					graph.Edges = append(graph.Edges, topologyEdge{
+						ID:     edgeID,
+						Type:   "service-edge",
+						Source: srcID,
+						Target: targetID,
+						Data: map[string]interface{}{
+							"_label":    ev.Name,
+							"_envVar":   ev.Name,
+							"_envValue": ev.Value,
+						},
+					})
+					break
+				}
+			}
 		}
 	}
 
 	// Merge in any persisted canvas nodes/edges that aren't already in the cluster
 	canvas := loadCanvas()
 	clusterNodeIDs := make(map[string]bool)
+	clusterDepTypes := make(map[string]bool) // track dep types already from cluster
 	for _, n := range graph.Nodes {
 		clusterNodeIDs[n.ID] = true
-	}
-	// Track which canvas node IDs we actually merge in
-	mergedNodeIDs := make(map[string]bool)
-	for _, cn := range canvas.Nodes {
-		if !clusterNodeIDs[cn.ID] {
-			graph.Nodes = append(graph.Nodes, cn)
-			mergedNodeIDs[cn.ID] = true
+		if n.Data.Kind == "dependency" && n.Data.DepType != "" {
+			clusterDepTypes[n.Data.DepType] = true
 		}
 	}
-	// Merge canvas edges whose source and target both exist
+	// Track which canvas node IDs we actually merge in
+	// Map canvas dep IDs to cluster dep IDs for edge remapping
+	canvasToCluster := make(map[string]string) // old canvas ID → cluster ID
+	mergedNodeIDs := make(map[string]bool)
+	for _, cn := range canvas.Nodes {
+		if clusterNodeIDs[cn.ID] {
+			continue // exact ID already in cluster
+		}
+		// Skip canvas dependency nodes whose depType already exists from cluster
+		if cn.Data.Kind == "dependency" && cn.Data.DepType != "" && clusterDepTypes[cn.Data.DepType] {
+			canvasToCluster[cn.ID] = "dep-" + cn.Data.DepType
+			continue
+		}
+		graph.Nodes = append(graph.Nodes, cn)
+		mergedNodeIDs[cn.ID] = true
+	}
+	// Merge canvas edges whose source and target both exist (after remapping)
 	allNodeIDs := make(map[string]bool)
 	for id := range clusterNodeIDs {
 		allNodeIDs[id] = true
@@ -2091,8 +2182,29 @@ func handleGetTopology(w http.ResponseWriter, r *http.Request) {
 		allNodeIDs[id] = true
 	}
 	for _, ce := range canvas.Edges {
+		// Remap canvas dep IDs to cluster IDs
+		src := ce.Source
+		tgt := ce.Target
+		if mapped, ok := canvasToCluster[src]; ok {
+			src = mapped
+		}
+		if mapped, ok := canvasToCluster[tgt]; ok {
+			tgt = mapped
+		}
+		ce.Source = src
+		ce.Target = tgt
 		if allNodeIDs[ce.Source] && allNodeIDs[ce.Target] {
-			graph.Edges = append(graph.Edges, ce)
+			// Skip if this edge duplicates one already in the graph
+			dup := false
+			for _, existing := range graph.Edges {
+				if existing.Source == ce.Source && existing.Target == ce.Target {
+					dup = true
+					break
+				}
+			}
+			if !dup {
+				graph.Edges = append(graph.Edges, ce)
+			}
 		}
 	}
 
@@ -2221,6 +2333,14 @@ func handleDeployTopology(w http.ResponseWriter, r *http.Request) {
 				hasDeployable = true
 				break
 			}
+			if len(b.svcEnvVars) > 0 && svcEnvVarsChanged(b.service, b.svcEnvVars) {
+				hasDeployable = true
+				break
+			}
+			if depsChanged(b.service, b.dependencies) {
+				hasDeployable = true
+				break
+			}
 			for _, d := range b.dependencies {
 				if d.Data.IsNew || d.Data.IsDirty {
 					hasDeployable = true
@@ -2237,18 +2357,35 @@ func handleDeployTopology(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Only deploy bundles that contain at least one new or dirty node
+	// Only deploy bundles that contain at least one new or dirty node,
+	// or that have new service-to-service env vars or new dependencies
+	// not yet in the cluster.
 	var deployBundles []serviceBundle
 	for _, b := range bundles {
 		if b.service.Data.IsNew || b.service.Data.IsDirty {
 			deployBundles = append(deployBundles, b)
 			continue
 		}
+		depChanged := false
 		for _, d := range b.dependencies {
 			if d.Data.IsNew || d.Data.IsDirty {
-				deployBundles = append(deployBundles, b)
+				depChanged = true
 				break
 			}
+		}
+		if depChanged {
+			deployBundles = append(deployBundles, b)
+			continue
+		}
+		// Check if service-to-service env vars differ from what's deployed
+		if len(b.svcEnvVars) > 0 && svcEnvVarsChanged(b.service, b.svcEnvVars) {
+			deployBundles = append(deployBundles, b)
+			continue
+		}
+		// Check if dependency connections differ from what's deployed
+		if depsChanged(b.service, b.dependencies) {
+			deployBundles = append(deployBundles, b)
+			continue
 		}
 	}
 
@@ -2395,6 +2532,134 @@ func existingDSEIngressYAML(dseName string) string {
 	return sb.String()
 }
 
+// svcEnvVarsChanged checks whether the given service-to-service env vars
+// differ from what is already deployed in the cluster DSE.
+func svcEnvVarsChanged(svc topologyNode, envVars []svcEnvVar) bool {
+	dseName := svc.Data.DSEName
+	if dseName == "" {
+		dseName = strings.ToLower(strings.ReplaceAll(svc.Data.Label, " ", "-"))
+	}
+	out, err := kubectlJSON("get", "devstagingenvironment", dseName, "-n", "default", "-o", "json")
+	if err != nil {
+		// DSE doesn't exist — env vars are new
+		return true
+	}
+	var dse struct {
+		Spec struct {
+			Deployment struct {
+				Env []struct {
+					Name  string `json:"name"`
+					Value string `json:"value"`
+				} `json:"env"`
+			} `json:"deployment"`
+		} `json:"spec"`
+	}
+	if err := json.Unmarshal([]byte(out), &dse); err != nil {
+		return true
+	}
+	// Build a map of existing env vars
+	existing := make(map[string]string)
+	for _, e := range dse.Spec.Deployment.Env {
+		existing[e.Name] = e.Value
+	}
+	// Check if any desired env var is missing or different
+	for _, ev := range envVars {
+		if val, ok := existing[ev.Name]; !ok || val != ev.Value {
+			return true
+		}
+	}
+	return false
+}
+
+// depsChanged checks whether the given bundle's dependency list differs from
+// what is already deployed in the cluster DSE. Returns true when a new
+// dependency type has been connected that isn't in the deployed spec.
+func depsChanged(svc topologyNode, deps []topologyNode) bool {
+	if len(deps) == 0 {
+		return false
+	}
+	dseName := svc.Data.DSEName
+	if dseName == "" {
+		dseName = strings.ToLower(strings.ReplaceAll(svc.Data.Label, " ", "-"))
+	}
+	out, err := kubectlJSON("get", "devstagingenvironment", dseName, "-n", "default", "-o", "json")
+	if err != nil {
+		// DSE doesn't exist yet — deps are new
+		return true
+	}
+	var dse struct {
+		Spec struct {
+			Dependencies []struct {
+				Type string `json:"type"`
+			} `json:"dependencies"`
+		} `json:"spec"`
+	}
+	if err := json.Unmarshal([]byte(out), &dse); err != nil {
+		return true
+	}
+	existing := make(map[string]bool)
+	for _, d := range dse.Spec.Dependencies {
+		existing[d.Type] = true
+	}
+	for _, d := range deps {
+		if d.Data.DepType != "" && !existing[d.Data.DepType] {
+			return true
+		}
+	}
+	return false
+}
+
+// mergeEnvVars merges service-to-service env vars with any existing env vars
+// from the deployed DSE, so user-set env vars are preserved.
+func mergeEnvVars(dseName string, svcVars []svcEnvVar) []svcEnvVar {
+	// Fetch existing env vars from the cluster
+	out, err := kubectlJSON("get", "devstagingenvironment", dseName, "-n", "default", "-o", "json")
+	if err != nil {
+		return svcVars // new DSE, just use svc vars
+	}
+	var dse struct {
+		Spec struct {
+			Deployment struct {
+				Env []struct {
+					Name  string `json:"name"`
+					Value string `json:"value"`
+				} `json:"env"`
+			} `json:"deployment"`
+		} `json:"spec"`
+	}
+	if err := json.Unmarshal([]byte(out), &dse); err != nil {
+		return svcVars
+	}
+
+	// Start with existing vars, then override/add svc-to-svc vars
+	newVarMap := make(map[string]string)
+	for _, ev := range svcVars {
+		newVarMap[ev.Name] = ev.Value
+	}
+
+	var result []svcEnvVar
+	seen := make(map[string]bool)
+
+	// Keep existing vars, updating any that are overridden by svc-to-svc
+	for _, e := range dse.Spec.Deployment.Env {
+		if val, ok := newVarMap[e.Name]; ok {
+			result = append(result, svcEnvVar{Name: e.Name, Value: val})
+		} else {
+			result = append(result, svcEnvVar{Name: e.Name, Value: e.Value})
+		}
+		seen[e.Name] = true
+	}
+
+	// Add any new svc-to-svc vars not already present
+	for _, ev := range svcVars {
+		if !seen[ev.Name] {
+			result = append(result, ev)
+		}
+	}
+
+	return result
+}
+
 // buildDSEYAML generates a DevStagingEnvironment YAML manifest from a
 // service node and its connected dependency nodes.
 func buildDSEYAML(svc topologyNode, deps []topologyNode, envVars []svcEnvVar) string {
@@ -2429,9 +2694,11 @@ spec:
 `, name, image, port, replicas))
 
 	// Service-to-service env vars (injected into this service's container)
-	if len(envVars) > 0 {
+	// Merge with any existing env vars from the deployed DSE.
+	allEnvVars := mergeEnvVars(name, envVars)
+	if len(allEnvVars) > 0 {
 		sb.WriteString("    env:\n")
-		for _, ev := range envVars {
+		for _, ev := range allEnvVars {
 			sb.WriteString(fmt.Sprintf("    - name: %s\n      value: \"%s\"\n", ev.Name, ev.Value))
 		}
 	}
@@ -2850,6 +3117,106 @@ func handleCheckPath(w http.ResponseWriter, r *http.Request) {
 		"has_dockerfile": hasDockerfile,
 		"language":       lang,
 	})
+}
+
+// ── POST /api/topology/edge/remove ──────────────────────────────
+// Removes an env var or dependency from a deployed DSE when an edge
+// is deleted in the topology editor. This keeps the cluster in sync
+// with the canvas state without requiring a full redeploy.
+//
+// Body: { "dseName": "my-api", "envVar": "RUNNER_URL" }         — svc-to-svc
+//   or: { "dseName": "my-api", "depType": "mongodb" }           — svc-to-dep
+
+func handleRemoveEdge(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) {
+		return
+	}
+
+	var body struct {
+		DSEName string `json:"dseName"`
+		EnvVar  string `json:"envVar,omitempty"`  // for svc-to-svc edges
+		DepType string `json:"depType,omitempty"` // for svc-to-dep edges
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		actionErr(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if body.DSEName == "" {
+		actionErr(w, "dseName is required", http.StatusBadRequest)
+		return
+	}
+
+	// Fetch the current DSE
+	out, err := kubectlJSON("get", "devstagingenvironment", body.DSEName, "-n", "default", "-o", "json")
+	if err != nil {
+		// DSE doesn't exist — nothing to clean up
+		actionOK(w, "no deployed DSE to update")
+		return
+	}
+
+	var dse struct {
+		Spec struct {
+			Deployment struct {
+				Env []struct {
+					Name  string `json:"name"`
+					Value string `json:"value"`
+				} `json:"env"`
+			} `json:"deployment"`
+			Dependencies []struct {
+				Type string `json:"type"`
+			} `json:"dependencies"`
+		} `json:"spec"`
+	}
+	if err := json.Unmarshal([]byte(out), &dse); err != nil {
+		actionErr(w, "failed to parse DSE", http.StatusInternalServerError)
+		return
+	}
+
+	var patches []string
+
+	// Remove env var (svc-to-svc)
+	if body.EnvVar != "" {
+		for i, e := range dse.Spec.Deployment.Env {
+			if e.Name == body.EnvVar {
+				patches = append(patches, fmt.Sprintf(`{"op":"remove","path":"/spec/deployment/env/%d"}`, i))
+				log.Printf("[edge-remove] removing env var %s from DSE %s", body.EnvVar, body.DSEName)
+				break
+			}
+		}
+	}
+
+	// Remove dependency (svc-to-dep)
+	if body.DepType != "" {
+		for i, d := range dse.Spec.Dependencies {
+			if d.Type == body.DepType {
+				patches = append(patches, fmt.Sprintf(`{"op":"remove","path":"/spec/dependencies/%d"}`, i))
+				log.Printf("[edge-remove] removing dependency %s from DSE %s", body.DepType, body.DSEName)
+				break
+			}
+		}
+	}
+
+	if len(patches) == 0 {
+		actionOK(w, "no changes needed")
+		return
+	}
+
+	patchJSON := "[" + strings.Join(patches, ",") + "]"
+	_, err = core.Kubectl(clusterName, "patch", "devstagingenvironment", body.DSEName,
+		"-n", "default", "--type=json", "-p", patchJSON)
+	if err != nil {
+		log.Printf("[edge-remove] patch failed for DSE %s: %v", body.DSEName, err)
+		actionErr(w, fmt.Sprintf("failed to patch DSE: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	var desc string
+	if body.EnvVar != "" {
+		desc = fmt.Sprintf("Removed %s from %s", body.EnvVar, body.DSEName)
+	} else {
+		desc = fmt.Sprintf("Removed %s dependency from %s", body.DepType, body.DSEName)
+	}
+	actionOK(w, desc)
 }
 
 // ── POST /api/topology/cleanup ──────────────────────────────────

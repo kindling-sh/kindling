@@ -220,6 +220,14 @@ export async function cleanupService(body: {
   return apiPost('/api/topology/cleanup', body);
 }
 
+export async function removeEdgeFromCluster(body: {
+  dseName: string;
+  envVar?: string;
+  depType?: string;
+}): Promise<ActionResult> {
+  return apiPost('/api/topology/edge/remove', body);
+}
+
 export async function saveCanvas(overlay: { nodes: unknown[]; edges: unknown[]; positions?: Record<string, { x: number; y: number }> }): Promise<{ ok: boolean }> {
   return apiPost('/api/topology/canvas', overlay);
 }

@@ -485,13 +485,18 @@ func handleRuntimeDetect(w http.ResponseWriter, r *http.Request) {
 // ── /api/load-context — resolve local source directories ────────
 // Returns a list of subdirectories in the working directory that look
 // like service source roots (contain Dockerfile, go.mod, package.json, etc.)
+// Each entry includes the correct build context and Dockerfile path,
+// accounting for Dockerfiles that expect the repo root as build context.
 
 func handleLoadContext(w http.ResponseWriter, r *http.Request) {
 	type serviceDir struct {
-		Name          string `json:"name"`
-		Path          string `json:"path"`
-		HasDockerfile bool   `json:"has_dockerfile"`
-		Language      string `json:"language"`
+		Name           string `json:"name"`
+		Path           string `json:"path"`
+		HasDockerfile  bool   `json:"has_dockerfile"`
+		Language       string `json:"language"`
+		ContextPath    string `json:"context_path"`    // correct build context (may be repo root)
+		DockerfilePath string `json:"dockerfile_path"` // Dockerfile path relative to context (if non-default)
+		Warning        string `json:"warning"`         // user-facing guidance if Dockerfile needs restructuring
 	}
 
 	cwd, _ := os.Getwd()
@@ -509,20 +514,67 @@ func handleLoadContext(w http.ResponseWriter, r *http.Request) {
 		dirPath := filepath.Join(cwd, e.Name())
 
 		// Check for Dockerfile
-		_, hasDF := os.Stat(filepath.Join(dirPath, "Dockerfile"))
+		dfPath := filepath.Join(dirPath, "Dockerfile")
+		_, hasDF := os.Stat(dfPath)
 
 		// Detect language
 		lang := detectLanguageFromSource(dirPath)
 
 		if hasDF == nil || lang != "" {
+			ctxPath := dirPath
+			dfField := ""
+			warning := ""
+			if hasDF == nil && dockerfileNeedsRootContext(dfPath, e.Name()) {
+				ctxPath = cwd
+				dfField = dfPath
+				warning = fmt.Sprintf("Dockerfile references '%s/' in COPY/ADD — using repo root as build context. "+
+					"For faster per-service rebuilds, restructure the Dockerfile to be self-contained "+
+					"(use COPY . . instead of COPY %s/ .).", e.Name(), e.Name())
+			}
 			dirs = append(dirs, serviceDir{
-				Name:          e.Name(),
-				Path:          dirPath,
-				HasDockerfile: hasDF == nil,
-				Language:      lang,
+				Name:           e.Name(),
+				Path:           dirPath,
+				HasDockerfile:  hasDF == nil,
+				Language:       lang,
+				ContextPath:    ctxPath,
+				DockerfilePath: dfField,
+				Warning:        warning,
 			})
 		}
 	}
 
 	jsonResponse(w, dirs)
+}
+
+// dockerfileNeedsRootContext returns true if the Dockerfile's COPY / ADD
+// instructions reference the service directory by name (e.g. "COPY agent/..."),
+// indicating it was designed to build with the repo root as context rather
+// than the service subdirectory.
+func dockerfileNeedsRootContext(dockerfilePath, serviceDirName string) bool {
+	data, err := os.ReadFile(dockerfilePath)
+	if err != nil {
+		return false
+	}
+	prefix := serviceDirName + "/"
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		upper := strings.ToUpper(line)
+		if !strings.HasPrefix(upper, "COPY ") && !strings.HasPrefix(upper, "ADD ") {
+			continue
+		}
+		parts := strings.Fields(line)
+		for _, p := range parts[1:] {
+			if strings.HasPrefix(p, "--") {
+				continue
+			}
+			if strings.HasPrefix(p, prefix) || p == serviceDirName {
+				return true
+			}
+			break
+		}
+	}
+	return false
 }

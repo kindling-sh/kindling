@@ -168,6 +168,20 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Dockerfile build-context warnings
+	if len(repoCtx.dockerfileWarnings) > 0 {
+		fmt.Fprintln(os.Stderr)
+		warn(fmt.Sprintf("%sDockerfile build-context issue(s) detected:%s", colorBold, colorReset))
+		for _, w := range repoCtx.dockerfileWarnings {
+			fmt.Fprintf(os.Stderr, "       ⚠  %s\n", w)
+		}
+		fmt.Fprintln(os.Stderr)
+		step("💡", "Each service's Dockerfile should be self-contained — buildable with its own")
+		fmt.Fprintf(os.Stderr, "       directory as the Docker build context. Use COPY . . instead of\n")
+		fmt.Fprintf(os.Stderr, "       COPY <service-dir>/ . inside a service Dockerfile.\n")
+		fmt.Fprintf(os.Stderr, "       This enables 'kindling load' and per-service rebuilds to work correctly.\n")
+	}
+
 	// ── Call the AI ──────────────────────────────────────────────
 	header("Generating workflow with AI")
 	step("🤖", fmt.Sprintf("Provider: %s, Model: %s", genProvider, genModel))
@@ -256,6 +270,9 @@ type repoContext struct {
 	vectorStores      []string // detected vector store dependencies
 	workerProcesses   []string // detected background worker patterns
 	interServiceCalls []string // detected inter-service HTTP/gRPC calls
+
+	// Dockerfile build-context issues
+	dockerfileWarnings []string // Dockerfiles that need repo-root context
 }
 
 // Directories to skip during scanning (built from the shared skip list).
@@ -535,6 +552,11 @@ func scanRepo(repoPath string) (*repoContext, error) {
 	ctx.workerProcesses = detectWorkerProcesses(ctx)
 	ctx.interServiceCalls = detectInterServiceCalls(ctx)
 
+	// Detect Dockerfiles that reference their own directory name in COPY/ADD,
+	// meaning they expect the repo root as build context instead of being
+	// self-contained within the service subdirectory.
+	ctx.dockerfileWarnings = detectDockerfileContextIssues(ctx)
+
 	return ctx, nil
 }
 
@@ -755,6 +777,19 @@ func buildGeneratePrompt(ctx *repoContext, provider ci.Provider) (system, user s
 		}
 	}
 
+	// Dockerfile build-context issues
+	if len(ctx.dockerfileWarnings) > 0 {
+		b.WriteString("## Detected Dockerfile build-context issues\n\n")
+		b.WriteString("The following Dockerfiles reference their own service directory name in COPY/ADD instructions,\n")
+		b.WriteString("meaning they expect the repo root as build context. This breaks per-service rebuilds.\n\n")
+		for _, w := range ctx.dockerfileWarnings {
+			b.WriteString(fmt.Sprintf("- %s\n", w))
+		}
+		b.WriteString("\n**DIRECTIVE:** For each affected Dockerfile, set `context: ${{ github.workspace }}` (the repo root)\n")
+		b.WriteString("and set `dockerfile: <service>/Dockerfile` in the build step. The system prompt\n")
+		b.WriteString("already covers this rule — apply it here.\n\n")
+	}
+
 	singleExample, multiExample := wfGen.ExampleWorkflows()
 
 	// Reference examples
@@ -877,6 +912,49 @@ var credentialExactNames = map[string]bool{
 	"MISTRAL_API_KEY":       true,
 	"TOGETHER_API_KEY":      true,
 	"REPLICATE_API_TOKEN":   true,
+}
+
+// detectDockerfileContextIssues checks each Dockerfile that lives inside a
+// service subdirectory for COPY/ADD instructions that reference the service's
+// own directory name (e.g. "COPY agent/ agent/" inside agent/Dockerfile).
+// This pattern means the Dockerfile was written to be built from the repo root
+// rather than being self-contained within its service directory, which breaks
+// per-service builds like 'kindling load'.
+func detectDockerfileContextIssues(ctx *repoContext) []string {
+	var warnings []string
+	for relPath, content := range ctx.dockerfiles {
+		// Only check Dockerfiles inside subdirectories (e.g. "agent/Dockerfile")
+		parts := strings.Split(relPath, string(filepath.Separator))
+		if len(parts) < 2 {
+			continue // root Dockerfile — no issue
+		}
+		serviceDirName := parts[0]
+		prefix := serviceDirName + "/"
+
+		for _, line := range strings.Split(content, "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			upper := strings.ToUpper(line)
+			if !strings.HasPrefix(upper, "COPY ") && !strings.HasPrefix(upper, "ADD ") {
+				continue
+			}
+			fields := strings.Fields(line)
+			for _, f := range fields[1:] {
+				if strings.HasPrefix(f, "--") {
+					continue // skip flags like --from=builder
+				}
+				if strings.HasPrefix(f, prefix) || f == serviceDirName {
+					warnings = append(warnings,
+						fmt.Sprintf("%s references '%s' — expects repo root as build context, not %s/",
+							relPath, f, serviceDirName))
+				}
+				break // only check first non-flag token (the source path)
+			}
+		}
+	}
+	return warnings
 }
 
 // detectExternalSecrets scans source files, Dockerfiles, compose files, and .env

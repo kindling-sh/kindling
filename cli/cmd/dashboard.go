@@ -99,6 +99,7 @@ func runDashboard(cmd *cobra.Command, args []string) error {
 	mux.HandleFunc("/api/topology/deploy", handleDeployTopology)          // POST — deploy topology
 	mux.HandleFunc("/api/topology/scaffold", handleScaffoldService)       // POST — scaffold service dir
 	mux.HandleFunc("/api/topology/cleanup", handleCleanupService)         // POST — cleanup deleted service
+	mux.HandleFunc("/api/topology/edge/remove", handleRemoveEdge)         // POST — remove edge env/dep from DSE
 	mux.HandleFunc("/api/topology/canvas", handleSaveCanvas)              // POST — persist canvas overlay
 	mux.HandleFunc("/api/topology/workspace", handleWorkspaceInfo)        // GET — repo root + service dirs
 	mux.HandleFunc("/api/topology/check-path", handleCheckPath)           // GET — check dir existence

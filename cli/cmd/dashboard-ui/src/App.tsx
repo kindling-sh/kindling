@@ -96,6 +96,16 @@ function App() {
   const [activePage, setActivePage] = useState<Page>('overview');
   const ActiveComponent = PAGES[activePage];
 
+  // Listen for cross-page navigation events (e.g. from topology → environments)
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const page = (e as CustomEvent<Page>).detail;
+      if (page && page in PAGES) setActivePage(page);
+    };
+    window.addEventListener('navigate', handler);
+    return () => window.removeEventListener('navigate', handler);
+  }, []);
+
   return (
     <ToastProvider>
       <div className="app">

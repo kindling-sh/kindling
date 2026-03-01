@@ -1882,3 +1882,89 @@ worker: celery -A app worker
 		t.Error("scanRepo should collect Procfile as a dependency manifest")
 	}
 }
+
+// ────────────────────────────────────────────────────────────────────────────
+// detectDockerfileContextIssues
+// ────────────────────────────────────────────────────────────────────────────
+
+func TestDetectDockerfileContextIssues_RootContextDockerfile(t *testing.T) {
+	// Dockerfile inside agent/ that references "agent/" — needs repo root
+	ctx := &repoContext{
+		dockerfiles: map[string]string{
+			filepath.Join("agent", "Dockerfile"): `FROM python:3.12-slim
+WORKDIR /app
+COPY agent/requirements.txt ./requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+COPY shared/ shared/
+COPY agent/ agent/
+CMD ["python", "-m", "agent.worker"]`,
+		},
+	}
+	warnings := detectDockerfileContextIssues(ctx)
+	if len(warnings) == 0 {
+		t.Fatal("expected warnings for root-context Dockerfile, got none")
+	}
+	found := false
+	for _, w := range warnings {
+		if strings.Contains(w, "agent") && strings.Contains(w, "repo root") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected warning about agent/ Dockerfile, got: %v", warnings)
+	}
+}
+
+func TestDetectDockerfileContextIssues_SelfContainedDockerfile(t *testing.T) {
+	// Dockerfile inside api/ that only COPYs from current dir — self-contained
+	ctx := &repoContext{
+		dockerfiles: map[string]string{
+			filepath.Join("api", "Dockerfile"): `FROM node:20-slim
+WORKDIR /app
+COPY package*.json ./
+RUN npm install
+COPY . .
+CMD ["node", "index.js"]`,
+		},
+	}
+	warnings := detectDockerfileContextIssues(ctx)
+	if len(warnings) != 0 {
+		t.Errorf("expected no warnings for self-contained Dockerfile, got: %v", warnings)
+	}
+}
+
+func TestDetectDockerfileContextIssues_RootDockerfile(t *testing.T) {
+	// Dockerfile at the repo root — no issue
+	ctx := &repoContext{
+		dockerfiles: map[string]string{
+			"Dockerfile": `FROM python:3.12-slim
+WORKDIR /app
+COPY . .
+CMD ["python", "app.py"]`,
+		},
+	}
+	warnings := detectDockerfileContextIssues(ctx)
+	if len(warnings) != 0 {
+		t.Errorf("expected no warnings for root Dockerfile, got: %v", warnings)
+	}
+}
+
+func TestDetectDockerfileContextIssues_MultiStageNoFalsePositive(t *testing.T) {
+	// COPY --from=builder should not trigger a false positive
+	ctx := &repoContext{
+		dockerfiles: map[string]string{
+			filepath.Join("web", "Dockerfile"): `FROM node:20 AS builder
+WORKDIR /app
+COPY . .
+RUN npm run build
+
+FROM node:20-slim
+COPY --from=builder /app/dist ./dist
+CMD ["node", "dist/index.js"]`,
+		},
+	}
+	warnings := detectDockerfileContextIssues(ctx)
+	if len(warnings) != 0 {
+		t.Errorf("expected no warnings for multi-stage COPY --from, got: %v", warnings)
+	}
+}

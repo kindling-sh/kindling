@@ -1,6 +1,8 @@
-import { useState, useEffect } from 'react';
-import { useApi, apiPost, apiDelete, fetchRuntimeInfo, fetchSyncStatus, fetchServiceDirs } from '../api';
-import type { K8sList, DSE, RuntimeInfo, SyncStatus, ServiceDir } from '../types';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { useApi, apiPost, apiDelete, fetchRuntimeInfo, fetchSyncStatus, fetchServiceDirs, fetchTopologyLogs } from '../api';
+import type { K8sList, DSE, RuntimeInfo, SyncStatus, ServiceDir, TopologyLogEntry } from '../types';
+import { DEP_META } from '../types';
+import { DEP_ICONS } from '../icons';
 import { StatusBadge, ConditionsTable, EmptyState, TimeAgo } from './shared';
 import { ActionButton, ActionModal, ConfirmDialog, useToast, ResultOutput } from './actions';
 import type { ActionResult } from '../api';
@@ -115,6 +117,7 @@ function DSECard({ dse, onDelete }: { dse: DSE; onDelete: (ns: string, name: str
   // Modal state
   const [showSync, setShowSync] = useState(false);
   const [showLoad, setShowLoad] = useState(false);
+  const [showLogs, setShowLogs] = useState(false);
 
   // Sync status polling
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
@@ -201,23 +204,21 @@ function DSECard({ dse, onDelete }: { dse: DSE; onDelete: (ns: string, name: str
               )}
             </div>
           )}
-
-          {dse.spec.dependencies && dse.spec.dependencies.length > 0 && (
-            <div>
-              <h4>Dependencies</h4>
-              {dse.spec.dependencies.map((dep, i) => (
-                <div key={i} className="stat-row">
-                  <span className="label">{dep.type}{dep.version ? `:${dep.version}` : ''}</span>
-                  <span className="value mono">{dep.envVarName || '—'} → :{dep.port || 'default'}</span>
-                </div>
-              ))}
-              <div className="stat-row">
-                <span className="label">Status</span>
-                <StatusBadge ok={!!s?.dependenciesReady} label={s?.dependenciesReady ? 'Ready' : 'Pending'} />
-              </div>
-            </div>
-          )}
         </div>
+
+        {dse.spec.dependencies && dse.spec.dependencies.length > 0 && (
+          <div className="dse-deps-section">
+            <div className="dse-deps-header">
+              <span className="dse-deps-label">Dependencies</span>
+              <StatusBadge ok={!!s?.dependenciesReady} label={s?.dependenciesReady ? 'Ready' : 'Pending'} />
+            </div>
+            <div className="dse-deps-list">
+              {dse.spec.dependencies.map((dep, i) => (
+                <DepChip key={i} dep={dep} ready={!!s?.dependenciesReady} />
+              ))}
+            </div>
+          </div>
+        )}
 
         {isSyncRunning && (
           <div className="sync-status-bar">
@@ -250,6 +251,12 @@ function DSECard({ dse, onDelete }: { dse: DSE; onDelete: (ns: string, name: str
       <div className="card-footer">
         <TimeAgo timestamp={dse.metadata.creationTimestamp} />
         <div className="card-footer-actions">
+          <ActionButton
+            icon={showLogs ? '✕' : '📋'}
+            label={showLogs ? 'Hide Logs' : 'Logs'}
+            onClick={() => setShowLogs(!showLogs)}
+            small
+          />
           {runtime?.sync_supported && !isSyncRunning && (
             <ActionButton icon="⚡" label="Sync" onClick={() => setShowSync(true)} small />
           )}
@@ -260,6 +267,10 @@ function DSECard({ dse, onDelete }: { dse: DSE; onDelete: (ns: string, name: str
           <ActionButton icon="✕" label="Delete" onClick={() => onDelete(ns, name)} danger small />
         </div>
       </div>
+
+      {showLogs && (
+        <DSELogViewer nodeId={`svc-${name}`} />
+      )}
 
       {showSync && (
         <SyncModal
@@ -289,6 +300,130 @@ function DSECard({ dse, onDelete }: { dse: DSE; onDelete: (ns: string, name: str
           }}
         />
       )}
+    </div>
+  );
+}
+
+// ── Dependency Chip ─────────────────────────────────────────────
+
+function DepChip({ dep, ready }: { dep: { type: string; version?: string; port?: number; envVarName?: string }; ready: boolean }) {
+  const meta = DEP_META[dep.type as keyof typeof DEP_META];
+  const color = meta?.color || 'var(--accent)';
+  const envVar = dep.envVarName || meta?.envVar || '';
+  const SvgIcon = DEP_ICONS[dep.type];
+  return (
+    <div className="dse-dep-chip">
+      <span className="dse-dep-icon" style={{ background: color }}>
+        {SvgIcon ? <SvgIcon /> : (meta?.icon || '◆')}
+      </span>
+      <div className="dse-dep-info">
+        <div className="dse-dep-name">
+          {meta?.label || dep.type}
+          {dep.version && <span className="dse-dep-ver">{dep.version}</span>}
+          <span className={`dse-dep-dot ${ready ? 'ready' : ''}`} />
+        </div>
+        {envVar && (
+          <div className="dse-dep-env">
+            <span className="dse-dep-env-arrow">→</span>
+            <code>{envVar}</code>
+            {dep.port ? <span className="dse-dep-port">:{dep.port}</span> : null}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── DSE Log Viewer ──────────────────────────────────────────────
+
+function DSELogViewer({ nodeId }: { nodeId: string }) {
+  const [logs, setLogs] = useState<TopologyLogEntry[]>([]);
+  const [pods, setPods] = useState<string[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [autoScroll, setAutoScroll] = useState(true);
+  const [filter, setFilter] = useState('');
+  const termRef = useRef<HTMLDivElement>(null);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const loadLogs = useCallback(async () => {
+    try {
+      const result = await fetchTopologyLogs(nodeId);
+      setLogs(result.lines || []);
+      setPods(result.pods || []);
+    } catch { /* ignore */ }
+    setLoading(false);
+  }, [nodeId]);
+
+  useEffect(() => {
+    setLoading(true);
+    setLogs([]);
+    loadLogs();
+    intervalRef.current = setInterval(loadLogs, 4000);
+    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
+  }, [loadLogs]);
+
+  useEffect(() => {
+    if (autoScroll && termRef.current) {
+      termRef.current.scrollTop = termRef.current.scrollHeight;
+    }
+  }, [logs, autoScroll]);
+
+  const handleScroll = useCallback(() => {
+    if (!termRef.current) return;
+    const { scrollTop, scrollHeight, clientHeight } = termRef.current;
+    setAutoScroll(scrollHeight - scrollTop - clientHeight < 40);
+  }, []);
+
+  const filteredLogs = filter
+    ? logs.filter(l => l.line.toLowerCase().includes(filter.toLowerCase()) || l.pod.toLowerCase().includes(filter.toLowerCase()))
+    : logs;
+
+  const multiPod = pods.length > 1;
+  const podColors = useRef(new Map<string, string>());
+  const colorPalette = ['#60a5fa', '#34d399', '#fbbf24', '#f87171', '#a78bfa', '#fb923c', '#2dd4bf', '#e879f9'];
+  pods.forEach((p, i) => {
+    if (!podColors.current.has(p)) {
+      podColors.current.set(p, colorPalette[i % colorPalette.length]);
+    }
+  });
+
+  return (
+    <div className="dse-log-viewer">
+      <div className="topo-terminal-toolbar">
+        <input
+          className="topo-terminal-filter"
+          placeholder="Filter logs…"
+          value={filter}
+          onChange={e => setFilter(e.target.value)}
+        />
+        <button
+          className={`topo-terminal-btn ${autoScroll ? 'active' : ''}`}
+          onClick={() => {
+            setAutoScroll(true);
+            if (termRef.current) termRef.current.scrollTop = termRef.current.scrollHeight;
+          }}
+          title="Auto-scroll"
+        >
+          ↓
+        </button>
+        <button className="topo-terminal-btn" onClick={loadLogs} title="Refresh">⟳</button>
+      </div>
+      <div className="topo-terminal-body" ref={termRef} onScroll={handleScroll}>
+        {loading && <div className="topo-terminal-loading">Loading logs…</div>}
+        {!loading && filteredLogs.length === 0 && (
+          <div className="topo-terminal-empty">No logs available</div>
+        )}
+        {filteredLogs.map((entry, i) => (
+          <div key={i} className="topo-terminal-line">
+            {multiPod && (
+              <span className="topo-terminal-pod" style={{ color: podColors.current.get(entry.pod) }}>
+                {entry.pod.slice(0, 24)}
+              </span>
+            )}
+            <span className="topo-terminal-text">{entry.line}</span>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -453,12 +588,15 @@ function LoadModal({
 
   // Try to auto-detect service directory
   const [serviceDirs, setServiceDirs] = useState<ServiceDir[]>([]);
+  const [warning, setWarning] = useState('');
   useEffect(() => {
     fetchServiceDirs().then((dirs) => {
       setServiceDirs(dirs);
       const match = dirs.find(d => d.name === service || d.name.includes(service));
       if (match) {
-        setContext(match.path);
+        setContext(match.context_path || match.path);
+        if (match.dockerfile_path) setDockerfile(match.dockerfile_path);
+        if (match.warning) setWarning(match.warning);
       }
     }).catch(() => {});
   }, [service]);
@@ -500,8 +638,20 @@ function LoadModal({
       {serviceDirs.length > 0 ? (
         <select
           className="form-input"
-          value={context}
-          onChange={(e) => setContext(e.target.value)}
+          value={serviceDirs.find(d => (d.context_path || d.path) === context)?.path || context}
+          onChange={(e) => {
+            const val = e.target.value;
+            const match = serviceDirs.find(d => d.path === val);
+            if (match) {
+              setContext(match.context_path || match.path);
+              setDockerfile(match.dockerfile_path || '');
+              setWarning(match.warning || '');
+            } else {
+              setContext(val);
+              setDockerfile('');
+              setWarning('');
+            }
+          }}
         >
           <option value="">Select a service directory…</option>
           {serviceDirs.map(d => (
@@ -528,6 +678,18 @@ function LoadModal({
           placeholder="/absolute/path/to/service"
           autoFocus
         />
+      )}
+
+      {warning && (
+        <div style={{
+          marginTop: 8, padding: '8px 12px', borderRadius: 6,
+          background: 'var(--color-warning-bg, #fff3cd)',
+          color: 'var(--color-warning-text, #856404)',
+          fontSize: '0.85em', lineHeight: 1.4,
+          border: '1px solid var(--color-warning-border, #ffc107)',
+        }}>
+          ⚠️ {warning}
+        </div>
       )}
 
       <label className="form-label">Dockerfile</label>

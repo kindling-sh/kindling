@@ -2186,9 +2186,15 @@ details[open] summary {
   background: var(--bg-active) !important;
   border: 2px solid var(--border-strong) !important;
   transition: all var(--transition-fast);
+  opacity: 0 !important;
+}
+
+.topo-node:hover .topo-handle {
+  opacity: 0.5 !important;
 }
 
 .topo-handle:hover {
+  opacity: 1 !important;
   background: var(--accent) !important;
   border-color: var(--accent) !important;
   transform: scale(1.3);
@@ -2201,6 +2207,11 @@ details[open] summary {
   height: 10px !important;
   pointer-events: all !important;
 }
+
+.topo-node:hover .topo-handle-hidden {
+  opacity: 0.5 !important;
+}
+
 .topo-handle-hidden:hover {
   opacity: 1 !important;
   background: var(--accent) !important;
@@ -2293,6 +2304,34 @@ details[open] summary {
 .topo-detail-phase.status-pending { color: #eab308; }
 .topo-detail-phase.status-error   { color: #ef4444; }
 .topo-detail-phase.status-unknown { color: #6b7280; }
+
+.topo-detail-dse-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 2px 8px;
+  font-size: 11px;
+  color: var(--accent);
+  cursor: pointer;
+  transition: all 150ms;
+  margin-top: 2px;
+}
+.topo-detail-dse-link:hover {
+  background: var(--bg-active);
+  border-color: var(--accent);
+}
+
+/* DSE Log Viewer */
+.dse-log-viewer {
+  display: flex;
+  flex-direction: column;
+  height: 320px;
+  border-top: 1px solid var(--border-subtle);
+  overflow: hidden;
+}
 
 /* Tabs */
 .topo-detail-tabs {
@@ -2694,6 +2733,137 @@ details[open] summary {
   word-break: break-all;
 }
 
+/* ─── DSE Dependencies Section ────────────────────────────── */
+.dse-deps-section {
+  margin-top: 16px;
+  background: var(--bg-inset, rgba(0,0,0,0.15));
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 12px 14px;
+}
+
+.dse-deps-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.dse-deps-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  font-weight: 600;
+  color: var(--text-disabled);
+}
+
+.dse-deps-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.dse-dep-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 8px 12px;
+  min-width: 160px;
+  transition: border-color 0.15s;
+}
+
+.dse-dep-chip:hover {
+  border-color: var(--accent);
+}
+
+.dse-dep-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 6px;
+  font-size: 14px;
+  flex-shrink: 0;
+  padding: 5px;
+}
+
+.dse-dep-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.dse-dep-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dse-dep-ver {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+}
+
+.dse-dep-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-warning, #e3b341);
+  flex-shrink: 0;
+}
+
+.dse-dep-dot.ready {
+  background: var(--color-ok, #3fb950);
+}
+
+.dse-dep-env {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-mono);
+}
+
+.dse-dep-env code {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.dse-dep-env-arrow {
+  color: var(--text-disabled);
+  font-size: 10px;
+}
+
+.dse-dep-port {
+  color: var(--text-disabled);
+  font-size: 10px;
+}
+
+/* ─── DSE Inline Log Viewer ──────────────────────────────── */
+.dse-log-viewer {
+  display: flex;
+  flex-direction: column;
+  height: 320px;
+  border-top: 1px solid var(--border-subtle);
+  overflow: hidden;
+}
+
+.dse-log-viewer .topo-terminal-body {
+  flex: 1;
+  min-height: 0;
+}
+
 /* ─── Edge Labels ────────────────────────────────────────── */
 .topo-edge-label {
   position: absolute;
@@ -2723,6 +2893,37 @@ details[open] summary {
   border-color: var(--accent);
   color: var(--accent);
   box-shadow: var(--shadow-md);
+}
+
+.topo-edge-delete {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-raised);
+  color: var(--text-tertiary);
+  font-size: 10px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 150ms, background 150ms, color 150ms, border-color 150ms;
+  padding: 0;
+}
+
+.topo-edge-label:hover .topo-edge-delete {
+  opacity: 1;
+}
+
+.topo-edge-delete:hover {
+  background: var(--color-danger, #f85149);
+  border-color: var(--color-danger, #f85149);
+  color: #fff;
 }
 
 .topo-edge-url {

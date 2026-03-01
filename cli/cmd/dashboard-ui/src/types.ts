@@ -357,6 +357,9 @@ export interface ServiceDir {
   path: string;
   has_dockerfile: boolean;
   language: string;
+  context_path: string;
+  dockerfile_path: string;
+  warning: string;
 }
 
 // ── Intel Status ────────────────────────────────────────────────

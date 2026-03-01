@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 )
 
@@ -292,4 +293,61 @@ func TestActionResult_JSONOmitEmpty(t *testing.T) {
 			t.Error("output field should be omitted when empty")
 		}
 	})
+}
+
+// ════════════════════════════════════════════════════════════════════
+// dockerfileNeedsRootContext
+// ════════════════════════════════════════════════════════════════════
+
+func TestDockerfileNeedsRootContext(t *testing.T) {
+	cases := []struct {
+		name     string
+		content  string
+		dirName  string
+		expected bool
+	}{
+		{
+			name:     "references own dir",
+			content:  "FROM python:3.12\nCOPY agent/requirements.txt ./\nCOPY agent/ agent/\n",
+			dirName:  "agent",
+			expected: true,
+		},
+		{
+			name:     "self-contained",
+			content:  "FROM node:20\nCOPY . .\nRUN npm install\n",
+			dirName:  "api",
+			expected: false,
+		},
+		{
+			name:     "multi-stage COPY --from",
+			content:  "FROM node:20 AS build\nCOPY . .\nFROM node:20-slim\nCOPY --from=build /app/dist ./\n",
+			dirName:  "web",
+			expected: false,
+		},
+		{
+			name:     "references sibling dir",
+			content:  "FROM python:3.12\nCOPY shared/ shared/\nCOPY . .\n",
+			dirName:  "worker",
+			expected: false, // references shared/ not worker/
+		},
+		{
+			name:     "ADD instruction",
+			content:  "FROM python:3.12\nADD agent/src ./src\n",
+			dirName:  "agent",
+			expected: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tmp := t.TempDir()
+			dfPath := tmp + "/Dockerfile"
+			os.WriteFile(dfPath, []byte(tc.content), 0644)
+
+			got := dockerfileNeedsRootContext(dfPath, tc.dirName)
+			if got != tc.expected {
+				t.Errorf("dockerfileNeedsRootContext(%q) = %v, want %v", tc.name, got, tc.expected)
+			}
+		})
+	}
 }

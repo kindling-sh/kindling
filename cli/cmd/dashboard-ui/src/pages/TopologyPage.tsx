@@ -35,7 +35,7 @@ import {
   type TopologyNodeDetail,
   type TopologyLogEntry,
 } from '../types';
-import { fetchTopology, fetchTopologyStatus, fetchTopologyLogs, fetchTopologyNodeDetail, deployTopology, scaffoldService, checkPath, scaleDeployment, fetchWorkspaceInfo, cleanupService, saveCanvas } from '../api';
+import { fetchTopology, fetchTopologyStatus, fetchTopologyLogs, fetchTopologyNodeDetail, deployTopology, scaffoldService, checkPath, scaleDeployment, fetchWorkspaceInfo, cleanupService, saveCanvas, removeEdgeFromCluster } from '../api';
 import { ActionModal, useToast } from './actions';
 import { DEP_ICONS, ServiceIcon, BrowserIcon } from '../icons';
 
@@ -88,8 +88,12 @@ function ServiceNodeComponent({ data, selected }: NodeProps<Node<TopologyNodeDat
   const isStaged = data.staged && !data.dseName;
   return (
     <div className={`topo-node topo-node-service ${selected ? 'selected' : ''} ${data.isNew ? 'is-new' : ''} ${isStaged ? 'is-staged' : ''}`}>
-      <Handle type="target" position={Position.Left} id="target-left" className="topo-handle" />
+      <Handle type="target" position={Position.Left} id="target-left" className="topo-handle topo-handle-hidden" />
       <Handle type="source" position={Position.Left} id="source-left" className="topo-handle topo-handle-hidden" />
+      <Handle type="target" position={Position.Top} id="target-top" className="topo-handle topo-handle-hidden" />
+      <Handle type="source" position={Position.Top} id="source-top" className="topo-handle topo-handle-hidden" />
+      <Handle type="target" position={Position.Bottom} id="target-bottom" className="topo-handle topo-handle-hidden" />
+      <Handle type="source" position={Position.Bottom} id="source-bottom" className="topo-handle topo-handle-hidden" />
       {isStaged ? (
         <span className="topo-staged-badge">staged</span>
       ) : (
@@ -127,7 +131,7 @@ function ServiceNodeComponent({ data, selected }: NodeProps<Node<TopologyNodeDat
           </div>
         )}
       </div>
-      <Handle type="source" position={Position.Right} id="source-right" className="topo-handle" />
+      <Handle type="source" position={Position.Right} id="source-right" className="topo-handle topo-handle-hidden" />
       <Handle type="target" position={Position.Right} id="target-right" className="topo-handle topo-handle-hidden" />
     </div>
   );
@@ -144,7 +148,12 @@ function DependencyNodeComponent({ data, selected }: NodeProps<Node<TopologyNode
       className={`topo-node topo-node-dep ${selected ? 'selected' : ''} ${data.isNew ? 'is-new' : ''}`}
       style={{ borderColor: color }}
     >
-      <Handle type="target" position={Position.Left} className="topo-handle" />
+      <Handle type="target" position={Position.Left} id="target-left" className="topo-handle topo-handle-hidden" />
+      <Handle type="source" position={Position.Left} id="source-left" className="topo-handle topo-handle-hidden" />
+      <Handle type="target" position={Position.Top} id="target-top" className="topo-handle topo-handle-hidden" />
+      <Handle type="source" position={Position.Top} id="source-top" className="topo-handle topo-handle-hidden" />
+      <Handle type="target" position={Position.Bottom} id="target-bottom" className="topo-handle topo-handle-hidden" />
+      <Handle type="source" position={Position.Bottom} id="source-bottom" className="topo-handle topo-handle-hidden" />
       <StatusDot status={status} />
       <div className="topo-node-icon">{meta?.icon ? (DEP_ICONS[data.depType!]?.() || meta.icon) : '◆'}</div>
       <div className="topo-node-body">
@@ -167,7 +176,8 @@ function DependencyNodeComponent({ data, selected }: NodeProps<Node<TopologyNode
           </div>
         )}
       </div>
-      <Handle type="source" position={Position.Right} className="topo-handle" />
+      <Handle type="source" position={Position.Right} id="source-right" className="topo-handle topo-handle-hidden" />
+      <Handle type="target" position={Position.Right} id="target-right" className="topo-handle topo-handle-hidden" />
     </div>
   );
 }
@@ -179,12 +189,19 @@ function DependencyNodeComponent({ data, selected }: NodeProps<Node<TopologyNode
 function ExternalNodeComponent({ data, selected }: NodeProps<Node<TopologyNodeData>>) {
   return (
     <div className={`topo-node topo-node-external ${selected ? 'selected' : ''}`}>
+      <Handle type="target" position={Position.Left} id="target-left" className="topo-handle topo-handle-hidden" />
+      <Handle type="source" position={Position.Left} id="source-left" className="topo-handle topo-handle-hidden" />
+      <Handle type="target" position={Position.Top} id="target-top" className="topo-handle topo-handle-hidden" />
+      <Handle type="source" position={Position.Top} id="source-top" className="topo-handle topo-handle-hidden" />
+      <Handle type="target" position={Position.Bottom} id="target-bottom" className="topo-handle topo-handle-hidden" />
+      <Handle type="source" position={Position.Bottom} id="source-bottom" className="topo-handle topo-handle-hidden" />
       <div className="topo-node-icon"><BrowserIcon /></div>
       <div className="topo-node-body">
         <div className="topo-node-label">{data.label || 'Browser'}</div>
         <div className="topo-node-detail">external client</div>
       </div>
-      <Handle type="source" position={Position.Right} className="topo-handle" />
+      <Handle type="source" position={Position.Right} id="source-right" className="topo-handle topo-handle-hidden" />
+      <Handle type="target" position={Position.Right} id="target-right" className="topo-handle topo-handle-hidden" />
     </div>
   );
 }
@@ -210,6 +227,13 @@ function ConnectionEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosition
           >
             {label}
             {envValue && <span className="topo-edge-url">{envValue}</span>}
+            <button
+              className="topo-edge-delete"
+              onClick={(e) => { e.stopPropagation(); window.dispatchEvent(new CustomEvent('delete-edge', { detail: id })); }}
+              title="Remove connection"
+            >
+              ✕
+            </button>
           </div>
         </EdgeLabelRenderer>
       )}
@@ -243,6 +267,13 @@ function ServiceEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosition, t
           >
             {label}
             {envValue && <span className="topo-edge-url">{envValue}</span>}
+            <button
+              className="topo-edge-delete"
+              onClick={(e) => { e.stopPropagation(); window.dispatchEvent(new CustomEvent('delete-edge', { detail: id })); }}
+              title="Remove connection"
+            >
+              ✕
+            </button>
           </div>
         </EdgeLabelRenderer>
       )}
@@ -456,6 +487,15 @@ function DetailSidebar({ node, onClose, onUpdate, onDelete, edges, allNodes }: {
             <span className={`topo-detail-phase ${phaseColor(status.phase)}`}>
               {status.phase} · {status.ready}/{status.total}
             </span>
+          )}
+          {!isDep && data.dseName && (
+            <button
+              className="topo-detail-dse-link"
+              onClick={() => window.dispatchEvent(new CustomEvent('navigate', { detail: 'dses' }))}
+              title="View in Environments"
+            >
+              ◆ View Environment
+            </button>
           )}
         </div>
         <button className="btn btn-sm btn-ghost" onClick={onClose} title="Close (Esc)">✕</button>
@@ -991,13 +1031,15 @@ export function TopologyPage() {
       const clusterNodeIDs = new Set(
         nodes.filter((n) => n.data.fromCluster).map((n) => n.id)
       );
-      // Save edges that connect at least one non-cluster node
+      // Save edges that connect at least one non-cluster node,
+      // OR service-to-service edges (which the cluster doesn't reconstruct)
       const overlayEdges = edges.filter(
-        (e) => !clusterNodeIDs.has(e.source) || !clusterNodeIDs.has(e.target)
+        (e) => !clusterNodeIDs.has(e.source) || !clusterNodeIDs.has(e.target) || e.type === 'service-edge'
       ).map((e) => ({
         id: e.id,
         source: e.source,
         target: e.target,
+        type: e.type,
         data: e.data,
       }));
 
@@ -1364,6 +1406,47 @@ export function TopologyPage() {
     }
   }, [nodes]);
 
+  // ── Delete edge ────────────────────────────────────────────
+
+  const handleDeleteEdge = useCallback((edgeId: string) => {
+    const edge = edges.find((e) => e.id === edgeId);
+    if (!edge) return;
+    const sourceNode = nodes.find((n) => n.id === edge.source);
+    const targetNode = nodes.find((n) => n.id === edge.target);
+    setEdges((eds) => eds.filter((e) => e.id !== edgeId));
+    addChange({
+      type: 'remove-edge',
+      description: `Disconnect ${sourceNode?.data?.label || edge.source} → ${targetNode?.data?.label || edge.target}`,
+    });
+
+    // Clean up deployed env var / dependency from the cluster DSE
+    const edgeData = edge.data as Record<string, unknown> | undefined;
+    const envVar = edgeData?._envVar as string | undefined;
+    const sourceDSE = sourceNode?.data?.dseName;
+    const targetDSE = targetNode?.data?.dseName;
+
+    if (sourceNode?.data?.kind === 'service' && targetNode?.data?.kind === 'service' && envVar && sourceDSE) {
+      // Svc-to-svc: remove the env var from the source service's DSE
+      removeEdgeFromCluster({ dseName: sourceDSE, envVar }).catch(() => {});
+    } else if (sourceNode?.data?.kind === 'service' && targetNode?.data?.kind === 'dependency' && targetNode.data.depType && sourceDSE) {
+      // Svc-to-dep: remove the dependency from the service's DSE
+      removeEdgeFromCluster({ dseName: sourceDSE, depType: targetNode.data.depType }).catch(() => {});
+    } else if (targetNode?.data?.kind === 'service' && sourceNode?.data?.kind === 'dependency' && sourceNode.data.depType && targetDSE) {
+      // Dep-to-svc (reversed direction): remove dep from the service's DSE
+      removeEdgeFromCluster({ dseName: targetDSE, depType: sourceNode.data.depType }).catch(() => {});
+    }
+  }, [edges, nodes, setEdges, addChange]);
+
+  // Listen for delete-edge events from edge label buttons
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const edgeId = (e as CustomEvent).detail;
+      if (typeof edgeId === 'string') handleDeleteEdge(edgeId);
+    };
+    window.addEventListener('delete-edge', handler);
+    return () => window.removeEventListener('delete-edge', handler);
+  }, [handleDeleteEdge]);
+
   // ── Delete node ────────────────────────────────────────────
 
   const handleDeleteNode = useCallback(async (nodeId: string) => {
@@ -1397,6 +1480,36 @@ export function TopologyPage() {
         }
       } catch {
         // Cleanup is best-effort — still remove from canvas
+      }
+    }
+
+    // For deployed dependency nodes, remove dep from all connected service DSEs
+    if (node.data.kind === 'dependency' && node.data.fromCluster && node.data.depType) {
+      const connectedServiceDSEs = new Set<string>();
+      for (const e of edges) {
+        // Find edges where this dep is the target (service → dep)
+        if (e.target === nodeId) {
+          const sourceNode = nodes.find((n) => n.id === e.source);
+          if (sourceNode?.data.kind === 'service' && sourceNode.data.dseName) {
+            connectedServiceDSEs.add(sourceNode.data.dseName);
+          }
+        }
+        // Also check edges where this dep is the source (dep → service)
+        if (e.source === nodeId) {
+          const targetNode = nodes.find((n) => n.id === e.target);
+          if (targetNode?.data.kind === 'service' && targetNode.data.dseName) {
+            connectedServiceDSEs.add(targetNode.data.dseName);
+          }
+        }
+      }
+      const removeResults = await Promise.allSettled(
+        [...connectedServiceDSEs].map((dseName) =>
+          removeEdgeFromCluster({ dseName, depType: node.data.depType! })
+        ),
+      );
+      const successCount = removeResults.filter((r) => r.status === 'fulfilled').length;
+      if (successCount > 0) {
+        toast(`Removed ${node.data.depType} from ${successCount} service(s)`, 'success');
       }
     }
 
@@ -1445,6 +1558,10 @@ export function TopologyPage() {
     if (result.ok) {
       toast(result.output || 'Topology deployed successfully', 'success');
       clearChanges();
+
+      // Build a map of old dep node IDs → canonical IDs so we can remap edges
+      const depIdRemap: Record<string, string> = {};
+
       // Mark all nodes as not new / not dirty, and promote staged nodes to deployed
       setNodes((nds) =>
         nds.map((n) => {
@@ -1455,9 +1572,33 @@ export function TopologyPage() {
             updates.dseName = safeName;
             updates.fromCluster = true;
           }
+          // Promote dependency nodes to canonical IDs and mark as deployed
+          if (n.data.kind === 'dependency' && n.data.depType && !n.data.fromCluster) {
+            const canonicalId = `dep-${n.data.depType}`;
+            if (n.id !== canonicalId) {
+              depIdRemap[n.id] = canonicalId;
+            }
+            updates.staged = false;
+            updates.fromCluster = true;
+            return { ...n, id: canonicalId, data: { ...n.data, ...updates } };
+          }
           return { ...n, data: { ...n.data, ...updates } };
         }),
       );
+
+      // Remap edges that reference old dep node IDs
+      if (Object.keys(depIdRemap).length > 0) {
+        setEdges((eds) =>
+          eds.map((e) => {
+            let updated = false;
+            let { source, target } = e;
+            if (depIdRemap[source]) { source = depIdRemap[source]; updated = true; }
+            if (depIdRemap[target]) { target = depIdRemap[target]; updated = true; }
+            if (!updated) return e;
+            return { ...e, id: `e-${source}-${target}`, source, target };
+          }),
+        );
+      }
     } else {
       toast(result.error || 'Deploy failed', 'error');
     }
