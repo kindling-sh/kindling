@@ -49,6 +49,40 @@ loops running on a local [Kind](https://kind.sigs.k8s.io) cluster. The
 
 ---
 
+## Resource footprint
+
+kindling is designed to add minimal overhead to the Kind cluster. The
+operator and infrastructure pods have a fixed, constant footprint
+regardless of how many services you deploy.
+
+### kindling infrastructure (constant)
+
+| Pod | CPU request | Memory request | Purpose |
+|---|---|---|---|
+| controller-manager | 15m | 128 Mi | Operator + kube-rbac-proxy |
+| registry | ~5m | ~30 Mi | In-cluster image registry |
+| ingress-nginx | ~10m | ~90 Mi | Localhost HTTP routing |
+| **Total** | **~30m** | **~250 Mi** | |
+
+### Per-service overhead
+
+Each `DevStagingEnvironment` creates:
+- 1 Deployment + 1 Service + 1 Ingress for the application
+- 1 Deployment + 1 Service per dependency
+- No sidecars, no DaemonSets, no per-service operators
+
+The operator manages all services through a single reconciliation loop.
+There is no per-service control plane cost.
+
+### CLI binary
+
+The `kindling` binary is a 14 MB statically-linked Go executable. It
+has zero runtime dependencies — no Python, no Node.js, no JVM. It
+communicates with the cluster via `kubectl` and with CI via the
+respective platform's API.
+
+---
+
 ## The two loops
 
 ### Outer loop — CI on your laptop

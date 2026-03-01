@@ -419,6 +419,57 @@ kindling destroy [-y]
 > Graduate your staging environment to a production cluster with TLS, DNS,
 > and real infrastructure.
 
+### `kindling snapshot`
+
+Export a Helm chart or Kustomize overlay from the current cluster state.
+Reads all DevStagingEnvironments in the cluster and generates
+production-ready Kubernetes manifests.
+
+```
+kindling snapshot [flags]
+```
+
+**Flags:**
+
+| Flag | Short | Default | Description |
+|---|---|---|---|
+| `--format` | `-f` | `helm` | Export format: `helm` or `kustomize` |
+| `--output` | `-o` | `./kindling-snapshot` | Output directory |
+| `--name` | `-n` | `kindling-snapshot` | Chart/project name |
+
+**What it does:**
+
+1. Reads all DSEs from the cluster
+2. Strips the GitHub actor prefix from service names (e.g. `jeff-gateway` → `gateway`)
+3. Generates a production-ready chart with:
+   - **values.yaml** — clean defaults with empty env vars for production connection strings
+   - **values-live.yaml** — populated with your dev cluster's actual values
+   - Deployment + Service templates per service
+   - Dependency deployments (Postgres, Redis, MongoDB, etc.)
+4. Auto-injected env vars (e.g. `DATABASE_URL`, `MONGO_URL`, `REDIS_URL`) are
+   real configurable values in `values.yaml`, not hardcoded dev values
+
+**Examples:**
+
+```bash
+kindling snapshot                          # Helm chart in ./kindling-snapshot/
+kindling snapshot --format kustomize       # Kustomize overlay
+kindling snapshot -o ./my-chart            # custom output directory
+kindling snapshot --name my-platform       # custom chart name
+```
+
+**Using the output:**
+
+```bash
+# Dry-run with live dev values
+helm template my-app ./kindling-snapshot -f values-live.yaml
+
+# Install with production values
+helm install my-app ./kindling-snapshot \
+  --set gateway.env.DATABASE_URL=postgres://prod-host:5432/mydb \
+  --set inventory.env.MONGO_URL=mongodb://prod-host:27017
+```
+
 ### `kindling version`
 
 Print the CLI version.

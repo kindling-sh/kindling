@@ -10,6 +10,7 @@ import {
   useEdgesState,
   Handle,
   Position,
+  ConnectionMode,
   BaseEdge,
   EdgeLabelRenderer,
   getSmoothStepPath,
@@ -34,7 +35,7 @@ import {
   type TopologyNodeDetail,
   type TopologyLogEntry,
 } from '../types';
-import { fetchTopology, fetchTopologyStatus, fetchTopologyLogs, fetchTopologyNodeDetail, deployTopology, scaffoldService, checkPath, scaleDeployment, fetchWorkspaceInfo, cleanupService } from '../api';
+import { fetchTopology, fetchTopologyStatus, fetchTopologyLogs, fetchTopologyNodeDetail, deployTopology, scaffoldService, checkPath, scaleDeployment, fetchWorkspaceInfo, cleanupService, saveCanvas } from '../api';
 import { ActionModal, useToast } from './actions';
 import { DEP_ICONS, ServiceIcon, BrowserIcon } from '../icons';
 
@@ -87,7 +88,8 @@ function ServiceNodeComponent({ data, selected }: NodeProps<Node<TopologyNodeDat
   const isStaged = data.staged && !data.dseName;
   return (
     <div className={`topo-node topo-node-service ${selected ? 'selected' : ''} ${data.isNew ? 'is-new' : ''} ${isStaged ? 'is-staged' : ''}`}>
-      <Handle type="target" position={Position.Left} className="topo-handle" />
+      <Handle type="target" position={Position.Left} id="target-left" className="topo-handle" />
+      <Handle type="source" position={Position.Left} id="source-left" className="topo-handle topo-handle-hidden" />
       {isStaged ? (
         <span className="topo-staged-badge">staged</span>
       ) : (
@@ -125,7 +127,8 @@ function ServiceNodeComponent({ data, selected }: NodeProps<Node<TopologyNodeDat
           </div>
         )}
       </div>
-      <Handle type="source" position={Position.Right} className="topo-handle" />
+      <Handle type="source" position={Position.Right} id="source-right" className="topo-handle" />
+      <Handle type="target" position={Position.Right} id="target-right" className="topo-handle topo-handle-hidden" />
     </div>
   );
 }
@@ -214,6 +217,39 @@ function ConnectionEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosition
   );
 }
 
+function ServiceEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, data, style, markerEnd }: EdgeProps) {
+  const [edgePath, labelX, labelY] = getSmoothStepPath({
+    sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition,
+  });
+
+  const edgeData = data as Record<string, unknown> | undefined;
+  const label = edgeData?._label as string | undefined;
+  const envValue = edgeData?._envValue as string | undefined;
+
+  return (
+    <>
+      <BaseEdge
+        id={id}
+        path={edgePath}
+        style={{ ...style, strokeDasharray: '6 3', stroke: '#06b6d4', strokeWidth: 2 }}
+        markerEnd={markerEnd}
+      />
+      {label && (
+        <EdgeLabelRenderer>
+          <div
+            className="topo-edge-label topo-edge-label--svc"
+            style={{ transform: `translate(-50%, -50%) translate(${labelX}px,${labelY}px)` }}
+            title={envValue ? `${label}=${envValue}\nService-to-service connection` : label}
+          >
+            {label}
+            {envValue && <span className="topo-edge-url">{envValue}</span>}
+          </div>
+        </EdgeLabelRenderer>
+      )}
+    </>
+  );
+}
+
 const nodeTypes: NodeTypes = {
   service: ServiceNodeComponent,
   dependency: DependencyNodeComponent,
@@ -222,6 +258,7 @@ const nodeTypes: NodeTypes = {
 
 const edgeTypes: EdgeTypes = {
   connection: ConnectionEdge,
+  'service-edge': ServiceEdge,
 };
 
 // ── Terminal Log Viewer ─────────────────────────────────────────
@@ -323,22 +360,70 @@ function TerminalLog({ nodeId }: { nodeId: string }) {
 
 type DetailTab = 'logs' | 'status' | 'config';
 
-function DetailSidebar({ node, onClose, onUpdate, onDelete }: {
+function DetailSidebar({ node, onClose, onUpdate, onDelete, edges, allNodes }: {
   node: Node<TopologyNodeData>;
   onClose: () => void;
   onUpdate: (updates: Partial<TopologyNodeData>) => void;
   onDelete: () => void;
+  edges: Edge[];
+  allNodes: Node<TopologyNodeData>[];
 }) {
   const data = node.data;
   const isDep = data.kind === 'dependency';
   const meta = isDep && data.depType ? DEP_META[data.depType] : null;
   const status = data._status as TopologyNodeStatus | undefined;
   const hasClusterData = !!status;
+  const isStaged = data.staged && !data.dseName;
+  const needsScaffold = isStaged && !data.scaffolded;
 
   const [tab, setTab] = useState<DetailTab>(hasClusterData ? 'logs' : 'config');
   const [detail, setDetail] = useState<TopologyNodeDetail | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [scaling, setScaling] = useState(false);
+  const [scaffoldingInSidebar, setScaffoldingInSidebar] = useState(false);
+
+  // Collect connected env vars for this service from edges
+  const connectedDeps = edges
+    .filter((e) => e.source === node.id || e.target === node.id)
+    .map((e) => {
+      const otherId = e.source === node.id ? e.target : e.source;
+      const otherNode = allNodes.find((n) => n.id === otherId);
+      if (!otherNode) return null;
+      if (otherNode.data.kind === 'dependency' && otherNode.data.depType) {
+        const depMeta = DEP_META[otherNode.data.depType];
+        return {
+          envVar: otherNode.data.envVarName || depMeta?.envVar || '',
+          value: `(auto-injected by operator)`,
+          label: otherNode.data.label || otherNode.data.depType,
+        };
+      }
+      if (otherNode.data.kind === 'service' && e.source === node.id) {
+        // svc-to-svc: this service calls the other
+        const tName = (otherNode.data.dseName || otherNode.data.label || 'service').toLowerCase().replace(/[^a-z0-9]+/g, '-');
+        const port = otherNode.data.servicePort || 3000;
+        const envVar = tName.toUpperCase().replace(/-/g, '_') + '_URL';
+        return { envVar, value: `http://${tName}:${port}`, label: otherNode.data.label };
+      }
+      return null;
+    })
+    .filter(Boolean) as { envVar: string; value: string; label: string }[];
+
+  const handleScaffoldFromSidebar = async () => {
+    if (!data.language || !data.path) return;
+    const safeName = (data.label || 'service').toLowerCase().replace(/\s+/g, '-');
+    setScaffoldingInSidebar(true);
+    const result = await scaffoldService({
+      name: safeName,
+      path: data.path,
+      port: data.servicePort || 3000,
+      language: data.language,
+      deps: connectedDeps.map((d) => ({ envVar: d.envVar, value: d.value })),
+    });
+    setScaffoldingInSidebar(false);
+    if (result.ok) {
+      onUpdate({ scaffolded: true });
+    }
+  };
 
   const refreshDetail = useCallback(() => {
     setLoadingDetail(true);
@@ -590,6 +675,35 @@ function DetailSidebar({ node, onClose, onUpdate, onDelete }: {
 
       {/* Footer */}
       <div className="topo-detail-footer">
+        {/* Scaffold button for staged services that haven't been scaffolded yet */}
+        {needsScaffold && (
+          <div className="topo-scaffold-sidebar">
+            {connectedDeps.length > 0 && (
+              <div className="topo-scaffold-deps">
+                <span className="topo-scaffold-deps-label">Connections detected:</span>
+                {connectedDeps.map((d) => (
+                  <div key={d.envVar} className="topo-scaffold-dep-item">
+                    <code>{d.envVar}</code>
+                    <span className="text-dim">{d.label}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            <button
+              className="btn btn-primary btn-full"
+              onClick={handleScaffoldFromSidebar}
+              disabled={scaffoldingInSidebar || !data.path}
+            >
+              {scaffoldingInSidebar ? 'Scaffolding…' : `⬡ Scaffold ${data.language || 'node'} service`}
+            </button>
+            {connectedDeps.length === 0 && (
+              <div className="topo-scaffold-hint">Draw edges to deps/services first, or scaffold now for a basic service.</div>
+            )}
+          </div>
+        )}
+        {data.scaffolded && isStaged && (
+          <div className="topo-scaffold-done">✓ Scaffolded — write your code, then deploy</div>
+        )}
         <button className="btn btn-danger btn-sm" onClick={onDelete}>
           Remove
         </button>
@@ -626,12 +740,12 @@ function PaletteItem({ depType, label, icon, onDragStart }: {
 
 const LAYOUT = {
   colExternal: 60,
-  colService: 380,
-  colDep: 740,
-  rowStart: 60,
-  rowGapService: 180,   // vertical gap between services
-  rowGapDep: 120,       // vertical gap between deps
-  rowGapExternal: 160,  // vertical gap between external nodes
+  colService: 400,
+  colDep: 800,
+  rowStart: 80,
+  rowGapService: 220,   // vertical gap between services
+  rowGapDep: 160,       // vertical gap between deps
+  rowGapExternal: 200,  // vertical gap between external nodes
 };
 
 function autoLayoutNodes(
@@ -642,56 +756,83 @@ function autoLayoutNodes(
   const services = nodes.filter((n) => n.data.kind === 'service');
   const deps = nodes.filter((n) => n.data.kind === 'dependency');
 
-  // Build a map: depId → which service(s) connect to it
-  const depToServices = new Map<string, string[]>();
+  // Build adjacency maps
+  const svcToDeps = new Map<string, string[]>(); // serviceId → depIds
+  const depToSvcs = new Map<string, string[]>(); // depId → serviceIds
+  const svcToSvcs = new Map<string, string[]>(); // service → connected services
   for (const e of edges) {
     const srcNode = nodes.find((n) => n.id === e.source);
     const tgtNode = nodes.find((n) => n.id === e.target);
     if (srcNode?.data.kind === 'service' && tgtNode?.data.kind === 'dependency') {
-      const list = depToServices.get(e.target) || [];
-      list.push(e.source);
-      depToServices.set(e.target, list);
+      svcToDeps.set(e.source, [...(svcToDeps.get(e.source) || []), e.target]);
+      depToSvcs.set(e.target, [...(depToSvcs.get(e.target) || []), e.source]);
+    } else if (srcNode?.data.kind === 'service' && tgtNode?.data.kind === 'service') {
+      svcToSvcs.set(e.source, [...(svcToSvcs.get(e.source) || []), e.target]);
+      svcToSvcs.set(e.target, [...(svcToSvcs.get(e.target) || []), e.source]);
     }
   }
 
-  // Position services in the center column, stacked top-down
+  // Sort services: those with the most deps first (visually anchor the graph),
+  // then connected services nearby, then standalone services at the end
+  const scored = services.map((s) => ({
+    node: s,
+    depCount: (svcToDeps.get(s.id) || []).length,
+    connectedSvcCount: (svcToSvcs.get(s.id) || []).length,
+  }));
+  scored.sort((a, b) => {
+    // Services with deps come first
+    if (a.depCount !== b.depCount) return b.depCount - a.depCount;
+    // Then by connected services
+    if (a.connectedSvcCount !== b.connectedSvcCount) return b.connectedSvcCount - a.connectedSvcCount;
+    return 0;
+  });
+  const sortedServices = scored.map((s) => s.node);
+
+  // Position services in the center column
   let svcY = LAYOUT.rowStart;
   const svcPositions = new Map<string, { x: number; y: number }>();
-  for (const svc of services) {
-    const pos = { x: LAYOUT.colService, y: svcY };
-    svcPositions.set(svc.id, pos);
+  for (const svc of sortedServices) {
+    svcPositions.set(svc.id, { x: LAYOUT.colService, y: svcY });
     svcY += LAYOUT.rowGapService;
   }
 
-  // Position dependencies in the right column, grouped near their connected services
-  // Sort deps: those connected to earlier services come first
-  const svcOrder = new Map(services.map((s, i) => [s.id, i]));
+  // Position dependencies, vertically centered among their connected services
+  // Sort deps by earliest connected service position
   const sortedDeps = [...deps].sort((a, b) => {
-    const aServices = depToServices.get(a.id) || [];
-    const bServices = depToServices.get(b.id) || [];
-    const aMin = aServices.length > 0 ? Math.min(...aServices.map((s) => svcOrder.get(s) ?? 999)) : 999;
-    const bMin = bServices.length > 0 ? Math.min(...bServices.map((s) => svcOrder.get(s) ?? 999)) : 999;
-    return aMin - bMin;
+    const aSvcs = depToSvcs.get(a.id) || [];
+    const bSvcs = depToSvcs.get(b.id) || [];
+    const aMinY = aSvcs.length > 0 ? Math.min(...aSvcs.map((s) => svcPositions.get(s)?.y ?? 9999)) : 9999;
+    const bMinY = bSvcs.length > 0 ? Math.min(...bSvcs.map((s) => svcPositions.get(s)?.y ?? 9999)) : 9999;
+    return aMinY - bMinY;
   });
 
-  let depY = LAYOUT.rowStart;
   const depPositions = new Map<string, { x: number; y: number }>();
+  const usedDepYs: number[] = [];
   for (const dep of sortedDeps) {
-    // Try to vertically align near the connected service
-    const connectedSvcs = depToServices.get(dep.id) || [];
+    const connectedSvcs = depToSvcs.get(dep.id) || [];
+    let targetY: number;
     if (connectedSvcs.length > 0) {
-      const avgY = connectedSvcs.reduce((sum, sId) => sum + (svcPositions.get(sId)?.y ?? 0), 0) / connectedSvcs.length;
-      depY = Math.max(depY, avgY);
+      // Center vertically among connected services
+      const ys = connectedSvcs.map((s) => svcPositions.get(s)?.y ?? 0);
+      targetY = ys.reduce((a, b) => a + b, 0) / ys.length;
+    } else {
+      // No connections — place after the last service
+      targetY = svcY;
     }
-    depPositions.set(dep.id, { x: LAYOUT.colDep, y: depY });
-    depY += LAYOUT.rowGapDep;
+    // Avoid overlapping with already-placed deps
+    for (const usedY of usedDepYs) {
+      if (Math.abs(targetY - usedY) < LAYOUT.rowGapDep) {
+        targetY = usedY + LAYOUT.rowGapDep;
+      }
+    }
+    depPositions.set(dep.id, { x: LAYOUT.colDep, y: targetY });
+    usedDepYs.push(targetY);
   }
 
   // Position external nodes in the left column, aligned with their connected service
   let extY = LAYOUT.rowStart;
   const extPositions = new Map<string, { x: number; y: number }>();
   for (const ext of externals) {
-    // Find connected service
     const connEdge = edges.find((e) => e.source === ext.id);
     if (connEdge) {
       const svcPos = svcPositions.get(connEdge.target);
@@ -777,8 +918,15 @@ export function TopologyPage() {
         setInitialGraph(graph);
         if (graph.nodes.length > 0) {
           const rawNodes = graph.nodes as Node<TopologyNodeData>[];
-          const layoutNodes = autoLayoutNodes(rawNodes, graph.edges);
-          setNodes(layoutNodes);
+          // If backend applied saved positions from canvas.json, the
+          // response includes hasPositions: true — use positions as-is.
+          // Otherwise run auto-layout for a clean initial arrangement.
+          if ((graph as any).hasPositions) {
+            setNodes(rawNodes);
+          } else {
+            const layoutNodes = autoLayoutNodes(rawNodes, graph.edges);
+            setNodes(layoutNodes);
+          }
           setEdges(graph.edges);
         }
       })
@@ -819,6 +967,54 @@ export function TopologyPage() {
     );
   }, [statusMap]);
 
+  // ── Auto-save canvas overlay on changes ─────────────────────
+  // Debounce saves: extract non-cluster nodes/edges and persist.
+
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (loading) return; // don't save during initial load
+
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      // Only save nodes that aren't from the cluster
+      const overlayNodes = nodes
+        .filter((n) => !n.data.fromCluster)
+        .map((n) => ({
+          id: n.id,
+          type: n.type || n.data.kind,
+          position: n.position,
+          data: n.data,
+        }));
+
+      // Build set of cluster node IDs
+      const clusterNodeIDs = new Set(
+        nodes.filter((n) => n.data.fromCluster).map((n) => n.id)
+      );
+      // Save edges that connect at least one non-cluster node
+      const overlayEdges = edges.filter(
+        (e) => !clusterNodeIDs.has(e.source) || !clusterNodeIDs.has(e.target)
+      ).map((e) => ({
+        id: e.id,
+        source: e.source,
+        target: e.target,
+        data: e.data,
+      }));
+
+      // Save positions for ALL nodes (cluster + canvas) so layout persists
+      const positions: Record<string, { x: number; y: number }> = {};
+      for (const n of nodes) {
+        positions[n.id] = n.position;
+      }
+
+      saveCanvas({ nodes: overlayNodes, edges: overlayEdges, positions }).catch(() => {});
+    }, 500);
+
+    return () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    };
+  }, [nodes, edges, loading]);
+
   // ── Pending change helpers ──────────────────────────────────
 
   const addChange = useCallback((change: Omit<PendingChange, 'id'>) => {
@@ -829,7 +1025,8 @@ export function TopologyPage() {
     setPendingChanges([]);
   }, []);
 
-  const hasChanges = pendingChanges.length > 0;
+  const hasStagedNodes = nodes.some((n) => n.data.staged && !n.data.dseName);
+  const hasChanges = pendingChanges.length > 0 || hasStagedNodes;
 
   // ── Node ID generator ──────────────────────────────────────
 
@@ -864,10 +1061,28 @@ export function TopologyPage() {
       edgeLabel = 'ingress';
     }
 
+    // Prevent duplicate dep types on the same service
+    const svcNode = sourceNode?.data?.kind === 'service' ? sourceNode : (targetNode?.data?.kind === 'service' ? targetNode : null);
+    const depNode = sourceNode?.data?.kind === 'dependency' ? sourceNode : (targetNode?.data?.kind === 'dependency' ? targetNode : null);
+    if (svcNode && depNode && depNode.data.depType) {
+      const connectedDepTypes = edges
+        .filter((e) => e.source === svcNode.id || e.target === svcNode.id)
+        .map((e) => {
+          const otherId = e.source === svcNode.id ? e.target : e.source;
+          return nodes.find((n) => n.id === otherId)?.data?.depType;
+        })
+        .filter(Boolean);
+      if (connectedDepTypes.includes(depNode.data.depType)) {
+        toast(`${svcNode.data.label} already has a ${depNode.data.label} dependency`, 'error');
+        return;
+      }
+    }
+
+    const isSvcToSvc = sourceNode?.data?.kind === 'service' && targetNode?.data?.kind === 'service';
     const newEdge: Edge = {
       ...connection,
       id: `e-${connection.source}-${connection.target}`,
-      type: 'connection',
+      type: isSvcToSvc ? 'service-edge' : 'connection',
       data: Object.keys(edgeData).length > 0 ? edgeData : { _label: edgeLabel },
     } as Edge;
     setEdges((eds) => addEdge(newEdge, eds as any));
@@ -876,7 +1091,7 @@ export function TopologyPage() {
       type: 'add-edge',
       description: `Connect ${sourceNode?.data?.label || connection.source} → ${targetNode?.data?.label || connection.target}`,
     });
-  }, [nodes, setEdges, addChange]);
+  }, [nodes, edges, setEdges, addChange, toast]);
 
   // ── Drag and drop from palette ─────────────────────────────
 
@@ -933,6 +1148,25 @@ export function TopologyPage() {
             nearest = sn;
           }
         }
+
+        // Check if this service already has the same dep type connected
+        const connectedDepTypes = new Set(
+          edges
+            .filter((e) => e.source === nearest.id || e.target === nearest.id)
+            .map((e) => {
+              const otherId = e.source === nearest.id ? e.target : e.source;
+              const other = nodes.find((n) => n.id === otherId);
+              return other?.data?.depType;
+            })
+            .filter(Boolean)
+        );
+        if (connectedDepTypes.has(depType)) {
+          // Remove the node we just added and warn
+          setNodes((nds) => nds.filter((n) => n.id !== nodeId));
+          toast(`${nearest.data.label} already has a ${meta.label} dependency`, 'error');
+          return;
+        }
+
         // Reposition dep to the right of the nearest service, in the dependency column
         const existingDeps = nodes.filter((n) => n.data.kind === 'dependency');
         const snapPosition = {
@@ -1004,7 +1238,6 @@ export function TopologyPage() {
   const [workspaceRoot, setWorkspaceRoot] = useState('');
   const [pathStatus, setPathStatus] = useState<{ exists: boolean; has_dockerfile: boolean; language: string } | null>(null);
   const [checkingPath, setCheckingPath] = useState(false);
-  const [scaffolding, setScaffolding] = useState(false);
   const pathManuallyEdited = useRef(false);
 
   // Fetch workspace root when dialog opens
@@ -1036,26 +1269,12 @@ export function TopologyPage() {
     setCheckingPath(false);
   }, []);
 
-  // Scaffold + add to canvas as staged in one step
-  const handleScaffoldAndStage = useCallback(async () => {
+  // Stage only — place node on canvas without scaffolding
+  const handleStage = useCallback(() => {
     if (!customName.trim()) return;
     const port = parseInt(customPort) || 3000;
     const safeName = customName.trim().toLowerCase().replace(/\s+/g, '-');
     const path = customPath || `${workspaceRoot}/services/${safeName}`;
-
-    setScaffolding(true);
-    const result = await scaffoldService({
-      name: safeName,
-      path,
-      port,
-      language: customLanguage,
-    });
-    setScaffolding(false);
-
-    if (!result.ok) {
-      toast(result.error || 'Scaffold failed', 'error');
-      return;
-    }
 
     // Add staged node to canvas
     const nodeId = nextId('svc');
@@ -1078,7 +1297,7 @@ export function TopologyPage() {
     };
     setNodes((nds) => [...nds, newNode]);
     addChange({ type: 'add-node', description: `Stage "${customName.trim()}" (${customLanguage})` });
-    toast(`${customName.trim()} scaffolded → develop your code, deploy when ready`, 'success');
+    toast(`${customName.trim()} staged → draw connections, then scaffold from the detail sidebar`, 'success');
 
     // Reset form
     setCustomName('');
@@ -1226,12 +1445,18 @@ export function TopologyPage() {
     if (result.ok) {
       toast(result.output || 'Topology deployed successfully', 'success');
       clearChanges();
-      // Mark all nodes as not new / not dirty
+      // Mark all nodes as not new / not dirty, and promote staged nodes to deployed
       setNodes((nds) =>
-        nds.map((n) => ({
-          ...n,
-          data: { ...n.data, isNew: false, isDirty: false },
-        })),
+        nds.map((n) => {
+          const updates: Partial<TopologyNodeData> = { isNew: false, isDirty: false };
+          if (n.data.staged && n.data.kind === 'service') {
+            const safeName = (n.data.label || '').toLowerCase().replace(/\s+/g, '-');
+            updates.staged = false;
+            updates.dseName = safeName;
+            updates.fromCluster = true;
+          }
+          return { ...n, data: { ...n.data, ...updates } };
+        }),
       );
     } else {
       toast(result.error || 'Deploy failed', 'error');
@@ -1359,6 +1584,7 @@ export function TopologyPage() {
           fitView
           snapToGrid
           snapGrid={[16, 16]}
+          connectionMode={ConnectionMode.Loose}
           defaultEdgeOptions={{
             type: 'connection',
             animated: true,
@@ -1392,6 +1618,8 @@ export function TopologyPage() {
           onClose={() => { setShowDetailSidebar(false); setSelectedNode(null); }}
           onUpdate={(updates) => updateNodeData(selectedNode.id, updates)}
           onDelete={() => handleDeleteNode(selectedNode.id)}
+          edges={edges}
+          allNodes={nodes}
         />
       )}
 
@@ -1471,16 +1699,16 @@ export function TopologyPage() {
                 placeholder={workspaceRoot ? `${workspaceRoot}/services/...` : 'loading...'}
               />
               <div className="topo-scaffold-hint">
-                Scaffolds a {customLanguage === 'node' ? 'Node.js' : customLanguage === 'go' ? 'Go' : 'Python'} service with Dockerfile, health check, and entry point.
-                Write your code, then deploy when ready.
+                Stages a {customLanguage === 'node' ? 'Node.js' : customLanguage === 'go' ? 'Go' : 'Python'} service on the canvas.
+                Draw connections first, then scaffold from the detail sidebar to include the right env vars.
               </div>
 
               <button
                 className="btn btn-primary btn-full"
-                onClick={handleScaffoldAndStage}
-                disabled={scaffolding || !customName.trim()}
+                onClick={handleStage}
+                disabled={!customName.trim()}
               >
-                {scaffolding ? 'Scaffolding…' : '⬡ Scaffold & Stage'}
+                ⬡ Stage
               </button>
             </>
           )}
@@ -1546,25 +1774,36 @@ export function TopologyPage() {
       {hasChanges && (
         <div className="topo-deploy-bar">
           <div className="topo-deploy-changes">
-            <span className="topo-deploy-count">{pendingChanges.length}</span>
-            <span className="topo-deploy-label">
-              pending change{pendingChanges.length !== 1 ? 's' : ''}
-            </span>
-            <div className="topo-deploy-list">
-              {pendingChanges.slice(-5).map((c) => (
-                <span key={c.id} className="topo-deploy-change-item">{c.description}</span>
-              ))}
-              {pendingChanges.length > 5 && (
-                <span className="topo-deploy-change-item text-dim">
-                  +{pendingChanges.length - 5} more
+            {pendingChanges.length > 0 ? (
+              <>
+                <span className="topo-deploy-count">{pendingChanges.length}</span>
+                <span className="topo-deploy-label">
+                  pending change{pendingChanges.length !== 1 ? 's' : ''}
                 </span>
-              )}
-            </div>
+                <div className="topo-deploy-list">
+                  {pendingChanges.slice(-5).map((c) => (
+                    <span key={c.id} className="topo-deploy-change-item">{c.description}</span>
+                  ))}
+                  {pendingChanges.length > 5 && (
+                    <span className="topo-deploy-change-item text-dim">
+                      +{pendingChanges.length - 5} more
+                    </span>
+                  )}
+                </div>
+              </>
+            ) : (
+              <>
+                <span className="topo-deploy-count">{nodes.filter((n) => n.data.staged && !n.data.dseName).length}</span>
+                <span className="topo-deploy-label">staged service{nodes.filter((n) => n.data.staged && !n.data.dseName).length !== 1 ? 's' : ''} ready to deploy</span>
+              </>
+            )}
           </div>
           <div className="topo-deploy-actions">
-            <button className="btn" onClick={handleDiscard} disabled={deploying}>
-              Discard
-            </button>
+            {pendingChanges.length > 0 && (
+              <button className="btn" onClick={handleDiscard} disabled={deploying}>
+                Discard
+              </button>
+            )}
             <button className="btn btn-primary" onClick={handleDeploy} disabled={deploying}>
               {deploying ? 'Deploying…' : '🚀 Deploy'}
             </button>

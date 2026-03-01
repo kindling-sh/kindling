@@ -54,6 +54,44 @@ The dashboard isn't just read-only. From the UI you can:
 - **Bootstrap the cluster** — run `kindling init` from the browser
 - **Connect runners** — register GitHub Actions runners
 - **View logs** — stream controller and pod logs
+- **Topology editor** — visual drag-and-drop canvas for designing your architecture
+
+---
+
+## Topology editor
+
+The topology page (`/topology`) provides a visual canvas for designing and
+deploying your entire service architecture:
+
+### Stage → Connect → Scaffold → Deploy
+
+1. **Stage** — drag a service from the palette onto the canvas. It appears
+   with an amber "staged" badge but no files are generated yet.
+2. **Connect** — draw edges between nodes. Service-to-service connections
+   show as dashed cyan lines; service-to-dependency connections show as
+   solid lines with arrows.
+3. **Scaffold** — click a staged service to open its detail sidebar. The
+   scaffold button detects connected dependencies and injects the right
+   env vars (e.g. `MONGO_URL`, `DATABASE_URL`) into the generated code.
+4. **Deploy** — the deploy bar appears whenever you have pending changes
+   or staged services. One click deploys everything.
+
+### Canvas persistence
+
+Your canvas layout — nodes, edges, and positions — is saved to
+`.kindling/canvas.json` and restored on reload. Staged services survive
+page refreshes.
+
+### Supported service templates
+
+- Node.js (Express)
+- Python (Flask)
+- Go (net/http)
+
+### Supported dependencies
+
+PostgreSQL, Redis, MongoDB, MySQL, RabbitMQ, MinIO, Elasticsearch,
+Kafka, NATS, Memcached
 
 ---
 

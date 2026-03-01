@@ -129,6 +129,48 @@ func readClusterDSEs() ([]snapshotDSE, error) {
 	return dses, nil
 }
 
+// detectUserPrefix finds the GitHub actor prefix (e.g. "jeff-vincent-")
+// that is common to the majority of DSE names. The CI workflow names
+// every DSE as "${{ github.actor }}-<service-name>", so this prefix
+// must be stripped to produce clean chart names like "gateway" instead
+// of "jeff-vincent-gateway".
+// Returns the prefix including trailing dash, or "" if none detected.
+func detectUserPrefix(dses []snapshotDSE) string {
+	if len(dses) < 2 {
+		return ""
+	}
+
+	// Count how many names share each possible dash-delimited prefix.
+	counts := make(map[string]int)
+	for _, d := range dses {
+		parts := strings.Split(d.Name, "-")
+		// Try each prefix length, leaving at least 1 segment as the service name.
+		for pLen := 1; pLen < len(parts); pLen++ {
+			prefix := strings.Join(parts[:pLen], "-") + "-"
+			counts[prefix]++
+		}
+	}
+
+	// Pick the longest prefix shared by the most names (minimum 2,
+	// must cover more than half the DSEs to qualify as the user prefix).
+	var best string
+	bestCount := 0
+	for prefix, count := range counts {
+		if count < 2 {
+			continue
+		}
+		if count > bestCount || (count == bestCount && len(prefix) > len(best)) {
+			best = prefix
+			bestCount = count
+		}
+	}
+
+	if bestCount > len(dses)/2 {
+		return best
+	}
+	return ""
+}
+
 // ── Dependency defaults (mirrors operator registry) ─────────────
 
 type depDefaults struct {
@@ -166,6 +208,16 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 	success(fmt.Sprintf("Found %d service(s)", len(dses)))
+
+	// Strip GitHub actor prefix (e.g. "jeff-vincent-gateway" → "gateway")
+	if prefix := detectUserPrefix(dses); prefix != "" {
+		step("✂️", fmt.Sprintf("Stripping user prefix %q from service names", strings.TrimSuffix(prefix, "-")))
+		for i := range dses {
+			if stripped := strings.TrimPrefix(dses[i].Name, prefix); stripped != "" {
+				dses[i].Name = stripped
+			}
+		}
+	}
 
 	chartName := snapshotName
 	if chartName == "" {
@@ -300,9 +352,11 @@ func buildValuesYAML(chartName string, dses []snapshotDSE, depsSeen map[string]b
 		buf.WriteString(fmt.Sprintf("  port: %d\n", dse.Port))
 		buf.WriteString(fmt.Sprintf("  replicas: %d\n", dse.Replicas))
 
-		// User-defined env vars
-		if len(dse.Env) > 0 {
+		// Env vars — user-defined + dependency connection strings
+		hasEnv := len(dse.Env) > 0 || len(dse.Deps) > 0
+		if hasEnv {
 			buf.WriteString("  env:\n")
+			// User-defined env vars
 			for _, e := range dse.Env {
 				if live {
 					buf.WriteString(fmt.Sprintf("    %s: \"%s\"\n", e.Name, e.Value))
@@ -310,15 +364,16 @@ func buildValuesYAML(chartName string, dses []snapshotDSE, depsSeen map[string]b
 					buf.WriteString(fmt.Sprintf("    %s: \"%s\"  # ← live value\n", e.Name, e.Value))
 				}
 			}
-		}
-
-		// Show what connection strings will be injected (informational)
-		if !live && len(dse.Deps) > 0 {
-			buf.WriteString("  # ── Auto-injected env vars (from dependencies) ──\n")
+			// Dependency connection strings — real configurable values
 			for _, dep := range dse.Deps {
 				if def, ok := depRegistry[dep.Type]; ok {
-					buf.WriteString(fmt.Sprintf("  # %s = %s\n", def.EnvVarName,
-						buildExampleConnectionURL(dep.Type, helmSafe(dep.Type), def)))
+					if live {
+						buf.WriteString(fmt.Sprintf("    %s: \"%s\"\n", def.EnvVarName,
+							buildExampleConnectionURL(dep.Type, helmSafe(dep.Type), def)))
+					} else {
+						buf.WriteString(fmt.Sprintf("    %s: \"\"  # TODO: set your production %s connection string\n",
+							def.EnvVarName, dep.Type))
+					}
 				}
 			}
 		}
@@ -464,12 +519,15 @@ func helmDeploymentTemplate(dse snapshotDSE) string {
 
 	// Build env block — connection strings from deps + user env
 	var envLines strings.Builder
+	// Dep connection strings — now sourced from values.yaml so users can
+	// set their production URLs without editing templates.
 	for _, dep := range dse.Deps {
 		if def, ok := depRegistry[dep.Type]; ok {
-			depSafe := helmSafe(dep.Type)
-			envLines.WriteString(fmt.Sprintf(`        - name: %s
-          value: "%s://{{ .Release.Name }}-%s:{{ .Values.%s.port }}"
-`, def.EnvVarName, connectionProtocol(dep.Type), depSafe, depSafe))
+			envLines.WriteString(fmt.Sprintf(`        {{- if .Values.%s.env.%s }}
+        - name: %s
+          value: {{ .Values.%s.env.%s | quote }}
+        {{- end }}
+`, safe, def.EnvVarName, def.EnvVarName, safe, def.EnvVarName))
 		}
 	}
 	// User-defined env vars from values
@@ -685,8 +743,8 @@ func kustomizeDeployment(dse snapshotDSE) string {
 	// Dependency connection strings
 	for _, dep := range dse.Deps {
 		if def, ok := depRegistry[dep.Type]; ok {
-			envLines.WriteString(fmt.Sprintf("        - name: %s\n          value: \"%s://%s:%d\"\n",
-				def.EnvVarName, connectionProtocol(dep.Type), helmSafe(dep.Type), def.Port))
+			envLines.WriteString(fmt.Sprintf("        - name: %s\n          value: \"\"  # TODO: set your production %s connection string\n",
+				def.EnvVarName, dep.Type))
 		}
 	}
 	// User env

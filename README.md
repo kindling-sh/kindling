@@ -58,6 +58,18 @@ kindling is a complete development lifecycle tool. It takes your project from fi
 
 Zero cloud CI minutes. Sub-second iteration. Full Kubernetes fidelity.
 
+### Lightweight by Design
+
+kindling adds almost nothing to your machine. The entire operator is a **14 MB static binary** that runs as a single pod requesting **15m CPU and 128 MB RAM**. Everything else in the cluster is *your* application. A single-service setup runs comfortably under 1 GB total.
+
+| Component | Footprint |
+|---|---|
+| CLI binary | 14 MB, single static Go binary |
+| Operator pod | 15m CPU / 128 Mi RAM (2 containers) |
+| In-cluster registry | ~30 Mi RAM |
+| Ingress controller | ~90 Mi RAM |
+| **kindling total** | **< 250 Mi RAM** — everything else is your app |
+
 ---
 
 ## 1. Analyze — Check Your Project's Readiness
@@ -394,11 +406,15 @@ sudo mv bin/kindling /usr/local/bin/
 
 ### Recommended Docker Desktop resources
 
-| Workload | CPUs | Memory | Disk |
-|---|---|---|---|
-| Small (1–3 services) | 4 | 8 GB | 30 GB |
-| Medium (4–6 services) | 6 | 12 GB | 50 GB |
-| Large (7+ services) | 8+ | 16 GB | 80 GB |
+| Workload | CPUs | Memory | Disk | kindling overhead |
+|---|---|---|---|---|
+| Minimal (1 service, no deps) | 2 | 4 GB | 20 GB | < 250 Mi |
+| Small (1–3 services) | 4 | 8 GB | 30 GB | < 250 Mi |
+| Medium (4–6 services) | 6 | 12 GB | 50 GB | < 250 Mi |
+| Large (7+ services) | 8+ | 16 GB | 80 GB | < 250 Mi |
+
+> kindling's own footprint stays constant regardless of workload size.
+> The memory growth comes from your services and dependencies.
 
 ---
 
@@ -426,6 +442,7 @@ sudo mv bin/kindling /usr/local/bin/
 | `kindling logs` | Tail operator logs |
 | `kindling secrets` | Manage external credentials |
 | `kindling env` | Set/list/unset env vars on deployments |
+| `kindling snapshot` | Export Helm chart or Kustomize overlay from cluster state |
 | **Lifecycle** | |
 | `kindling promote` | *(coming soon)* Graduate to production with TLS |
 | `kindling reset` | Remove runner pool (keep cluster) |
@@ -444,6 +461,7 @@ sudo mv bin/kindling /usr/local/bin/
 - [x] `kindling analyze` — deterministic project readiness checking
 - [x] `kindling sync` — live file sync with 30+ language-aware restart strategies
 - [x] `kindling dashboard` — web UI with topology map, sync/load, runtime detection
+- [x] `kindling snapshot` — export Helm charts or Kustomize overlays from running cluster
 - [x] `kindling intel` — auto-configure coding agents with project context
 - [x] Secrets management with local backup across cluster rebuilds
 - [x] Public HTTPS tunnels for OAuth
@@ -451,7 +469,6 @@ sudo mv bin/kindling /usr/local/bin/
 - [ ] `kindling promote` — graduate to production with TLS and DNS
 - [ ] Topology map: drag-and-drop service/dependency editor
 - [ ] Interactive service health resolution in dashboard
-- [ ] `kindling diagnose` — LLM-powered error remediation
 
 ---
 

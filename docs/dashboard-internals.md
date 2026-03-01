@@ -360,14 +360,36 @@ The topology editor is the most complex frontend component:
 - `DependencyNode` — infrastructure dependency with type icon, name,
   and connection handles
 
+**Custom edge types:**
+
+- `connection` (default) — solid line with arrow, used for service→dependency edges
+- `service-edge` — dashed cyan line (`strokeDasharray: '8 4'`, color `#06b6d4`),
+  used for service-to-service connections
+
+**Connection handles:**
+
+Service nodes have dual handles (source + target) on both left and right
+sides, enabling connections in any direction. Secondary handles are invisible
+until hover (`.topo-handle-secondary`, `opacity: 0`). The canvas uses
+`ConnectionMode.Loose` from `@xyflow/react` for flexible edge attachment.
+
 **Interaction model:**
 
-1. Drag from palette → creates node on canvas
-2. Drag between handles → creates edge (dependency connection)
-3. Click node → opens config panel with editable fields
-4. Click Deploy → POST /api/topology/deploy
-5. Click Scaffold → opens dialog, POST /api/topology/scaffold
-6. Click Export YAML → generates DSE YAML in browser
+1. Drag from palette → **stages** a node on canvas (amber "staged" badge)
+2. Draw edges between nodes → creates dependency or service-to-service connections
+3. Click staged node → opens detail sidebar with **Scaffold** button
+4. Scaffold reads current edges to detect connected deps/services and injects
+   env vars (e.g. `MONGO_URL`, `REDIS_URL`) into the generated code
+5. Click Deploy → POST /api/topology/deploy
+6. After deploy, nodes transition from staged (amber) to deployed (green)
+7. Deploy bar shows when there are pending changes OR staged nodes
+
+**Canvas persistence:**
+
+The full canvas state (nodes, edges, and positions) is persisted to
+`.kindling/canvas.json` as a `canvasOverlay` struct. On load, the backend
+merges cluster state with the persisted overlay so user-staged (not yet
+deployed) nodes and edges survive page reloads.
 
 **State management:**
 

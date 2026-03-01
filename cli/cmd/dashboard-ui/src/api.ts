@@ -199,7 +199,7 @@ export async function deployTopology(graph: TopologyGraph): Promise<ActionResult
   return apiPost('/api/topology/deploy', graph);
 }
 
-export async function scaffoldService(body: { name: string; path: string; port?: number; language?: string }): Promise<ActionResult & { path?: string; language?: string }> {
+export async function scaffoldService(body: { name: string; path: string; port?: number; language?: string; deps?: { envVar: string; value: string }[] }): Promise<ActionResult & { path?: string; language?: string }> {
   return apiPost('/api/topology/scaffold', body);
 }
 
@@ -218,4 +218,8 @@ export async function cleanupService(body: {
   referencedBy?: string[];
 }): Promise<ActionResult> {
   return apiPost('/api/topology/cleanup', body);
+}
+
+export async function saveCanvas(overlay: { nodes: unknown[]; edges: unknown[]; positions?: Record<string, { x: number; y: number }> }): Promise<{ ok: boolean }> {
+  return apiPost('/api/topology/canvas', overlay);
 }

@@ -413,7 +413,9 @@ export interface TopologyNodeData {
   dseName?: string;  // links to an existing DSE
   isNew?: boolean;
   isDirty?: boolean;
-  staged?: boolean;   // scaffolded but not yet deployed
+  staged?: boolean;   // placed on canvas but not yet deployed
+  scaffolded?: boolean; // scaffold files have been generated
+  fromCluster?: boolean; // true for nodes sourced from the live cluster
   language?: string;  // scaffold language template (node/go/python)
   // index signature for React Flow compatibility
   [key: string]: unknown;

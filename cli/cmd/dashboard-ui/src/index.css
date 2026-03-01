@@ -2194,6 +2194,19 @@ details[open] summary {
   transform: scale(1.3);
 }
 
+/* Hidden handles — still functional for connections, just not visible */
+.topo-handle-hidden {
+  opacity: 0 !important;
+  width: 10px !important;
+  height: 10px !important;
+  pointer-events: all !important;
+}
+.topo-handle-hidden:hover {
+  opacity: 1 !important;
+  background: var(--accent) !important;
+  border-color: var(--accent) !important;
+}
+
 /* ─── Empty State ────────────────────────────────────────── */
 .topo-empty {
   position: absolute;
@@ -2721,6 +2734,64 @@ details[open] summary {
 .topo-edge-label:hover .topo-edge-url {
   color: var(--accent);
   opacity: 1;
+}
+
+/* ─── Service-to-Service Edge Labels ─────────────────────── */
+.topo-edge-label--svc {
+  border-color: rgba(6, 182, 212, 0.3);
+  color: #06b6d4;
+}
+.topo-edge-label--svc:hover {
+  border-color: #06b6d4;
+  color: #22d3ee;
+}
+.topo-edge-label--svc .topo-edge-url {
+  color: rgba(6, 182, 212, 0.6);
+}
+.topo-edge-label--svc:hover .topo-edge-url {
+  color: #06b6d4;
+  opacity: 1;
+}
+
+/* ─── Scaffold Sidebar Section ───────────────────────────── */
+.topo-scaffold-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.topo-scaffold-deps {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  font-size: 11px;
+}
+.topo-scaffold-deps-label {
+  font-size: 10px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 2px;
+}
+.topo-scaffold-dep-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+.topo-scaffold-dep-item code {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--accent);
+}
+.topo-scaffold-done {
+  font-size: 11px;
+  color: var(--success);
+  padding: 6px 0;
 }
 
 /* ─── Deploy Bar ─────────────────────────────────────────── */

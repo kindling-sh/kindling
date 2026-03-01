@@ -1308,11 +1308,11 @@ func handleGenerate(w http.ResponseWriter, r *http.Request) {
 // The frontend polls this every few seconds and overlays the result.
 
 type topologyNodeStatus struct {
-	Phase      string                 `json:"phase"`      // aggregate: Running, Pending, Error, CrashLoopBackOff, Unknown
-	Ready      int                    `json:"ready"`      // pods with all containers ready
-	Total      int                    `json:"total"`      // total pods matched
-	Restarts   int                    `json:"restarts"`   // sum of all container restart counts
-	LastDeploy string                 `json:"lastDeploy"` // deployment's last-updated timestamp
+	Phase      string                  `json:"phase"`      // aggregate: Running, Pending, Error, CrashLoopBackOff, Unknown
+	Ready      int                     `json:"ready"`      // pods with all containers ready
+	Total      int                     `json:"total"`      // total pods matched
+	Restarts   int                     `json:"restarts"`   // sum of all container restart counts
+	LastDeploy string                  `json:"lastDeploy"` // deployment's last-updated timestamp
 	Containers []topologyContainerInfo `json:"containers,omitempty"`
 }
 
@@ -1349,8 +1349,8 @@ func handleGetTopologyStatus(w http.ResponseWriter, r *http.Request) {
 					Ready        bool   `json:"ready"`
 					RestartCount int    `json:"restartCount"`
 					State        struct {
-						Running    *struct{} `json:"running"`
-						Waiting    *struct {
+						Running *struct{} `json:"running"`
+						Waiting *struct {
 							Reason string `json:"reason"`
 						} `json:"waiting"`
 						Terminated *struct {
@@ -1375,7 +1375,7 @@ func handleGetTopologyStatus(w http.ResponseWriter, r *http.Request) {
 			Items []struct {
 				Metadata struct {
 					Labels            map[string]string `json:"labels"`
-					CreationTimestamp  string            `json:"creationTimestamp"`
+					CreationTimestamp string            `json:"creationTimestamp"`
 				} `json:"metadata"`
 				Status struct {
 					Conditions []struct {
@@ -1595,13 +1595,13 @@ func handleTopologyNodeDetail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type podInfo struct {
-		Name       string `json:"name"`
-		Namespace  string `json:"namespace"`
-		Phase      string `json:"phase"`
-		Ready      string `json:"ready"`
-		Restarts   int    `json:"restarts"`
-		Age        string `json:"age"`
-		Node       string `json:"node"`
+		Name      string `json:"name"`
+		Namespace string `json:"namespace"`
+		Phase     string `json:"phase"`
+		Ready     string `json:"ready"`
+		Restarts  int    `json:"restarts"`
+		Age       string `json:"age"`
+		Node      string `json:"node"`
 	}
 
 	type eventInfo struct {
@@ -1738,11 +1738,11 @@ func handleTopologyNodeDetail(w http.ResponseWriter, r *http.Request) {
 		if err == nil && evtOut != "" {
 			var evtList struct {
 				Items []struct {
-					Type    string `json:"type"`
-					Reason  string `json:"reason"`
-					Message string `json:"message"`
-					Count   int    `json:"count"`
-					LastTimestamp string `json:"lastTimestamp"`
+					Type           string `json:"type"`
+					Reason         string `json:"reason"`
+					Message        string `json:"message"`
+					Count          int    `json:"count"`
+					LastTimestamp  string `json:"lastTimestamp"`
 					InvolvedObject struct {
 						Name string `json:"name"`
 					} `json:"involvedObject"`
@@ -1795,69 +1795,114 @@ func worstPhase(current, incoming string) string {
 	return current
 }
 
-// ── Staged-node persistence ─────────────────────────────────────
-// Staged services are saved to .kindling/staged.json so they survive
-// page navigation and dashboard restarts.
+// ── Canvas persistence ──────────────────────────────────────────
+// The full canvas overlay (user-added nodes and edges that aren't
+// from the cluster) is saved to .kindling/canvas.json so it
+// survives page navigation and dashboard restarts.
 
-func stagedFilePath() string {
+func kindlingDir() string {
 	if out, err := exec.Command("git", "rev-parse", "--show-toplevel").Output(); err == nil {
-		return filepath.Join(strings.TrimSpace(string(out)), ".kindling", "staged.json")
+		return filepath.Join(strings.TrimSpace(string(out)), ".kindling")
 	}
 	wd, _ := os.Getwd()
-	return filepath.Join(wd, ".kindling", "staged.json")
+	return filepath.Join(wd, ".kindling")
 }
 
-func loadStagedNodes() []topologyNode {
-	data, err := os.ReadFile(stagedFilePath())
+func canvasFilePath() string {
+	return filepath.Join(kindlingDir(), "canvas.json")
+}
+
+// canvasOverlay stores the user-added nodes and edges that aren't
+// derived from cluster DSEs.
+type canvasOverlay struct {
+	Nodes     []topologyNode              `json:"nodes"`
+	Edges     []topologyEdge              `json:"edges"`
+	Positions map[string]topologyPosition `json:"positions,omitempty"`
+}
+
+func loadCanvas() canvasOverlay {
+	data, err := os.ReadFile(canvasFilePath())
 	if err != nil {
-		return nil
+		return canvasOverlay{}
 	}
-	var nodes []topologyNode
-	if err := json.Unmarshal(data, &nodes); err != nil {
-		return nil
+	var c canvasOverlay
+	if err := json.Unmarshal(data, &c); err != nil {
+		return canvasOverlay{}
 	}
-	return nodes
+	return c
 }
 
-func saveStagedNodes(nodes []topologyNode) {
-	p := stagedFilePath()
+func saveCanvas(c canvasOverlay) {
+	p := canvasFilePath()
 	os.MkdirAll(filepath.Dir(p), 0755)
-	data, err := json.MarshalIndent(nodes, "", "  ")
+	data, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
-		log.Printf("[staged] marshal error: %v", err)
+		log.Printf("[canvas] marshal error: %v", err)
 		return
 	}
 	if err := os.WriteFile(p, data, 0644); err != nil {
-		log.Printf("[staged] write error: %v", err)
+		log.Printf("[canvas] write error: %v", err)
 	}
 }
 
-func addStagedNode(node topologyNode) {
-	nodes := loadStagedNodes()
-	// Replace if same name already staged
+// addCanvasNode adds or replaces a node in the canvas overlay.
+func addCanvasNode(node topologyNode) {
+	c := loadCanvas()
 	found := false
-	for i, n := range nodes {
+	for i, n := range c.Nodes {
 		if n.Data.Label == node.Data.Label {
-			nodes[i] = node
+			c.Nodes[i] = node
 			found = true
 			break
 		}
 	}
 	if !found {
-		nodes = append(nodes, node)
+		c.Nodes = append(c.Nodes, node)
 	}
-	saveStagedNodes(nodes)
+	saveCanvas(c)
 }
 
-func removeStagedNode(label string) {
-	nodes := loadStagedNodes()
-	var filtered []topologyNode
-	for _, n := range nodes {
+// removeCanvasNode removes a node (and its edges) by label.
+func removeCanvasNode(label string) {
+	c := loadCanvas()
+	var nodeID string
+	var filteredNodes []topologyNode
+	for _, n := range c.Nodes {
 		if n.Data.Label != label {
-			filtered = append(filtered, n)
+			filteredNodes = append(filteredNodes, n)
+		} else {
+			nodeID = n.ID
 		}
 	}
-	saveStagedNodes(filtered)
+	// Also remove edges connected to this node
+	var filteredEdges []topologyEdge
+	for _, e := range c.Edges {
+		if e.Source != nodeID && e.Target != nodeID {
+			filteredEdges = append(filteredEdges, e)
+		}
+	}
+	saveCanvas(canvasOverlay{Nodes: filteredNodes, Edges: filteredEdges})
+}
+
+// ── Backward compat aliases ─────────────────────────────────────
+
+func addStagedNode(node topologyNode) { addCanvasNode(node) }
+func removeStagedNode(label string)   { removeCanvasNode(label) }
+
+// ── POST /api/topology/canvas ───────────────────────────────────
+// Saves the current canvas overlay (user-added nodes + edges).
+
+func handleSaveCanvas(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) {
+		return
+	}
+	var payload canvasOverlay
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		actionErr(w, "invalid canvas payload: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	saveCanvas(payload)
+	jsonResponse(w, map[string]bool{"ok": true})
 }
 
 // topologyNode is the JSON shape for a node in the topology graph.
@@ -1888,19 +1933,23 @@ type topologyData struct {
 	IsNew       bool   `json:"isNew,omitempty"`
 	IsDirty     bool   `json:"isDirty,omitempty"`
 	Staged      bool   `json:"staged,omitempty"`
+	Scaffolded  bool   `json:"scaffolded,omitempty"`
 	Language    string `json:"language,omitempty"`
+	FromCluster bool   `json:"fromCluster,omitempty"`
 }
 
 type topologyEdge struct {
 	ID     string                 `json:"id"`
+	Type   string                 `json:"type,omitempty"`
 	Source string                 `json:"source"`
 	Target string                 `json:"target"`
 	Data   map[string]interface{} `json:"data,omitempty"`
 }
 
 type topologyGraph struct {
-	Nodes []topologyNode `json:"nodes"`
-	Edges []topologyEdge `json:"edges"`
+	Nodes        []topologyNode `json:"nodes"`
+	Edges        []topologyEdge `json:"edges"`
+	HasPositions bool           `json:"hasPositions,omitempty"`
 }
 
 // svcEnvVar represents a service-to-service env var to inject into a container.
@@ -1957,7 +2006,8 @@ func handleGetTopology(w http.ResponseWriter, r *http.Request) {
 
 	// Track dependency nodes so we can reuse them across DSEs
 	depNodes := make(map[string]string) // depType -> nodeID
-	yOffset := 0.0
+	svcY := 80.0
+	depY := 80.0
 
 	for _, dse := range dseList.Items {
 		// Create service node
@@ -1969,7 +2019,7 @@ func handleGetTopology(w http.ResponseWriter, r *http.Request) {
 		graph.Nodes = append(graph.Nodes, topologyNode{
 			ID:       svcID,
 			Type:     "service",
-			Position: topologyPosition{X: 300, Y: yOffset},
+			Position: topologyPosition{X: 400, Y: svcY},
 			Data: topologyData{
 				Kind:        "service",
 				Label:       dse.Metadata.Name,
@@ -1977,11 +2027,13 @@ func handleGetTopology(w http.ResponseWriter, r *http.Request) {
 				ServicePort: dse.Spec.Service.Port,
 				Replicas:    replicas,
 				DSEName:     dse.Metadata.Name,
+				FromCluster: true,
 			},
 		})
+		svcY += 220
 
 		// Create dependency nodes and edges
-		for i, dep := range dse.Spec.Dependencies {
+		for _, dep := range dse.Spec.Dependencies {
 			depID, exists := depNodes[dep.Type]
 			if !exists {
 				depID = fmt.Sprintf("dep-%s", dep.Type)
@@ -1992,41 +2044,66 @@ func handleGetTopology(w http.ResponseWriter, r *http.Request) {
 				graph.Nodes = append(graph.Nodes, topologyNode{
 					ID:       depID,
 					Type:     "dependency",
-					Position: topologyPosition{X: 650, Y: yOffset + float64(i)*100},
+					Position: topologyPosition{X: 800, Y: depY},
 					Data: topologyData{
-						Kind:       "dependency",
-						Label:      dep.Type,
-						DepType:    dep.Type,
-						Version:    dep.Version,
-						Port:       port,
-						EnvVarName: dep.EnvVarName,
+						Kind:        "dependency",
+						Label:       dep.Type,
+						DepType:     dep.Type,
+						Version:     dep.Version,
+						Port:        port,
+						EnvVarName:  dep.EnvVarName,
+						FromCluster: true,
 					},
 				})
 				depNodes[dep.Type] = depID
+				depY += 160
 			}
 
 			graph.Edges = append(graph.Edges, topologyEdge{
 				ID:     fmt.Sprintf("e-%s-%s", svcID, depID),
+				Type:   "connection",
 				Source: svcID,
 				Target: depID,
 			})
 		}
-
-		yOffset += 200
 	}
 
-	// Merge in any persisted staged nodes that aren't already in the cluster
-	stagedNodes := loadStagedNodes()
-	clusterLabels := make(map[string]bool)
+	// Merge in any persisted canvas nodes/edges that aren't already in the cluster
+	canvas := loadCanvas()
+	clusterNodeIDs := make(map[string]bool)
 	for _, n := range graph.Nodes {
-		clusterLabels[n.Data.Label] = true
+		clusterNodeIDs[n.ID] = true
 	}
-	for _, sn := range stagedNodes {
-		if !clusterLabels[sn.Data.Label] {
-			sn.Position = topologyPosition{X: 300, Y: yOffset}
-			graph.Nodes = append(graph.Nodes, sn)
-			yOffset += 200
+	// Track which canvas node IDs we actually merge in
+	mergedNodeIDs := make(map[string]bool)
+	for _, cn := range canvas.Nodes {
+		if !clusterNodeIDs[cn.ID] {
+			graph.Nodes = append(graph.Nodes, cn)
+			mergedNodeIDs[cn.ID] = true
 		}
+	}
+	// Merge canvas edges whose source and target both exist
+	allNodeIDs := make(map[string]bool)
+	for id := range clusterNodeIDs {
+		allNodeIDs[id] = true
+	}
+	for id := range mergedNodeIDs {
+		allNodeIDs[id] = true
+	}
+	for _, ce := range canvas.Edges {
+		if allNodeIDs[ce.Source] && allNodeIDs[ce.Target] {
+			graph.Edges = append(graph.Edges, ce)
+		}
+	}
+
+	// Apply saved positions from canvas overlay to all nodes
+	if len(canvas.Positions) > 0 {
+		for i, n := range graph.Nodes {
+			if pos, ok := canvas.Positions[n.ID]; ok {
+				graph.Nodes[i].Position = pos
+			}
+		}
+		graph.HasPositions = true
 	}
 
 	jsonResponse(w, graph)
@@ -2268,6 +2345,56 @@ func handleDeployTopology(w http.ResponseWriter, r *http.Request) {
 	actionOK(w, strings.Join(outputs, "\n"))
 }
 
+// existingDSEIngressYAML fetches the ingress spec from an existing DSE in the cluster.
+// Returns the YAML lines to append (empty string if no ingress or DSE not found).
+func existingDSEIngressYAML(dseName string) string {
+	if dseName == "" {
+		return ""
+	}
+	out, err := kubectlJSON("get", "devstagingenvironment", dseName, "-n", "default", "-o", "json")
+	if err != nil {
+		return ""
+	}
+	var dse struct {
+		Spec struct {
+			Ingress *struct {
+				Enabled          bool              `json:"enabled"`
+				Host             string            `json:"host,omitempty"`
+				Path             string            `json:"path,omitempty"`
+				PathType         string            `json:"pathType,omitempty"`
+				IngressClassName string            `json:"ingressClassName,omitempty"`
+				Annotations      map[string]string `json:"annotations,omitempty"`
+			} `json:"ingress,omitempty"`
+		} `json:"spec"`
+	}
+	if err := json.Unmarshal([]byte(out), &dse); err != nil || dse.Spec.Ingress == nil {
+		return ""
+	}
+	ing := dse.Spec.Ingress
+	var sb strings.Builder
+	sb.WriteString("  ingress:\n")
+	sb.WriteString(fmt.Sprintf("    enabled: %v\n", ing.Enabled))
+	if ing.Host != "" {
+		sb.WriteString(fmt.Sprintf("    host: %s\n", ing.Host))
+	}
+	if ing.Path != "" {
+		sb.WriteString(fmt.Sprintf("    path: %s\n", ing.Path))
+	}
+	if ing.PathType != "" {
+		sb.WriteString(fmt.Sprintf("    pathType: %s\n", ing.PathType))
+	}
+	if ing.IngressClassName != "" {
+		sb.WriteString(fmt.Sprintf("    ingressClassName: %s\n", ing.IngressClassName))
+	}
+	if len(ing.Annotations) > 0 {
+		sb.WriteString("    annotations:\n")
+		for k, v := range ing.Annotations {
+			sb.WriteString(fmt.Sprintf("      %s: \"%s\"\n", k, v))
+		}
+	}
+	return sb.String()
+}
+
 // buildDSEYAML generates a DevStagingEnvironment YAML manifest from a
 // service node and its connected dependency nodes.
 func buildDSEYAML(svc topologyNode, deps []topologyNode, envVars []svcEnvVar) string {
@@ -2327,6 +2454,11 @@ spec:
 				sb.WriteString(fmt.Sprintf("      envVarName: %s\n", dep.Data.EnvVarName))
 			}
 		}
+	}
+
+	// Preserve existing ingress config from the live DSE (if any)
+	if ingressYAML := existingDSEIngressYAML(svc.Data.DSEName); ingressYAML != "" {
+		sb.WriteString(ingressYAML)
 	}
 
 	return sb.String()
@@ -2405,6 +2537,10 @@ func handleScaffoldService(w http.ResponseWriter, r *http.Request) {
 		Path     string `json:"path"`
 		Port     int    `json:"port"`
 		Language string `json:"language"`
+		Deps     []struct {
+			EnvVar string `json:"envVar"`
+			Value  string `json:"value"`
+		} `json:"deps"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		actionErr(w, "invalid request body", http.StatusBadRequest)
@@ -2433,14 +2569,20 @@ func handleScaffoldService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Convert deps to simple string pairs
+	envDeps := make([]scaffoldDep, len(body.Deps))
+	for i, d := range body.Deps {
+		envDeps[i] = scaffoldDep{EnvVar: d.EnvVar, Value: d.Value}
+	}
+
 	var scaffoldErr error
 	switch body.Language {
 	case "go":
-		scaffoldErr = scaffoldGo(absPath, body.Name, body.Port)
+		scaffoldErr = scaffoldGo(absPath, body.Name, body.Port, envDeps)
 	case "python":
-		scaffoldErr = scaffoldPython(absPath, body.Name, body.Port)
+		scaffoldErr = scaffoldPython(absPath, body.Name, body.Port, envDeps)
 	default:
-		scaffoldErr = scaffoldNode(absPath, body.Name, body.Port)
+		scaffoldErr = scaffoldNode(absPath, body.Name, body.Port, envDeps)
 	}
 
 	if scaffoldErr != nil {
@@ -2475,7 +2617,12 @@ func handleScaffoldService(w http.ResponseWriter, r *http.Request) {
 
 // ── Scaffold templates ──────────────────────────────────────────
 
-func scaffoldNode(dir, name string, port int) error {
+type scaffoldDep struct {
+	EnvVar string
+	Value  string
+}
+
+func scaffoldNode(dir, name string, port int, deps []scaffoldDep) error {
 	// Dockerfile (Kaniko-compatible)
 	dockerfile := fmt.Sprintf(`FROM node:20-alpine
 WORKDIR /app
@@ -2505,8 +2652,17 @@ CMD ["node", "index.js"]
 		return err
 	}
 
-	indexJS := fmt.Sprintf(`const http = require('http');
+	// Build env var block for index.js
+	var envBlock string
+	for _, d := range deps {
+		envBlock += fmt.Sprintf("const %s = process.env.%s || '%s';\n", strings.ReplaceAll(d.EnvVar, "-", "_"), d.EnvVar, d.Value)
+	}
+	if envBlock != "" {
+		envBlock = "\n// Connection URLs (from topology edges)\n" + envBlock + "\n"
+	}
 
+	indexJS := fmt.Sprintf(`const http = require('http');
+%s
 const PORT = process.env.PORT || %d;
 
 const server = http.createServer((req, res) => {
@@ -2522,11 +2678,11 @@ const server = http.createServer((req, res) => {
 server.listen(PORT, () => {
   console.log('%s listening on port ' + PORT);
 });
-`, port, name, name)
+`, envBlock, port, name, name)
 	return os.WriteFile(filepath.Join(dir, "index.js"), []byte(indexJS), 0644)
 }
 
-func scaffoldGo(dir, name string, port int) error {
+func scaffoldGo(dir, name string, port int, deps []scaffoldDep) error {
 	// Dockerfile (Kaniko-compatible, no BuildKit)
 	dockerfile := fmt.Sprintf(`FROM golang:1.23-alpine AS builder
 WORKDIR /src
@@ -2553,6 +2709,16 @@ go 1.23
 		return err
 	}
 
+	// Build env var block
+	var envBlock string
+	for _, d := range deps {
+		varName := strings.ReplaceAll(strings.ToLower(d.EnvVar), "-", "_")
+		envBlock += fmt.Sprintf("\t%s := os.Getenv(\"%s\") // %s\n", varName, d.EnvVar, d.Value)
+	}
+	if envBlock != "" {
+		envBlock = "\n\t// Connection URLs (from topology edges)\n" + envBlock + "\t_ = 0 // silence unused warnings during dev\n\n"
+	}
+
 	mainGo := fmt.Sprintf(`package main
 
 import (
@@ -2568,7 +2734,7 @@ func main() {
 	if port == "" {
 		port = "%d"
 	}
-
+%s
 	http.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprint(w, "ok")
@@ -2582,14 +2748,14 @@ func main() {
 		})
 	})
 
-	log.Printf("%s listening on port %%s", port)
+	log.Printf("%s listening on port %%%%s", port)
 	log.Fatal(http.ListenAndServe(":"+port, nil))
 }
-`, port, name, name)
+`, port, envBlock, name, name)
 	return os.WriteFile(filepath.Join(dir, "main.go"), []byte(mainGo), 0644)
 }
 
-func scaffoldPython(dir, name string, port int) error {
+func scaffoldPython(dir, name string, port int, deps []scaffoldDep) error {
 	// Dockerfile (Kaniko-compatible)
 	dockerfile := fmt.Sprintf(`FROM python:3.12-slim
 WORKDIR /app
@@ -2608,12 +2774,22 @@ CMD ["python", "app.py"]
 		return err
 	}
 
+	// Build env var block
+	var envBlock string
+	for _, d := range deps {
+		varName := strings.ReplaceAll(strings.ToUpper(d.EnvVar), "-", "_")
+		envBlock += fmt.Sprintf("%s = os.environ.get(\"%s\", \"%s\")\n", varName, d.EnvVar, d.Value)
+	}
+	if envBlock != "" {
+		envBlock = "\n# Connection URLs (from topology edges)\n" + envBlock + "\n"
+	}
+
 	appPy := fmt.Sprintf(`import os
 from flask import Flask, jsonify
 
 app = Flask(__name__)
 PORT = int(os.environ.get("PORT", %d))
-
+%s
 
 @app.route("/healthz")
 def healthz():
@@ -2627,7 +2803,7 @@ def index():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=PORT)
-`, port, name)
+`, port, envBlock, name)
 	return os.WriteFile(filepath.Join(dir, "app.py"), []byte(appPy), 0644)
 }
 
@@ -2799,7 +2975,7 @@ func cleanupWorkflow(serviceName string, referencedEnvVars []string) string {
 			for j < len(lines) {
 				nextTrimmed := strings.TrimSpace(lines[j])
 				// Next step or section starts
-				if (strings.HasPrefix(nextTrimmed, "- name:") && strings.Contains(lines[j], "      - name:")) {
+				if strings.HasPrefix(nextTrimmed, "- name:") && strings.Contains(lines[j], "      - name:") {
 					break
 				}
 				// Top-level key (no leading space, like "jobs:" or end of steps)
