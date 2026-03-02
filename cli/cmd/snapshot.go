@@ -1000,9 +1000,9 @@ func startRegistryPortForward() (int, func(), error) {
 	cmd := exec.Command("kubectl", "--context", ctx,
 		"port-forward", "svc/registry", fmt.Sprintf("%d:5000", port))
 
-	// Capture stderr so we can detect when it's ready
-	pipeR, _ := cmd.StderrPipe()
-	cmd.Stdout = nil
+	// kubectl writes "Forwarding from ..." to stdout
+	pipeR, _ := cmd.StdoutPipe()
+	cmd.Stderr = nil
 
 	if err := cmd.Start(); err != nil {
 		return 0, nil, fmt.Errorf("cannot start port-forward: %w", err)
