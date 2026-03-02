@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -248,7 +249,7 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 	if snapshotRegistry != "" {
 		tag := snapshotTag
 		if tag == "" {
-			tag = detectGitTag()
+			tag = detectNextTag(snapshotRegistry, dses[0].Name)
 		}
 		step("🏷", fmt.Sprintf("Re-tagging images → %s (tag: %s)", snapshotRegistry, tag))
 
@@ -950,6 +951,30 @@ func detectGitTag() string {
 		return "latest"
 	}
 	return strings.TrimSpace(out)
+}
+
+// detectNextTag queries the target registry for the first service's existing
+// tags and returns the next sequential "snapshot-N" tag. Falls back to
+// "snapshot-1" if the registry is unreachable or has no prior snapshots.
+func detectNextTag(registry, sampleService string) string {
+	repo := strings.TrimRight(registry, "/") + "/" + helmSafe(sampleService)
+
+	out, err := runSilent("crane", "ls", repo)
+	if err != nil {
+		return "snapshot-1"
+	}
+
+	max := 0
+	for _, line := range strings.Split(out, "\n") {
+		tag := strings.TrimSpace(line)
+		if strings.HasPrefix(tag, "snapshot-") {
+			numStr := strings.TrimPrefix(tag, "snapshot-")
+			if n, err := strconv.Atoi(numStr); err == nil && n > max {
+				max = n
+			}
+		}
+	}
+	return fmt.Sprintf("snapshot-%d", max+1)
 }
 
 // registryPullRef rewrites an in-cluster image reference so it can be
