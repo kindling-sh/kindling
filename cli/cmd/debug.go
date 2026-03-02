@@ -344,9 +344,21 @@ func startDebug(deployment, namespace string) error {
 		fmt.Printf("⚠️  Could not save debug state: %v\n", err)
 	}
 
+	// Detect whether the service source lives in a subdirectory of the
+	// workspace (common in monorepo / multi-service repos like
+	// kindling-debug-demo/orders/).  This ensures pathMappings use
+	// ${workspaceFolder}/orders instead of ${workspaceFolder}.
+	sourceSubdir := ""
+	if !debugNoLaunch {
+		sourceSubdir = detectLocalSourceDir(newPod, namespace, container, remoteRoot)
+		if sourceSubdir != "" {
+			step("📂", fmt.Sprintf("Local source subdirectory: %s/", sourceSubdir))
+		}
+	}
+
 	// Write launch.json
 	if !debugNoLaunch {
-		writeLaunchConfig(deployment, debugProf, localPort, remoteRoot)
+		writeLaunchConfig(deployment, debugProf, localPort, remoteRoot, sourceSubdir)
 	}
 
 	fmt.Println()
@@ -517,6 +529,84 @@ func extractInnerCommand(wrappedCmd string) string {
 	return ""
 }
 
+// detectLocalSourceDir figures out which local directory maps to the container's
+// working directory. In monorepo / multi-service setups the service source may
+// live in a subdirectory (e.g. "orders/") rather than at the workspace root.
+//
+// It lists files in the container's remoteRoot and checks whether those files
+// exist locally in CWD (or --project-dir). If they don't, it searches immediate
+// subdirectories and returns the best-matching one (e.g. "orders").
+// Returns "" when the root directory is already the best match.
+func detectLocalSourceDir(pod, namespace, container, remoteRoot string) string {
+	output, err := runCapture("kubectl", "exec", pod, "-n", namespace,
+		"--context", kindContext(), "-c", container, "--",
+		"ls", "-1", remoteRoot)
+	if err != nil || strings.TrimSpace(output) == "" {
+		return ""
+	}
+
+	remoteFiles := strings.Split(strings.TrimSpace(output), "\n")
+	if len(remoteFiles) == 0 {
+		return ""
+	}
+
+	// Determine the local root to search from.
+	root := "."
+	if projectDir != "" {
+		root = projectDir
+	}
+
+	// Count how many remote files exist directly in root.
+	rootHits := 0
+	for _, f := range remoteFiles {
+		f = strings.TrimSpace(f)
+		if f == "" {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(root, f)); err == nil {
+			rootHits++
+		}
+	}
+
+	// If most files match at the root level, no offset needed.
+	if rootHits > len(remoteFiles)/2 {
+		return ""
+	}
+
+	// Search immediate subdirectories for a better match.
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return ""
+	}
+
+	bestDir := ""
+	bestHits := 0
+	for _, entry := range entries {
+		if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
+			continue
+		}
+		hits := 0
+		for _, f := range remoteFiles {
+			f = strings.TrimSpace(f)
+			if f == "" {
+				continue
+			}
+			if _, err := os.Stat(filepath.Join(root, entry.Name(), f)); err == nil {
+				hits++
+			}
+		}
+		if hits > bestHits {
+			bestHits = hits
+			bestDir = entry.Name()
+		}
+	}
+
+	if bestHits > rootHits && bestHits > 0 {
+		return bestDir
+	}
+	return ""
+}
+
 // stripDebugWrapper recovers the original app command from a debug-wrapped
 // startup command. For example:
 //
@@ -602,7 +692,7 @@ func stripDebugWrapper(cmd string) string {
 //
 // The background task uses a VS Code problem matcher to detect when the debugger
 // port-forward is ready, so F5 is all you need.
-func writeLaunchConfig(deployment string, prof *debugProfile, localPort int, remoteRoot string) {
+func writeLaunchConfig(deployment string, prof *debugProfile, localPort int, remoteRoot, sourceSubdir string) {
 	// Write to --project-dir if set, otherwise CWD.
 	root := "."
 	if projectDir != "" {
@@ -621,6 +711,14 @@ func writeLaunchConfig(deployment string, prof *debugProfile, localPort int, rem
 	f5ConfigName := fmt.Sprintf("kindling: debug %s", deployment)
 	attachConfigName := fmt.Sprintf("kindling: attach %s", deployment)
 
+	// Compute the localRoot. If the service source lives in a subdirectory
+	// (e.g. "orders/" in a monorepo), use ${workspaceFolder}/orders so
+	// pathMappings resolve correctly.
+	localRoot := "${workspaceFolder}"
+	if sourceSubdir != "" {
+		localRoot = "${workspaceFolder}/" + sourceSubdir
+	}
+
 	// Build the attach config (shared by both entries)
 	attachConfig := map[string]interface{}{
 		"type":    prof.LaunchType,
@@ -638,28 +736,38 @@ func writeLaunchConfig(deployment string, prof *debugProfile, localPort int, rem
 		attachConfig["connect"] = connect
 	}
 
-	// Fix remoteRoot in path mappings to match the actual container workdir
-	if remoteRoot != "" {
-		if pm, ok := attachConfig["pathMappings"].([]map[string]string); ok {
-			for i := range pm {
+	// Fix remoteRoot in path mappings to match the actual container workdir,
+	// and localRoot to match the detected source subdirectory.
+	if pm, ok := attachConfig["pathMappings"].([]map[string]string); ok {
+		for i := range pm {
+			pm[i]["localRoot"] = localRoot
+			if remoteRoot != "" {
 				pm[i]["remoteRoot"] = remoteRoot
 			}
-			attachConfig["pathMappings"] = pm
 		}
-		if rr, ok := attachConfig["remoteRoot"].(string); ok && rr != "" {
-			attachConfig["remoteRoot"] = remoteRoot
-		}
-		if sp, ok := attachConfig["substitutePath"].([]map[string]string); ok {
-			for i := range sp {
-				if _, has := sp[i]["to"]; has {
-					sp[i]["to"] = remoteRoot
-				}
+		attachConfig["pathMappings"] = pm
+	}
+	if _, ok := attachConfig["remoteRoot"].(string); ok {
+		attachConfig["remoteRoot"] = remoteRoot
+		attachConfig["localRoot"] = localRoot
+	}
+	if sp, ok := attachConfig["substitutePath"].([]map[string]string); ok {
+		for i := range sp {
+			if _, has := sp[i]["from"]; has {
+				sp[i]["from"] = localRoot
 			}
-			attachConfig["substitutePath"] = sp
+			if _, has := sp[i]["to"]; has && remoteRoot != "" {
+				sp[i]["to"] = remoteRoot
+			}
 		}
-		if lfm, ok := attachConfig["localfsMap"].(string); ok && lfm != "" {
-			attachConfig["localfsMap"] = remoteRoot + ":${workspaceFolder}"
+		attachConfig["substitutePath"] = sp
+	}
+	if _, ok := attachConfig["localfsMap"].(string); ok {
+		rem := remoteRoot
+		if rem == "" {
+			rem = "/app"
 		}
+		attachConfig["localfsMap"] = rem + ":" + localRoot
 	}
 
 	// Full F5 config = attach + preLaunchTask
