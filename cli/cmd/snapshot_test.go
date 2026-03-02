@@ -319,28 +319,55 @@ func TestRegistryImage(t *testing.T) {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// localPullRef — translates in-cluster registry → localhost:5001
+// registryPullRef — rewrites in-cluster registry → localhost:<port>
 // ────────────────────────────────────────────────────────────────────────────
 
-func TestLocalPullRef(t *testing.T) {
+func TestRegistryPullRef(t *testing.T) {
 	tests := []struct {
 		name   string
 		image  string
+		port   int
 		expect string
 	}{
-		{"registry:5000", "registry:5000/gateway:abc123", "localhost:5001/gateway:abc123"},
-		{"localhost:5000", "localhost:5000/orders:def456", "localhost:5001/orders:def456"},
-		{"already localhost:5001", "localhost:5001/svc:tag", "localhost:5001/svc:tag"},
-		{"external registry unchanged", "ghcr.io/org/svc:v1", "ghcr.io/org/svc:v1"},
-		{"no registry", "myapp:latest", "myapp:latest"},
-		{"with long tag", "registry:5000/gateway:jeff-vincent-67d144f6942fa2a5100495d7b35d852d801ff82b",
-			"localhost:5001/gateway:jeff-vincent-67d144f6942fa2a5100495d7b35d852d801ff82b"},
+		{"registry:5000", "registry:5000/gateway:abc123", 52431, "localhost:52431/gateway:abc123"},
+		{"localhost:5000", "localhost:5000/orders:def456", 52431, "localhost:52431/orders:def456"},
+		{"localhost:5001", "localhost:5001/svc:tag", 52431, "localhost:52431/svc:tag"},
+		{"external registry unchanged", "ghcr.io/org/svc:v1", 52431, "ghcr.io/org/svc:v1"},
+		{"no registry", "myapp:latest", 52431, "myapp:latest"},
+		{"long tag from CI", "registry:5000/gateway:jeff-vincent-67d144f6942fa2a5100495d7b35d852d801ff82b", 39000,
+			"localhost:39000/gateway:jeff-vincent-67d144f6942fa2a5100495d7b35d852d801ff82b"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := localPullRef(tt.image)
+			got := registryPullRef(tt.image, tt.port)
 			if got != tt.expect {
-				t.Errorf("localPullRef(%q) = %q, want %q", tt.image, got, tt.expect)
+				t.Errorf("registryPullRef(%q, %d) = %q, want %q", tt.image, tt.port, got, tt.expect)
+			}
+		})
+	}
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// isClusterRegistryImage
+// ────────────────────────────────────────────────────────────────────────────
+
+func TestIsClusterRegistryImage(t *testing.T) {
+	tests := []struct {
+		image  string
+		expect bool
+	}{
+		{"registry:5000/gateway:abc", true},
+		{"localhost:5000/orders:def", true},
+		{"localhost:5001/svc:tag", true},
+		{"ghcr.io/org/svc:v1", false},
+		{"myapp:latest", false},
+		{"docker.io/library/nginx:latest", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.image, func(t *testing.T) {
+			got := isClusterRegistryImage(tt.image)
+			if got != tt.expect {
+				t.Errorf("isClusterRegistryImage(%q) = %v, want %v", tt.image, got, tt.expect)
 			}
 		})
 	}

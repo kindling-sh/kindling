@@ -1,11 +1,15 @@
 package cmd
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/jeffvincent/kindling/cli/core"
 	"github.com/spf13/cobra"
@@ -955,20 +959,112 @@ func detectGitTag() string {
 	return strings.TrimSpace(out)
 }
 
-// localPullRef translates an in-cluster registry address to the
-// localhost-accessible port so `docker pull` works from the host.
-//   "registry:5000/svc:tag"  → "localhost:5001/svc:tag"
-//   "localhost:5001/svc:tag" → "localhost:5001/svc:tag" (no-op)
-//   "ghcr.io/org/svc:v1"    → "ghcr.io/org/svc:v1"    (no-op)
-func localPullRef(image string) string {
-	r := strings.Replace(image, "registry:5000/", "localhost:5001/", 1)
-	r = strings.Replace(r, "localhost:5000/", "localhost:5001/", 1)
-	return r
+// registryPullRef rewrites an in-cluster image reference so it can be
+// pulled through a localhost port-forward.
+//   registryPullRef("registry:5000/gateway:abc", 52431) → "localhost:52431/gateway:abc"
+//   registryPullRef("ghcr.io/org/svc:v1", 52431)       → "ghcr.io/org/svc:v1"  (no-op)
+func registryPullRef(image string, localPort int) string {
+	prefixes := []string{"registry:5000/", "localhost:5000/", "localhost:5001/"}
+	for _, p := range prefixes {
+		if strings.HasPrefix(image, p) {
+			return fmt.Sprintf("localhost:%d/%s", localPort, strings.TrimPrefix(image, p))
+		}
+	}
+	return image
 }
 
-// extractKindImages pulls images from the Kind in-cluster registry (localhost:5001)
-// into the local Docker daemon so they can be re-tagged and pushed.
+// isClusterRegistryImage returns true if the image reference points to
+// the Kind in-cluster registry and needs port-forward to pull.
+func isClusterRegistryImage(image string) bool {
+	for _, p := range []string{"registry:5000/", "localhost:5000/", "localhost:5001/"} {
+		if strings.HasPrefix(image, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// startRegistryPortForward opens a kubectl port-forward to the in-cluster
+// registry service and returns the local port and a cleanup function.
+// It picks a free port to avoid conflicts.
+func startRegistryPortForward() (int, func(), error) {
+	// Find a free port
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return 0, nil, fmt.Errorf("cannot find free port: %w", err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	ln.Close()
+
+	ctx := core.ClusterContext(clusterName)
+	cmd := exec.Command("kubectl", "--context", ctx,
+		"port-forward", "svc/registry", fmt.Sprintf("%d:5000", port))
+
+	// Capture stderr so we can detect when it's ready
+	pipeR, _ := cmd.StderrPipe()
+	cmd.Stdout = nil
+
+	if err := cmd.Start(); err != nil {
+		return 0, nil, fmt.Errorf("cannot start port-forward: %w", err)
+	}
+
+	cleanup := func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	}
+
+	// Wait for port-forward to be ready ("Forwarding from ..." on stderr)
+	ready := make(chan bool, 1)
+	go func() {
+		scanner := bufio.NewScanner(pipeR)
+		for scanner.Scan() {
+			if strings.Contains(scanner.Text(), "Forwarding from") {
+				ready <- true
+				return
+			}
+		}
+		ready <- false
+	}()
+
+	select {
+	case ok := <-ready:
+		if !ok {
+			cleanup()
+			return 0, nil, fmt.Errorf("port-forward exited before becoming ready")
+		}
+	case <-time.After(10 * time.Second):
+		cleanup()
+		return 0, nil, fmt.Errorf("port-forward timed out after 10s")
+	}
+
+	return port, cleanup, nil
+}
+
+// extractKindImages pulls deployed images from the in-cluster registry
+// via kubectl port-forward into the local Docker daemon.
 func extractKindImages(dses []snapshotDSE) error {
+	// Check if any images actually need the in-cluster registry
+	needsPF := false
+	for _, dse := range dses {
+		if isClusterRegistryImage(dse.Image) {
+			needsPF = true
+			break
+		}
+	}
+
+	var localPort int
+	var cleanup func()
+
+	if needsPF {
+		step("🔌", "Port-forwarding to in-cluster registry")
+		var err error
+		localPort, cleanup, err = startRegistryPortForward()
+		if err != nil {
+			return fmt.Errorf("cannot reach registry: %w", err)
+		}
+		defer cleanup()
+	}
+
 	seen := make(map[string]bool)
 	for _, dse := range dses {
 		if dse.Image == "" || seen[dse.Image] {
@@ -976,7 +1072,7 @@ func extractKindImages(dses []snapshotDSE) error {
 		}
 		seen[dse.Image] = true
 
-		pullRef := localPullRef(dse.Image)
+		pullRef := registryPullRef(dse.Image, localPort)
 
 		step("📥", fmt.Sprintf("Pulling %s", pullRef))
 
@@ -986,11 +1082,9 @@ func extractKindImages(dses []snapshotDSE) error {
 			if checkErr != nil {
 				return fmt.Errorf("cannot pull %s: %w", pullRef, err)
 			}
-		} else {
-			// Tag it with the original DSE image name so retagAndPush can find it
-			if pullRef != dse.Image {
-				_, _ = runSilent("docker", "tag", pullRef, dse.Image)
-			}
+		} else if pullRef != dse.Image {
+			// Tag with the original DSE name so retagAndPush can find it
+			_, _ = runSilent("docker", "tag", pullRef, dse.Image)
 		}
 	}
 	return nil
