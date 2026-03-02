@@ -252,20 +252,13 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 		}
 		step("🏷", fmt.Sprintf("Re-tagging images → %s (tag: %s)", snapshotRegistry, tag))
 
-		if err := extractKindImages(dses); err != nil {
-			warn(fmt.Sprintf("Could not extract images from Kind nodes: %v", err))
+		if err := craneCopyImages(dses, snapshotRegistry, tag); err != nil {
+			warn(fmt.Sprintf("Could not push images: %v", err))
 			warn("Falling back to image references only (no push)")
-		} else {
+			// Still rewrite image refs so the chart targets the right registry
 			for i := range dses {
-				newRef, err := retagAndPush(dses[i].Image, dses[i].Name, snapshotRegistry, tag)
-				if err != nil {
-					warn(fmt.Sprintf("Failed to push %s: %v", dses[i].Name, err))
-					// Still rewrite the image ref so the chart is correct
-					newRef = registryImage(dses[i].Name, snapshotRegistry, tag)
-				}
-				dses[i].Image = newRef
+				dses[i].Image = registryImage(dses[i].Name, snapshotRegistry, tag)
 			}
-			success("Images pushed to registry")
 		}
 	}
 
@@ -960,7 +953,7 @@ func detectGitTag() string {
 }
 
 // registryPullRef rewrites an in-cluster image reference so it can be
-// pulled through a localhost port-forward.
+// accessed through a localhost port-forward.
 //   registryPullRef("registry:5000/gateway:abc", 52431) → "localhost:52431/gateway:abc"
 //   registryPullRef("ghcr.io/org/svc:v1", 52431)       → "ghcr.io/org/svc:v1"  (no-op)
 func registryPullRef(image string, localPort int) string {
@@ -974,7 +967,7 @@ func registryPullRef(image string, localPort int) string {
 }
 
 // isClusterRegistryImage returns true if the image reference points to
-// the Kind in-cluster registry and needs port-forward to pull.
+// the Kind in-cluster registry and needs port-forward to access.
 func isClusterRegistryImage(image string) bool {
 	for _, p := range []string{"registry:5000/", "localhost:5000/", "localhost:5001/"} {
 		if strings.HasPrefix(image, p) {
@@ -986,7 +979,6 @@ func isClusterRegistryImage(image string) bool {
 
 // startRegistryPortForward opens a kubectl port-forward to the in-cluster
 // registry service and returns the local port and a cleanup function.
-// It picks a free port to avoid conflicts.
 func startRegistryPortForward() (int, func(), error) {
 	// Find a free port
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -1013,7 +1005,7 @@ func startRegistryPortForward() (int, func(), error) {
 		_ = cmd.Wait()
 	}
 
-	// Wait for port-forward to be ready ("Forwarding from ..." on stderr)
+	// Wait for port-forward to be ready
 	ready := make(chan bool, 1)
 	go func() {
 		scanner := bufio.NewScanner(pipeR)
@@ -1040,10 +1032,16 @@ func startRegistryPortForward() (int, func(), error) {
 	return port, cleanup, nil
 }
 
-// extractKindImages pulls deployed images from the in-cluster registry
-// via kubectl port-forward into the local Docker daemon.
-func extractKindImages(dses []snapshotDSE) error {
-	// Check if any images actually need the in-cluster registry
+// craneCopyImages uses `crane copy` to transfer images directly from the
+// in-cluster registry to the target registry. This avoids the Docker daemon
+// entirely — crane copies OCI blobs registry-to-registry.
+func craneCopyImages(dses []snapshotDSE, registry, tag string) error {
+	// Check crane is installed
+	if _, err := exec.LookPath("crane"); err != nil {
+		return fmt.Errorf("crane is required for --registry (brew install crane)")
+	}
+
+	// Check if any images need the in-cluster registry
 	needsPF := false
 	for _, dse := range dses {
 		if isClusterRegistryImage(dse.Image) {
@@ -1066,46 +1064,30 @@ func extractKindImages(dses []snapshotDSE) error {
 	}
 
 	seen := make(map[string]bool)
-	for _, dse := range dses {
-		if dse.Image == "" || seen[dse.Image] {
+	for i := range dses {
+		if dses[i].Image == "" || seen[dses[i].Image] {
 			continue
 		}
-		seen[dse.Image] = true
+		seen[dses[i].Image] = true
 
-		pullRef := registryPullRef(dse.Image, localPort)
+		src := registryPullRef(dses[i].Image, localPort)
+		dst := registryImage(dses[i].Name, registry, tag)
 
-		step("📥", fmt.Sprintf("Pulling %s", pullRef))
+		step("📤", fmt.Sprintf("%s → %s", dses[i].Name, dst))
 
-		if _, err := runSilent("docker", "pull", pullRef); err != nil {
-			// Fallback: check if image is already local (e.g. built outside Kind)
-			_, checkErr := runSilent("docker", "image", "inspect", dse.Image)
-			if checkErr != nil {
-				return fmt.Errorf("cannot pull %s: %w", pullRef, err)
-			}
-		} else if pullRef != dse.Image {
-			// Tag with the original DSE name so retagAndPush can find it
-			_, _ = runSilent("docker", "tag", pullRef, dse.Image)
+		args := []string{"copy"}
+		if isClusterRegistryImage(dses[i].Image) {
+			args = append(args, "--insecure") // in-cluster registry is HTTP
 		}
+		args = append(args, src, dst)
+
+		if out, err := runSilent("crane", args...); err != nil {
+			return fmt.Errorf("crane copy %s failed: %s", dses[i].Name, out)
+		}
+
+		dses[i].Image = dst
 	}
+
+	success("Images pushed to registry")
 	return nil
-}
-
-// retagAndPush re-tags a local Docker image and pushes it to the target registry.
-func retagAndPush(sourceImage, name, registry, tag string) (string, error) {
-	newRef := registryImage(name, registry, tag)
-
-	step("🏷", fmt.Sprintf("%s → %s", sourceImage, newRef))
-
-	// Tag
-	if _, err := runSilent("docker", "tag", sourceImage, newRef); err != nil {
-		return "", fmt.Errorf("docker tag failed: %w", err)
-	}
-
-	// Push
-	step("📤", fmt.Sprintf("Pushing %s", newRef))
-	if _, err := runSilent("docker", "push", newRef); err != nil {
-		return "", fmt.Errorf("docker push failed: %w", err)
-	}
-
-	return newRef, nil
 }
