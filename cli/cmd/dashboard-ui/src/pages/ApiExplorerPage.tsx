@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { fetchProxyServices, proxyRequest } from '../api';
-import type { ProxyService, ProxyResponse } from '../api';
+import { fetchProxyServices, proxyRequest, fetchServiceSpec } from '../api';
+import type { ProxyService, ProxyResponse, ApiSpec, ApiEndpoint } from '../api';
 
 // ── Types ───────────────────────────────────────────────────────
 
@@ -63,6 +63,30 @@ export function ApiExplorerPage() {
   const [showHistory, setShowHistory] = useState(false);
   const [showResponseHeaders, setShowResponseHeaders] = useState(false);
 
+  // API spec discovery
+  const [apiSpec, setApiSpec] = useState<ApiSpec | null>(null);
+  const [loadingSpec, setLoadingSpec] = useState(false);
+  const [showEndpoints, setShowEndpoints] = useState(true);
+
+  // Saved request bodies — persisted per service+method+path
+  const [savedBodies, setSavedBodies] = useState<Record<string, string>>(() => {
+    try {
+      const saved = localStorage.getItem('kindling-api-saved-bodies');
+      return saved ? JSON.parse(saved) : {};
+    } catch { return {}; }
+  });
+
+  const bodyKey = (svc: string, m: string, p: string) => `${svc}:${m}:${p}`;
+
+  const saveBody = useCallback((svc: string, m: string, p: string, body: string) => {
+    if (!body.trim()) return;
+    setSavedBodies(prev => {
+      const next = { ...prev, [bodyKey(svc, m, p)]: body };
+      localStorage.setItem('kindling-api-saved-bodies', JSON.stringify(next));
+      return next;
+    });
+  }, []);
+
   const pathInputRef = useRef<HTMLInputElement>(null);
 
   // Persist history
@@ -107,6 +131,21 @@ export function ApiExplorerPage() {
     if (svc) setSelectedPort(svc.port);
   }, [services]);
 
+  // Fetch API spec when service changes
+  useEffect(() => {
+    if (!selectedService || !selectedPort) {
+      setApiSpec(null);
+      return;
+    }
+    const svc = services.find(s => s.name === selectedService);
+    const ns = svc?.namespace || 'default';
+    setLoadingSpec(true);
+    fetchServiceSpec(ns, selectedService, selectedPort)
+      .then(setApiSpec)
+      .catch(() => setApiSpec(null))
+      .finally(() => setLoadingSpec(false));
+  }, [selectedService, selectedPort, services]);
+
   // Send request
   const handleSend = useCallback(async () => {
     if (!selectedService || !selectedPort) return;
@@ -130,6 +169,11 @@ export function ApiExplorerPage() {
     setResponse(result);
     setSending(false);
 
+    // Persist the body for next time
+    if (reqBody.trim()) {
+      saveBody(selectedService, method, path, reqBody);
+    }
+
     // Add to history
     const entry: HistoryEntry = {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -144,7 +188,7 @@ export function ApiExplorerPage() {
       response: result,
     };
     setHistory(prev => [entry, ...prev].slice(0, 50));
-  }, [selectedService, selectedPort, method, path, reqHeaders, reqBody]);
+  }, [selectedService, selectedPort, method, path, reqHeaders, reqBody, saveBody]);
 
   // Replay from history
   const handleReplay = useCallback((entry: HistoryEntry) => {
@@ -192,6 +236,67 @@ export function ApiExplorerPage() {
 
   const currentService = services.find(s => s.name === selectedService);
 
+  // Build a stub request body from discovered params
+  const buildStubBody = useCallback((ep: ApiEndpoint): string => {
+    if (!ep.requestBody) return '';
+    // If we have parameter hints, generate a skeleton
+    const params = ep.parameters?.filter(p => p.in === 'body') || [];
+    if (params.length > 0) {
+      const stub: Record<string, string> = {};
+      params.forEach(p => { stub[p.name] = p.type === 'number' ? '0' as any : ''; });
+      return JSON.stringify(stub, null, 2);
+    }
+    return JSON.stringify({ key: 'value' }, null, 2);
+  }, []);
+
+  // Click an endpoint → pre-fill AND immediately fire the request
+  const handleEndpointClick = useCallback(async (ep: ApiEndpoint) => {
+    const m = ep.method as HttpMethod;
+    // Prefer a previously-saved body, fall back to stub
+    const key = bodyKey(selectedService, m, ep.path);
+    const saved = savedBodies[key];
+    const body = saved || ((m === 'POST' || m === 'PUT' || m === 'PATCH') ? buildStubBody(ep) : '');
+
+    setMethod(m);
+    setPath(ep.path);
+    setReqBody(body);
+    if (body) setShowBody(true);
+
+    // Fire immediately
+    setSending(true);
+    setResponse(null);
+
+    const result = await proxyRequest({
+      service: selectedService,
+      port: selectedPort,
+      method: m,
+      path: ep.path,
+      body: body || undefined,
+    });
+
+    setResponse(result);
+    setSending(false);
+
+    // Persist the body for next time
+    if (body.trim()) {
+      saveBody(selectedService, m, ep.path, body);
+    }
+
+    const entry: HistoryEntry = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      timestamp: Date.now(),
+      method: m,
+      service: selectedService,
+      port: selectedPort,
+      path: ep.path,
+      status: result.status,
+      elapsed: result.elapsed,
+      request: { headers: {}, body },
+      response: result,
+    };
+    setHistory(prev => [entry, ...prev].slice(0, 50));
+  }, [selectedService, selectedPort, buildStubBody, savedBodies, saveBody]);
+
   return (
     <div className="api-explorer">
       {/* Header */}
@@ -200,15 +305,115 @@ export function ApiExplorerPage() {
           <h2>API Explorer</h2>
           <span className="text-dim">Send requests to in-cluster services</span>
         </div>
-        <button
-          className={`btn btn-sm ${showHistory ? 'btn-primary' : 'btn-ghost'}`}
-          onClick={() => setShowHistory(!showHistory)}
+        <div style={{ display: 'flex', gap: 6 }}>
+          <button
+            className={`btn btn-sm ${showEndpoints ? 'btn-primary' : 'btn-ghost'}`}
+            onClick={() => setShowEndpoints(!showEndpoints)}
+          >
+            ⚡ Endpoints {apiSpec ? `(${apiSpec.endpoints.length})` : ''}
+          </button>
+          <button
+            className={`btn btn-sm ${showHistory ? 'btn-primary' : 'btn-ghost'}`}
+            onClick={() => setShowHistory(!showHistory)}
+          >
+            ↻ History ({history.length})
+          </button>
+        </div>
+      </div>
+
+      {/* Service Picker */}
+      <div className="api-service-picker">
+        <label className="api-service-picker-label">Service</label>
+        <select
+          className="api-service-picker-select"
+          value={selectedService}
+          onChange={(e) => handleServiceChange(e.target.value)}
+          disabled={loadingServices}
         >
-          ↻ History ({history.length})
-        </button>
+          {loadingServices && <option>Loading…</option>}
+          {services.map(s => (
+            <option key={`${s.namespace}/${s.name}`} value={s.name}>
+              {s.name}
+            </option>
+          ))}
+          {!loadingServices && services.length === 0 && (
+            <option>No services deployed</option>
+          )}
+        </select>
+        {currentService && currentService.ports.length > 1 ? (
+          <select
+            className="api-service-picker-port"
+            value={selectedPort}
+            onChange={(e) => setSelectedPort(parseInt(e.target.value))}
+          >
+            {currentService.ports.map(p => (
+              <option key={p.port} value={p.port}>:{p.port}{p.name ? ` (${p.name})` : ''}</option>
+            ))}
+          </select>
+        ) : (
+          <span className="api-service-picker-port-badge">:{selectedPort}</span>
+        )}
+        {apiSpec?.framework && (
+          <span className="api-spec-framework">{apiSpec.framework}</span>
+        )}
       </div>
 
       <div className="api-explorer-body">
+        {/* Discovered Endpoints */}
+        {showEndpoints && (
+          <div className="api-endpoints-panel">
+            {loadingSpec && (
+              <div className="api-endpoints-loading">
+                <div className="api-response-spinner" />
+                <span>Discovering endpoints…</span>
+              </div>
+            )}
+            {!loadingSpec && !apiSpec && selectedService && (
+              <div className="api-endpoints-empty">No endpoints discovered</div>
+            )}
+            {!loadingSpec && apiSpec && (
+              <>
+                {apiSpec.endpoints.length > 0 && (
+                  <div className="api-endpoints-meta">
+                    <span className="api-spec-badge">
+                      {apiSpec.endpoints.length} endpoint{apiSpec.endpoints.length !== 1 ? 's' : ''} detected
+                    </span>
+                    {apiSpec.host && (
+                      <span className="api-spec-host">{apiSpec.host}</span>
+                    )}
+                  </div>
+                )}
+                <div className="api-endpoints-list">
+                  {apiSpec.endpoints.map((ep, i) => {
+                    const hasSaved = !!savedBodies[bodyKey(selectedService, ep.method, ep.path)];
+                    return (
+                      <button
+                        key={`${ep.method}-${ep.path}-${i}`}
+                        className={`api-endpoint-item${hasSaved ? ' has-saved-body' : ''}`}
+                        onClick={() => handleEndpointClick(ep)}
+                        title={`Send ${ep.method} ${ep.path}${hasSaved ? ' (saved body)' : ''}`}
+                      >
+                        <span className="api-endpoint-fire">▶</span>
+                        <span
+                          className="api-endpoint-method"
+                          style={{ color: METHOD_COLORS[ep.method as HttpMethod] || '#999' }}
+                        >
+                          {ep.method}
+                        </span>
+                        <span className="api-endpoint-path">{ep.path}</span>
+                        {hasSaved && <span className="api-endpoint-saved" title="Saved request body">●</span>}
+                        {ep.summary && (
+                          <span className="api-endpoint-summary">{ep.summary}</span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
         {/* Request Builder */}
         <div className="api-explorer-request">
           {/* URL Bar */}
@@ -224,40 +429,6 @@ export function ApiExplorerPage() {
                 <option key={m} value={m} style={{ color: METHOD_COLORS[m] }}>{m}</option>
               ))}
             </select>
-
-            {/* Service selector */}
-            <select
-              className="api-service-select"
-              value={selectedService}
-              onChange={(e) => handleServiceChange(e.target.value)}
-              disabled={loadingServices}
-            >
-              {loadingServices && <option>Loading…</option>}
-              {services.map(s => (
-                <option key={`${s.namespace}/${s.name}`} value={s.name}>
-                  {s.name}
-                </option>
-              ))}
-              {!loadingServices && services.length === 0 && (
-                <option>No services deployed</option>
-              )}
-            </select>
-
-            {/* Port selector (if multiple) */}
-            {currentService && currentService.ports.length > 1 && (
-              <select
-                className="api-port-select"
-                value={selectedPort}
-                onChange={(e) => setSelectedPort(parseInt(e.target.value))}
-              >
-                {currentService.ports.map(p => (
-                  <option key={p.port} value={p.port}>:{p.port}{p.name ? ` (${p.name})` : ''}</option>
-                ))}
-              </select>
-            )}
-            {currentService && currentService.ports.length <= 1 && (
-              <span className="api-port-badge">:{selectedPort}</span>
-            )}
 
             {/* Path input */}
             <input
@@ -400,18 +571,20 @@ export function ApiExplorerPage() {
 
       {/* History Sidebar */}
       {showHistory && (
-        <div className="api-history-sidebar">
-          <div className="api-history-header">
-            <h3>Request History</h3>
-            {history.length > 0 && (
-              <button
-                className="btn btn-xs btn-ghost"
-                onClick={() => { setHistory([]); localStorage.removeItem('kindling-api-history'); }}
-              >
-                Clear
-              </button>
-            )}
-          </div>
+        <>
+          <div className="api-history-backdrop" onClick={() => setShowHistory(false)} />
+          <div className="api-history-sidebar">
+            <div className="api-history-header">
+              <h3>Request History</h3>
+              {history.length > 0 && (
+                <button
+                  className="btn btn-xs btn-ghost"
+                  onClick={() => { setHistory([]); localStorage.removeItem('kindling-api-history'); }}
+                >
+                  Clear
+                </button>
+              )}
+            </div>
           <div className="api-history-list">
             {history.length === 0 && (
               <div className="api-history-empty">No requests yet</div>
@@ -442,6 +615,7 @@ export function ApiExplorerPage() {
             ))}
           </div>
         </div>
+        </>
       )}
     </div>
   );
