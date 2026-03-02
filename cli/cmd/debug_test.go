@@ -166,7 +166,7 @@ func TestWriteLaunchConfig(t *testing.T) {
 	defer func() { projectDir = origProjectDir }()
 
 	prof := debugProfiles["python"]
-	writeLaunchConfig("my-api", &prof, 5678, "/app")
+	writeLaunchConfig("my-api", &prof, 5678, "/app", "")
 
 	// ── Validate launch.json ──
 	launchPath := filepath.Join(tmpDir, ".vscode", "launch.json")
@@ -326,7 +326,7 @@ func TestWriteLaunchConfigPreservesExisting(t *testing.T) {
 	os.WriteFile(filepath.Join(vsDir, "launch.json"), []byte(existing), 0644)
 
 	prof := debugProfiles["python"]
-	writeLaunchConfig("my-api", &prof, 5678, "/app")
+	writeLaunchConfig("my-api", &prof, 5678, "/app", "")
 
 	data, _ := os.ReadFile(filepath.Join(vsDir, "launch.json"))
 	var launch struct {
@@ -365,8 +365,8 @@ func TestWriteLaunchConfigIdempotent(t *testing.T) {
 	prof := debugProfiles["python"]
 
 	// Write twice
-	writeLaunchConfig("my-api", &prof, 5678, "/app")
-	writeLaunchConfig("my-api", &prof, 9999, "/srv")
+	writeLaunchConfig("my-api", &prof, 5678, "/app", "")
+	writeLaunchConfig("my-api", &prof, 9999, "/srv", "")
 
 	data, _ := os.ReadFile(filepath.Join(tmpDir, ".vscode", "launch.json"))
 	var launch struct {
@@ -395,6 +395,107 @@ func TestWriteLaunchConfigIdempotent(t *testing.T) {
 
 	if len(tasks.Tasks) != 2 {
 		t.Fatalf("expected 2 tasks after idempotent write, got %d", len(tasks.Tasks))
+	}
+}
+
+// Test that writeLaunchConfig uses sourceSubdir in pathMappings
+func TestWriteLaunchConfigWithSourceSubdir(t *testing.T) {
+	tmpDir := t.TempDir()
+	origProjectDir := projectDir
+	projectDir = tmpDir
+	defer func() { projectDir = origProjectDir }()
+
+	prof := debugProfiles["python"]
+	writeLaunchConfig("my-api", &prof, 5678, "/app", "orders")
+
+	data, _ := os.ReadFile(filepath.Join(tmpDir, ".vscode", "launch.json"))
+	var launch struct {
+		Configs []map[string]interface{} `json:"configurations"`
+	}
+	json.Unmarshal(data, &launch)
+
+	if len(launch.Configs) != 2 {
+		t.Fatalf("expected 2 configs, got %d", len(launch.Configs))
+	}
+
+	// Check that pathMappings.localRoot includes the subdirectory
+	f5 := launch.Configs[0]
+	pm, ok := f5["pathMappings"].([]interface{})
+	if !ok || len(pm) == 0 {
+		t.Fatal("missing pathMappings")
+	}
+	mapping, _ := pm[0].(map[string]interface{})
+	if mapping["localRoot"] != "${workspaceFolder}/orders" {
+		t.Errorf("pathMappings localRoot = %q, want %q", mapping["localRoot"], "${workspaceFolder}/orders")
+	}
+	if mapping["remoteRoot"] != "/app" {
+		t.Errorf("pathMappings remoteRoot = %q, want %q", mapping["remoteRoot"], "/app")
+	}
+
+	// Check the attach-only config too
+	attach := launch.Configs[1]
+	pm2, ok := attach["pathMappings"].([]interface{})
+	if !ok || len(pm2) == 0 {
+		t.Fatal("attach config missing pathMappings")
+	}
+	mapping2, _ := pm2[0].(map[string]interface{})
+	if mapping2["localRoot"] != "${workspaceFolder}/orders" {
+		t.Errorf("attach pathMappings localRoot = %q, want %q", mapping2["localRoot"], "${workspaceFolder}/orders")
+	}
+}
+
+// Test that writeLaunchConfig applies sourceSubdir to Node.js localRoot/remoteRoot
+func TestWriteLaunchConfigSubdirNode(t *testing.T) {
+	tmpDir := t.TempDir()
+	origProjectDir := projectDir
+	projectDir = tmpDir
+	defer func() { projectDir = origProjectDir }()
+
+	prof := debugProfiles["node"]
+	writeLaunchConfig("my-gateway", &prof, 9229, "/app", "gateway")
+
+	data, _ := os.ReadFile(filepath.Join(tmpDir, ".vscode", "launch.json"))
+	var launch struct {
+		Configs []map[string]interface{} `json:"configurations"`
+	}
+	json.Unmarshal(data, &launch)
+
+	f5 := launch.Configs[0]
+	if f5["localRoot"] != "${workspaceFolder}/gateway" {
+		t.Errorf("Node localRoot = %q, want %q", f5["localRoot"], "${workspaceFolder}/gateway")
+	}
+	if f5["remoteRoot"] != "/app" {
+		t.Errorf("Node remoteRoot = %q, want %q", f5["remoteRoot"], "/app")
+	}
+}
+
+// Test that writeLaunchConfig applies sourceSubdir to Go substitutePath
+func TestWriteLaunchConfigSubdirGo(t *testing.T) {
+	tmpDir := t.TempDir()
+	origProjectDir := projectDir
+	projectDir = tmpDir
+	defer func() { projectDir = origProjectDir }()
+
+	prof := debugProfiles["go"]
+	writeLaunchConfig("my-inventory", &prof, 2345, "/app", "inventory")
+
+	data, _ := os.ReadFile(filepath.Join(tmpDir, ".vscode", "launch.json"))
+	var launch struct {
+		Configs []map[string]interface{} `json:"configurations"`
+	}
+	json.Unmarshal(data, &launch)
+
+	f5 := launch.Configs[0]
+	sp, ok := f5["substitutePath"].([]interface{})
+	if !ok || len(sp) == 0 {
+		t.Fatal("Go config missing substitutePath")
+	}
+	entry, _ := sp[0].(map[string]interface{})
+	if entry["from"] != "${workspaceFolder}/inventory" {
+		t.Errorf("substitutePath.from = %q, want %q", entry["from"], "${workspaceFolder}/inventory")
+	}
+	if entry["to"] != "/app" {
+		t.Errorf("substitutePath.to = %q, want %q", entry["to"], "/app")
 	}
 }
 
