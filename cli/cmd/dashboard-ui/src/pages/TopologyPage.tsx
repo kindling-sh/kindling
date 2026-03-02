@@ -1267,7 +1267,6 @@ export function TopologyPage() {
         },
       };
       setNodes((nds) => [...nds, newNode]);
-      addChange({ type: 'add-node', description: `Add ${meta.label} dependency` });
 
       // Auto-connect to nearest service node
       const serviceNodes = nodes.filter((n) => n.data.kind === 'service');
@@ -1296,11 +1295,14 @@ export function TopologyPage() {
             .filter(Boolean)
         );
         if (connectedDepTypes.has(depType)) {
-          // Remove the node we just added and warn
+          // Remove the node we just added and warn — no pending change recorded
           setNodes((nds) => nds.filter((n) => n.id !== nodeId));
           toast(`${nearest.data.label} already has a ${meta.label} dependency`, 'error');
           return;
         }
+
+        // Only record changes after duplicate check passes
+        addChange({ type: 'add-node', description: `Add ${meta.label} dependency` });
 
         // Reposition dep to the right of the nearest service, in the dependency column
         const existingDeps = nodes.filter((n) => n.data.kind === 'dependency');
@@ -1316,6 +1318,9 @@ export function TopologyPage() {
         const edgeLabel = meta.envVar || '';
         setEdges((eds) => [...eds, { id: edgeId, source: nearest.id, target: nodeId, type: 'connection', data: { _label: edgeLabel } }]);
         addChange({ type: 'add-edge', description: `Connect ${nearest.data.label} → ${meta.label}` });
+      } else {
+        // No service nodes to connect to — still record the node addition
+        addChange({ type: 'add-node', description: `Add ${meta.label} dependency` });
       }
     } else if (kind === 'service') {
       // Open custom service dialog

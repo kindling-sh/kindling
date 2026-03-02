@@ -289,3 +289,118 @@ func TestBuildExampleConnectionURL(t *testing.T) {
 		})
 	}
 }
+
+// ────────────────────────────────────────────────────────────────────────────
+// registryImage
+// ────────────────────────────────────────────────────────────────────────────
+
+func TestRegistryImage(t *testing.T) {
+	tests := []struct {
+		name     string
+		svc      string
+		registry string
+		tag      string
+		expect   string
+	}{
+		{"ghcr basic", "orders", "ghcr.io/myorg", "abc123", "ghcr.io/myorg/orders:abc123"},
+		{"ecr", "gateway", "123456.dkr.ecr.us-east-1.amazonaws.com/myapp", "v1.0", "123456.dkr.ecr.us-east-1.amazonaws.com/myapp/gateway:v1.0"},
+		{"trailing slash", "api", "ghcr.io/org/", "latest", "ghcr.io/org/api:latest"},
+		{"dockerhub", "web", "myorg", "sha-abc", "myorg/web:sha-abc"},
+		{"uppercase name", "My Service", "ghcr.io/org", "v1", "ghcr.io/org/my-service:v1"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := registryImage(tt.svc, tt.registry, tt.tag)
+			if got != tt.expect {
+				t.Errorf("registryImage(%q, %q, %q) = %q, want %q", tt.svc, tt.registry, tt.tag, got, tt.expect)
+			}
+		})
+	}
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// localPullRef — translates in-cluster registry → localhost:5001
+// ────────────────────────────────────────────────────────────────────────────
+
+func TestLocalPullRef(t *testing.T) {
+	tests := []struct {
+		name   string
+		image  string
+		expect string
+	}{
+		{"registry:5000", "registry:5000/gateway:abc123", "localhost:5001/gateway:abc123"},
+		{"localhost:5000", "localhost:5000/orders:def456", "localhost:5001/orders:def456"},
+		{"already localhost:5001", "localhost:5001/svc:tag", "localhost:5001/svc:tag"},
+		{"external registry unchanged", "ghcr.io/org/svc:v1", "ghcr.io/org/svc:v1"},
+		{"no registry", "myapp:latest", "myapp:latest"},
+		{"with long tag", "registry:5000/gateway:jeff-vincent-67d144f6942fa2a5100495d7b35d852d801ff82b",
+			"localhost:5001/gateway:jeff-vincent-67d144f6942fa2a5100495d7b35d852d801ff82b"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := localPullRef(tt.image)
+			if got != tt.expect {
+				t.Errorf("localPullRef(%q) = %q, want %q", tt.image, got, tt.expect)
+			}
+		})
+	}
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Registry images pass through productionImageClean unchanged
+// ────────────────────────────────────────────────────────────────────────────
+
+func TestProductionImageClean_RegistryImages(t *testing.T) {
+	tests := []struct {
+		name   string
+		image  string
+		svc    string
+		expect string
+	}{
+		{"ghcr image", "ghcr.io/myorg/orders:abc123", "orders", "ghcr.io/myorg/orders:abc123"},
+		{"ecr image", "123456.dkr.ecr.us-east-1.amazonaws.com/myapp/gateway:v1.0", "gateway", "123456.dkr.ecr.us-east-1.amazonaws.com/myapp/gateway:v1.0"},
+		{"dockerhub with org", "myorg/web:sha-abc", "web", "myorg/web:sha-abc"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := productionImageClean(tt.image, tt.svc)
+			if got != tt.expect {
+				t.Errorf("productionImageClean(%q, %q) = %q, want %q", tt.image, tt.svc, got, tt.expect)
+			}
+		})
+	}
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Values YAML uses registry images when provided
+// ────────────────────────────────────────────────────────────────────────────
+
+func TestBuildValuesYAML_WithRegistryImages(t *testing.T) {
+	dses := []snapshotDSE{
+		{
+			Name:     "orders",
+			Image:    "ghcr.io/myorg/orders:abc123",
+			Port:     5000,
+			Replicas: 1,
+		},
+		{
+			Name:     "gateway",
+			Image:    "ghcr.io/myorg/gateway:abc123",
+			Port:     3000,
+			Replicas: 2,
+		},
+	}
+
+	yaml := buildValuesYAML("test", dses, map[string]bool{}, false)
+
+	if !strings.Contains(yaml, `image: "ghcr.io/myorg/orders:abc123"`) {
+		t.Error("values.yaml should contain the full registry image for orders")
+	}
+	if !strings.Contains(yaml, `image: "ghcr.io/myorg/gateway:abc123"`) {
+		t.Error("values.yaml should contain the full registry image for gateway")
+	}
+	// Should NOT contain TODO comments for these images
+	if strings.Contains(yaml, "TODO: replace") {
+		t.Error("values.yaml should not have TODO replace comments for registry images")
+	}
+}

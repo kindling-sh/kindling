@@ -17,24 +17,34 @@ var snapshotCmd = &cobra.Command{
 	Long: `Reads all DevStagingEnvironments in the cluster and generates
 production-ready Kubernetes manifests as a Helm chart or Kustomize overlay.
 
+With --registry, images are extracted from the Kind cluster, re-tagged
+with clean names, and pushed to your container registry so the exported
+chart is ready to deploy anywhere.
+
 Examples:
   kindling snapshot                          # Helm chart in ./kindling-snapshot/
   kindling snapshot --format kustomize       # Kustomize overlay
   kindling snapshot -o ./my-chart            # custom output directory
-  kindling snapshot --name my-platform       # custom chart name`,
+  kindling snapshot --name my-platform       # custom chart name
+  kindling snapshot -r ghcr.io/myorg         # push images + ready-to-run chart
+  kindling snapshot -r ghcr.io/myorg -t v1.0 # push with specific tag`,
 	RunE: runSnapshot,
 }
 
 var (
-	snapshotFormat string
-	snapshotOutput string
-	snapshotName   string
+	snapshotFormat   string
+	snapshotOutput   string
+	snapshotName     string
+	snapshotRegistry string
+	snapshotTag      string
 )
 
 func init() {
 	snapshotCmd.Flags().StringVarP(&snapshotFormat, "format", "f", "helm", "Export format: helm or kustomize")
 	snapshotCmd.Flags().StringVarP(&snapshotOutput, "output", "o", "", "Output directory (default: ./kindling-snapshot)")
 	snapshotCmd.Flags().StringVarP(&snapshotName, "name", "n", "", "Chart/project name (default: derived from cluster)")
+	snapshotCmd.Flags().StringVarP(&snapshotRegistry, "registry", "r", "", "Container registry (e.g. ghcr.io/myorg, 123456.dkr.ecr.us-east-1.amazonaws.com/myapp)")
+	snapshotCmd.Flags().StringVarP(&snapshotTag, "tag", "t", "", "Image tag (default: git SHA or 'latest')")
 	rootCmd.AddCommand(snapshotCmd)
 }
 
@@ -229,6 +239,31 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 		outDir = "./" + chartName
 	}
 	outDir, _ = filepath.Abs(outDir)
+
+	// ── Registry: re-tag and push images ────────────────────────
+	if snapshotRegistry != "" {
+		tag := snapshotTag
+		if tag == "" {
+			tag = detectGitTag()
+		}
+		step("🏷", fmt.Sprintf("Re-tagging images → %s (tag: %s)", snapshotRegistry, tag))
+
+		if err := extractKindImages(dses); err != nil {
+			warn(fmt.Sprintf("Could not extract images from Kind nodes: %v", err))
+			warn("Falling back to image references only (no push)")
+		} else {
+			for i := range dses {
+				newRef, err := retagAndPush(dses[i].Image, dses[i].Name, snapshotRegistry, tag)
+				if err != nil {
+					warn(fmt.Sprintf("Failed to push %s: %v", dses[i].Name, err))
+					// Still rewrite the image ref so the chart is correct
+					newRef = registryImage(dses[i].Name, snapshotRegistry, tag)
+				}
+				dses[i].Image = newRef
+			}
+			success("Images pushed to registry")
+		}
+	}
 
 	switch snapshotFormat {
 	case "helm":
@@ -900,4 +935,83 @@ func connectionProtocol(depType string) string {
 	default:
 		return "tcp"
 	}
+}
+
+// ── Registry helpers ────────────────────────────────────────────
+
+// registryImage builds a clean registry-qualified image reference.
+//   registryImage("orders", "ghcr.io/myorg", "abc123") → "ghcr.io/myorg/orders:abc123"
+func registryImage(name, registry, tag string) string {
+	registry = strings.TrimRight(registry, "/")
+	return fmt.Sprintf("%s/%s:%s", registry, helmSafe(name), tag)
+}
+
+// detectGitTag tries to get a short git SHA for tagging. Falls back to "latest".
+func detectGitTag() string {
+	out, err := runSilent("git", "rev-parse", "--short", "HEAD")
+	if err != nil || strings.TrimSpace(out) == "" {
+		return "latest"
+	}
+	return strings.TrimSpace(out)
+}
+
+// localPullRef translates an in-cluster registry address to the
+// localhost-accessible port so `docker pull` works from the host.
+//   "registry:5000/svc:tag"  → "localhost:5001/svc:tag"
+//   "localhost:5001/svc:tag" → "localhost:5001/svc:tag" (no-op)
+//   "ghcr.io/org/svc:v1"    → "ghcr.io/org/svc:v1"    (no-op)
+func localPullRef(image string) string {
+	r := strings.Replace(image, "registry:5000/", "localhost:5001/", 1)
+	r = strings.Replace(r, "localhost:5000/", "localhost:5001/", 1)
+	return r
+}
+
+// extractKindImages pulls images from the Kind in-cluster registry (localhost:5001)
+// into the local Docker daemon so they can be re-tagged and pushed.
+func extractKindImages(dses []snapshotDSE) error {
+	seen := make(map[string]bool)
+	for _, dse := range dses {
+		if dse.Image == "" || seen[dse.Image] {
+			continue
+		}
+		seen[dse.Image] = true
+
+		pullRef := localPullRef(dse.Image)
+
+		step("📥", fmt.Sprintf("Pulling %s", pullRef))
+
+		if _, err := runSilent("docker", "pull", pullRef); err != nil {
+			// Fallback: check if image is already local (e.g. built outside Kind)
+			_, checkErr := runSilent("docker", "image", "inspect", dse.Image)
+			if checkErr != nil {
+				return fmt.Errorf("cannot pull %s: %w", pullRef, err)
+			}
+		} else {
+			// Tag it with the original DSE image name so retagAndPush can find it
+			if pullRef != dse.Image {
+				_, _ = runSilent("docker", "tag", pullRef, dse.Image)
+			}
+		}
+	}
+	return nil
+}
+
+// retagAndPush re-tags a local Docker image and pushes it to the target registry.
+func retagAndPush(sourceImage, name, registry, tag string) (string, error) {
+	newRef := registryImage(name, registry, tag)
+
+	step("🏷", fmt.Sprintf("%s → %s", sourceImage, newRef))
+
+	// Tag
+	if _, err := runSilent("docker", "tag", sourceImage, newRef); err != nil {
+		return "", fmt.Errorf("docker tag failed: %w", err)
+	}
+
+	// Push
+	step("📤", fmt.Sprintf("Pushing %s", newRef))
+	if _, err := runSilent("docker", "push", newRef); err != nil {
+		return "", fmt.Errorf("docker push failed: %w", err)
+	}
+
+	return newRef, nil
 }
