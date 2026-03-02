@@ -272,6 +272,40 @@ export async function proxyRequest(body: {
   return res.json();
 }
 
+// ── API Spec Discovery ──────────────────────────────────────────
+
+export interface ApiParam {
+  name: string;
+  in: string; // path, query, header
+  required: boolean;
+  type?: string;
+}
+
+export interface ApiEndpoint {
+  method: string;
+  path: string;
+  summary?: string;
+  description?: string;
+  parameters?: ApiParam[];
+  requestBody?: unknown;
+  tags?: string[];
+}
+
+export interface ApiSpec {
+  service: string;
+  namespace: string;
+  host?: string;
+  basePath?: string;
+  port: number;
+  framework?: string;
+  source: 'auto-detected' | 'source-analysis' | 'ingress';
+  endpoints: ApiEndpoint[];
+}
+
+export async function fetchServiceSpec(namespace: string, name: string, port: number): Promise<ApiSpec> {
+  return apiFetch<ApiSpec>(`/api/proxy/services/${namespace}/${name}/spec?port=${port}`);
+}
+
 // ── Debug API ───────────────────────────────────────────────────
 
 export interface DebugSession {

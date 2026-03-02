@@ -4018,3 +4018,510 @@ func handleDebugStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	jsonResponse(w, map[string]interface{}{"sessions": sessions})
 }
+
+// ════════════════════════════════════════════════════════════════════
+// API Spec Discovery — GET /api/proxy/services/{ns}/{name}/spec
+//
+// Tries to auto-discover the API surface of a service by:
+//  1. Fetching /openapi.json from the running service (FastAPI, etc.)
+//  2. Falling back to DSE ingress + source-file route parsing
+// ════════════════════════════════════════════════════════════════════
+
+type apiEndpoint struct {
+	Method      string      `json:"method"`
+	Path        string      `json:"path"`
+	Summary     string      `json:"summary,omitempty"`
+	Description string      `json:"description,omitempty"`
+	Parameters  []apiParam  `json:"parameters,omitempty"`
+	RequestBody interface{} `json:"requestBody,omitempty"`
+	Tags        []string    `json:"tags,omitempty"`
+}
+
+type apiParam struct {
+	Name     string `json:"name"`
+	In       string `json:"in"` // path, query, header
+	Required bool   `json:"required"`
+	Type     string `json:"type,omitempty"`
+}
+
+type apiSpec struct {
+	Service   string        `json:"service"`
+	Namespace string        `json:"namespace"`
+	Host      string        `json:"host,omitempty"`
+	BasePath  string        `json:"basePath,omitempty"`
+	Port      int           `json:"port"`
+	Framework string        `json:"framework,omitempty"`
+	Source    string        `json:"source"` // "auto-detected", "source-analysis", "ingress"
+	Endpoints []apiEndpoint `json:"endpoints"`
+}
+
+func handleApiSpec(w http.ResponseWriter, r *http.Request) {
+	// Parse path: /api/proxy/services/{ns}/{name}/spec
+	path := strings.TrimPrefix(r.URL.Path, "/api/proxy/services/")
+	path = strings.TrimSuffix(path, "/spec")
+	parts := strings.Split(path, "/")
+	if len(parts) < 2 {
+		actionErr(w, "expected /api/proxy/services/{namespace}/{name}/spec", http.StatusBadRequest)
+		return
+	}
+	ns, name := parts[0], parts[1]
+
+	port := 0
+	if p := r.URL.Query().Get("port"); p != "" {
+		port, _ = strconv.Atoi(p)
+	}
+	if port == 0 {
+		// Try to get port from service
+		if out, err := kubectlJSON("get", "svc", name, "-n", ns,
+			"-o", "jsonpath={.spec.ports[0].port}"); err == nil {
+			port, _ = strconv.Atoi(strings.TrimSpace(out))
+		}
+	}
+	if port == 0 {
+		port = 80
+	}
+
+	// Strategy 1: Try fetching OpenAPI spec from the running service
+	if spec := tryFetchOpenAPI(ns, name, port); spec != nil {
+		spec.Service = name
+		spec.Namespace = ns
+		spec.Port = port
+		// Also enrich with DSE ingress info
+		if host, basePath := getDSEIngress(ns, name); host != "" {
+			spec.Host = host
+			spec.BasePath = basePath
+		}
+		jsonResponse(w, spec)
+		return
+	}
+
+	// Strategy 2: Parse DSE ingress + source file analysis
+	spec := &apiSpec{
+		Service:   name,
+		Namespace: ns,
+		Port:      port,
+		Endpoints: []apiEndpoint{},
+	}
+
+	// Get ingress info from DSE
+	if host, basePath := getDSEIngress(ns, name); host != "" {
+		spec.Host = host
+		spec.BasePath = basePath
+		spec.Source = "ingress"
+		// Add a basic root endpoint from the ingress
+		spec.Endpoints = append(spec.Endpoints, apiEndpoint{
+			Method:  "GET",
+			Path:    basePath,
+			Summary: "Ingress route → " + host,
+		})
+	}
+
+	// Strategy 3: Exec into the pod and grep for route definitions
+	if endpoints, framework := discoverRoutesFromSource(ns, name); len(endpoints) > 0 {
+		spec.Endpoints = endpoints
+		spec.Framework = framework
+		spec.Source = "source-analysis"
+	}
+
+	// If we only have the ingress root, also try /health and /healthz
+	if spec.Source == "ingress" || spec.Source == "" {
+		spec.Source = "ingress"
+		spec.Endpoints = append(spec.Endpoints,
+			apiEndpoint{Method: "GET", Path: "/health", Summary: "Health check (common)"},
+			apiEndpoint{Method: "GET", Path: "/healthz", Summary: "Health check (k8s)"},
+		)
+	}
+
+	jsonResponse(w, spec)
+}
+
+// tryFetchOpenAPI attempts to retrieve an OpenAPI spec from the running service.
+func tryFetchOpenAPI(ns, svcName string, port int) *apiSpec {
+	// Find a free local port
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return nil
+	}
+	localPort := ln.Addr().(*net.TCPAddr).Port
+	ln.Close()
+
+	// Start port-forward
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	pfCmd := exec.CommandContext(ctx, "kubectl", "--context", "kind-"+clusterName,
+		"port-forward", "-n", ns,
+		fmt.Sprintf("svc/%s", svcName),
+		fmt.Sprintf("%d:%d", localPort, port))
+	pfCmd.Stdout = io.Discard
+	pfCmd.Stderr = io.Discard
+	if err := pfCmd.Start(); err != nil {
+		return nil
+	}
+	defer func() {
+		if pfCmd.Process != nil {
+			pfCmd.Process.Kill()
+		}
+	}()
+
+	// Wait for port-forward
+	addr := fmt.Sprintf("127.0.0.1:%d", localPort)
+	ready := false
+	for i := 0; i < 20; i++ {
+		if conn, err := net.DialTimeout("tcp", addr, 150*time.Millisecond); err == nil {
+			conn.Close()
+			ready = true
+			break
+		}
+		time.Sleep(150 * time.Millisecond)
+	}
+	if !ready {
+		return nil
+	}
+
+	// Try known OpenAPI paths
+	specPaths := []string{"/openapi.json", "/swagger.json", "/api/openapi.json", "/api/swagger.json", "/docs/openapi.json"}
+	client := &http.Client{Timeout: 3 * time.Second}
+
+	for _, p := range specPaths {
+		resp, err := client.Get(fmt.Sprintf("http://%s%s", addr, p))
+		if err != nil || resp.StatusCode != 200 {
+			if resp != nil {
+				resp.Body.Close()
+			}
+			continue
+		}
+		body, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20)) // 2MB limit
+		resp.Body.Close()
+		if err != nil {
+			continue
+		}
+
+		// Parse OpenAPI spec
+		var raw map[string]interface{}
+		if err := json.Unmarshal(body, &raw); err != nil {
+			continue
+		}
+		paths, ok := raw["paths"].(map[string]interface{})
+		if !ok || len(paths) == 0 {
+			continue
+		}
+
+		// Detect framework from info
+		framework := ""
+		if info, ok := raw["info"].(map[string]interface{}); ok {
+			if title, ok := info["title"].(string); ok {
+				framework = title
+			}
+		}
+
+		// Extract endpoints
+		spec := &apiSpec{
+			Source:    "auto-detected",
+			Framework: framework,
+			Endpoints: []apiEndpoint{},
+		}
+
+		for path, methods := range paths {
+			methodMap, ok := methods.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			for method, detail := range methodMap {
+				method = strings.ToUpper(method)
+				if method == "OPTIONS" || method == "HEAD" {
+					continue
+				}
+
+				ep := apiEndpoint{
+					Method: method,
+					Path:   path,
+				}
+
+				if detailMap, ok := detail.(map[string]interface{}); ok {
+					if s, ok := detailMap["summary"].(string); ok {
+						ep.Summary = s
+					}
+					if d, ok := detailMap["description"].(string); ok && ep.Summary == "" {
+						ep.Summary = d
+					}
+					if tags, ok := detailMap["tags"].([]interface{}); ok {
+						for _, t := range tags {
+							if ts, ok := t.(string); ok {
+								ep.Tags = append(ep.Tags, ts)
+							}
+						}
+					}
+					// Extract path parameters
+					if params, ok := detailMap["parameters"].([]interface{}); ok {
+						for _, p := range params {
+							if pm, ok := p.(map[string]interface{}); ok {
+								param := apiParam{
+									Name:     fmt.Sprint(pm["name"]),
+									In:       fmt.Sprint(pm["in"]),
+									Required: pm["required"] == true,
+								}
+								if schema, ok := pm["schema"].(map[string]interface{}); ok {
+									param.Type, _ = schema["type"].(string)
+								}
+								ep.Parameters = append(ep.Parameters, param)
+							}
+						}
+					}
+					// Note if it has a request body
+					if _, ok := detailMap["requestBody"]; ok {
+						ep.RequestBody = true
+					}
+				}
+
+				spec.Endpoints = append(spec.Endpoints, ep)
+			}
+		}
+
+		return spec
+	}
+	return nil
+}
+
+// getDSEIngress looks up the DSE for a given service name and returns its ingress host + path.
+func getDSEIngress(ns, svcName string) (host, basePath string) {
+	out, err := kubectlJSON("get", "devstagingenvironments", "-n", ns, "-o", "json")
+	if err != nil {
+		return "", ""
+	}
+
+	var dseList struct {
+		Items []struct {
+			Metadata struct {
+				Name string `json:"name"`
+			} `json:"metadata"`
+			Spec struct {
+				Ingress *struct {
+					Enabled bool   `json:"enabled"`
+					Host    string `json:"host"`
+					Path    string `json:"path"`
+				} `json:"ingress"`
+			} `json:"spec"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(out), &dseList); err != nil {
+		return "", ""
+	}
+
+	// Match DSE by name (service name is derived from DSE name)
+	for _, dse := range dseList.Items {
+		if dse.Metadata.Name == svcName && dse.Spec.Ingress != nil && dse.Spec.Ingress.Enabled {
+			path := dse.Spec.Ingress.Path
+			if path == "" {
+				path = "/"
+			}
+			return dse.Spec.Ingress.Host, path
+		}
+	}
+	return "", ""
+}
+
+// discoverRoutesFromSource execs into the pod and greps source files for route definitions.
+func discoverRoutesFromSource(ns, svcName string) ([]apiEndpoint, string) {
+	// Find a pod for this service
+	podOut, err := kubectlJSON("get", "pods", "-n", ns,
+		"-l", fmt.Sprintf("app=%s", svcName),
+		"-o", "jsonpath={.items[0].metadata.name}")
+	if err != nil || strings.TrimSpace(podOut) == "" {
+		return nil, ""
+	}
+	pod := strings.TrimSpace(podOut)
+
+	// Detect the container name
+	container := containerNameForDeployment(svcName, ns, "")
+
+	// Try each framework pattern
+	type routePattern struct {
+		framework string
+		fileGlob  string
+		pattern   string
+	}
+	patterns := []routePattern{
+		// Python — FastAPI / Flask / Django
+		{"FastAPI", "*.py", `@app\.\(get\|post\|put\|delete\|patch\)\|@router\.\(get\|post\|put\|delete\|patch\)`},
+		// Node.js — Express
+		{"Express", "*.js", `\(app\|router\)\.\(get\|post\|put\|delete\|patch\)("`},
+		// Node.js — Express (TS)
+		{"Express", "*.ts", `\(app\|router\)\.\(get\|post\|put\|delete\|patch\)("`},
+		// Go — net/http + gorilla/gin
+		{"Go", "*.go", `HandleFunc\|Handle(\|\.GET\|\.POST\|\.PUT\|\.DELETE`},
+	}
+
+	for _, pat := range patterns {
+		grepCmd := fmt.Sprintf("grep -rn '%s' . --include='%s' 2>/dev/null | head -30", pat.pattern, pat.fileGlob)
+		out, err := runCapture("kubectl", "exec", pod, "-n", ns,
+			"--context", kindContext(), "-c", container, "--",
+			"sh", "-c", grepCmd)
+		if err != nil || strings.TrimSpace(out) == "" {
+			continue
+		}
+
+		endpoints := parseGrepRoutes(out, pat.framework)
+		if len(endpoints) > 0 {
+			return endpoints, pat.framework
+		}
+	}
+	return nil, ""
+}
+
+// parseGrepRoutes parses grep output into API endpoints.
+func parseGrepRoutes(grepOutput, framework string) []apiEndpoint {
+	var endpoints []apiEndpoint
+	seen := make(map[string]bool)
+
+	lines := strings.Split(strings.TrimSpace(grepOutput), "\n")
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+
+		var method, path string
+
+		switch framework {
+		case "FastAPI":
+			method, path = parsePythonRoute(line)
+		case "Express":
+			method, path = parseExpressRoute(line)
+		case "Go":
+			method, path = parseGoRoute(line)
+		default:
+			continue
+		}
+
+		if method == "" || path == "" {
+			continue
+		}
+
+		key := method + " " + path
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+
+		ep := apiEndpoint{
+			Method: method,
+			Path:   path,
+		}
+
+		// Extract path parameters
+		params := extractPathParams(path)
+		ep.Parameters = params
+
+		// Guess if it has a body based on method
+		if method == "POST" || method == "PUT" || method == "PATCH" {
+			ep.RequestBody = true
+		}
+
+		endpoints = append(endpoints, ep)
+	}
+	return endpoints
+}
+
+// parsePythonRoute extracts method + path from: @app.get("/orders/{order_id}")
+func parsePythonRoute(line string) (method, path string) {
+	// Match @app.get("/path") or @router.post("/path")
+	lower := strings.ToLower(line)
+	methods := []string{"get", "post", "put", "delete", "patch"}
+	for _, m := range methods {
+		for _, prefix := range []string{"@app.", "@router."} {
+			idx := strings.Index(lower, prefix+m+"(")
+			if idx >= 0 {
+				method = strings.ToUpper(m)
+				// Extract path from quotes
+				rest := line[idx:]
+				path = extractQuotedPath(rest)
+				return
+			}
+		}
+	}
+	return "", ""
+}
+
+// parseExpressRoute extracts method + path from: app.get('/orders/:id', ...)
+func parseExpressRoute(line string) (method, path string) {
+	lower := strings.ToLower(line)
+	methods := []string{"get", "post", "put", "delete", "patch"}
+	for _, m := range methods {
+		for _, prefix := range []string{"app.", "router."} {
+			idx := strings.Index(lower, prefix+m+"(")
+			if idx >= 0 {
+				method = strings.ToUpper(m)
+				rest := line[idx:]
+				path = extractQuotedPath(rest)
+				// Convert Express :param to {param}
+				if path != "" {
+					parts := strings.Split(path, "/")
+					for i, p := range parts {
+						if strings.HasPrefix(p, ":") {
+							parts[i] = "{" + p[1:] + "}"
+						}
+					}
+					path = strings.Join(parts, "/")
+				}
+				return
+			}
+		}
+	}
+	return "", ""
+}
+
+// parseGoRoute extracts method + path from: http.HandleFunc("/inventory", handler)
+func parseGoRoute(line string) (method, path string) {
+	// HandleFunc("/path", ...) — method is unknown, default to GET
+	if strings.Contains(line, "HandleFunc(") || strings.Contains(line, "Handle(") {
+		path = extractQuotedPath(line)
+		if path != "" {
+			return "GET", path
+		}
+	}
+	// Gin/Echo style: .GET("/path", ...), .POST("/path", ...)
+	methods := []string{"GET", "POST", "PUT", "DELETE", "PATCH"}
+	for _, m := range methods {
+		if strings.Contains(line, "."+m+"(") {
+			path = extractQuotedPath(line)
+			if path != "" {
+				return m, path
+			}
+		}
+	}
+	return "", ""
+}
+
+// extractQuotedPath pulls the first quoted string from a line.
+func extractQuotedPath(s string) string {
+	for _, q := range []byte{'"', '\''} {
+		start := strings.IndexByte(s, q)
+		if start >= 0 {
+			end := strings.IndexByte(s[start+1:], q)
+			if end >= 0 {
+				path := s[start+1 : start+1+end]
+				if strings.HasPrefix(path, "/") {
+					return path
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// extractPathParams finds {param} segments in a path.
+func extractPathParams(path string) []apiParam {
+	var params []apiParam
+	parts := strings.Split(path, "/")
+	for _, p := range parts {
+		if strings.HasPrefix(p, "{") && strings.HasSuffix(p, "}") {
+			name := p[1 : len(p)-1]
+			params = append(params, apiParam{
+				Name:     name,
+				In:       "path",
+				Required: true,
+			})
+		}
+	}
+	return params
+}

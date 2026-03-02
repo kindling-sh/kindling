@@ -3410,6 +3410,13 @@ details[open] summary {
 
 /* ── History Sidebar ─────────────────────────────────────────── */
 
+.api-history-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 19;
+  background: rgba(0, 0, 0, 0.35);
+}
+
 .api-history-sidebar {
   position: absolute;
   top: 0;
@@ -3537,4 +3544,179 @@ details[open] summary {
 .btn-xs {
   font-size: 10px;
   padding: 2px 6px;
+}
+
+/* ─── API Service Picker ─────────────────────────────────── */
+.api-service-picker {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  background: var(--card-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  margin-bottom: 12px;
+}
+.api-service-picker-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  flex-shrink: 0;
+}
+.api-service-picker-select {
+  flex: 1;
+  max-width: 280px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 600;
+  font-family: var(--font-mono, monospace);
+  cursor: pointer;
+}
+.api-service-picker-select:focus {
+  outline: none;
+  border-color: var(--accent, #818cf8);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent, #818cf8) 25%, transparent);
+}
+.api-service-picker-port {
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: var(--font-mono, monospace);
+  cursor: pointer;
+}
+.api-service-picker-port-badge {
+  font-size: 13px;
+  font-family: var(--font-mono, monospace);
+  color: var(--text-secondary);
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--text-secondary) 10%, transparent);
+}
+
+/* ─── API Endpoints Discovery Panel ─────────────────────── */
+.api-endpoints-panel {
+  background: var(--card-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 10px;
+  margin-bottom: 12px;
+}
+.api-endpoints-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+.api-endpoints-empty {
+  padding: 12px;
+  color: var(--text-tertiary);
+  font-size: 13px;
+  text-align: center;
+}
+.api-endpoints-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 8px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--border-color);
+  flex-wrap: wrap;
+}
+.api-spec-badge {
+  font-size: 11px;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: 4px;
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--text-secondary) 10%, transparent);
+}
+.api-spec-framework {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono, monospace);
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--text-secondary) 10%, transparent);
+}
+.api-spec-host {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono, monospace);
+}
+.api-endpoints-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.api-endpoint-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  font-family: inherit;
+  transition: background 0.15s;
+}
+.api-endpoint-item:hover {
+  background: color-mix(in srgb, var(--accent, #818cf8) 10%, transparent);
+}
+.api-endpoint-item:hover .api-endpoint-fire {
+  opacity: 1;
+}
+.api-endpoint-fire {
+  font-size: 9px;
+  color: var(--accent, #818cf8);
+  opacity: 0.3;
+  transition: opacity 0.15s;
+  flex-shrink: 0;
+}
+.api-endpoint-method {
+  font-size: 11px;
+  font-weight: 700;
+  font-family: var(--font-mono, monospace);
+  min-width: 52px;
+  text-transform: uppercase;
+}
+.api-endpoint-path {
+  font-size: 13px;
+  font-family: var(--font-mono, monospace);
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.api-endpoint-summary {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-left: auto;
+}
+.api-endpoint-saved {
+  font-size: 8px;
+  color: #49cc90;
+  flex-shrink: 0;
+  line-height: 1;
+}
+.api-endpoint-item.has-saved-body {
+  background: color-mix(in srgb, #49cc90 5%, transparent);
 }
