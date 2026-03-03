@@ -32,13 +32,6 @@ jobs:
       - name: Build dashboard UI
         run: cd cli/cmd/dashboard-ui && npm ci && npm run build
 
-      - name: Commit rebuilt dashboard dist (keep tree clean for GoReleaser)
-        run: |
-          git config user.name "kindling-bot"
-          git config user.email "bot@kindling.sh"
-          git add cli/cmd/dashboard-ui/dist/
-          git diff --cached --quiet || git commit --no-verify -m "chore: rebuild dashboard-ui dist [skip ci]"
-
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:

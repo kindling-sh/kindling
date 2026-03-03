@@ -3,6 +3,10 @@ version: 2
 
 project_name: kindling
 
+git:
+  # dashboard-ui dist is rebuilt in CI (different content hashes on Linux vs macOS)
+  allow_dirty: true
+
 builds:
   - id: kindling-cli
     dir: cli
