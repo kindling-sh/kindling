@@ -21,10 +21,11 @@ Here's the thing: your code is running inside a container, on a pod, in a Kubern
 3. [Walkthrough: Debugging a Python API](#walkthrough-debugging-a-python-api)
 4. [Walkthrough: Debugging a Node.js Service](#walkthrough-debugging-a-nodejs-service)
 5. [Walkthrough: Debugging a Go Service](#walkthrough-debugging-a-go-service)
-6. [Using Debug with Live Sync](#using-debug-with-live-sync)
-7. [The Dashboard Debug Button](#the-dashboard-debug-button)
-8. [Supported Runtimes Reference](#supported-runtimes-reference)
-9. [Tips and Troubleshooting](#tips-and-troubleshooting)
+6. [Walkthrough: Debugging a Ruby Service](#walkthrough-debugging-a-ruby-service)
+7. [Using Debug with Live Sync](#using-debug-with-live-sync)
+8. [The Dashboard Debug Button](#the-dashboard-debug-button)
+9. [Supported Runtimes Reference](#supported-runtimes-reference)
+10. [Tips and Troubleshooting](#tips-and-troubleshooting)
 
 ---
 
@@ -58,7 +59,8 @@ When you run `kindling debug -d my-api`, here's what happens under the hood:
 ```
 ┌──────────────────────────────────────────────────────────────────┐
 │  1. Detect runtime from the running pod                         │
-│     kubectl exec <pod> -- cat /proc/1/cmdline                   │
+│     crictl inspect → runtimeSpec.process.args                   │
+│     Fallback: kubectl exec <pod> -- cat /proc/1/cmdline         │
 │     → "python", "node", "go", "ruby", "deno", "bun"            │
 │                                                                  │
 │  2. Detect container working directory                           │
@@ -70,16 +72,20 @@ When you run `kindling debug -d my-api`, here's what happens under the hood:
 │     Patched:   pip install debugpy -q; python -m debugpy        │
 │                --listen 0.0.0.0:5678 uvicorn main:app ...       │
 │                                                                  │
-│  4. Wait for the new pod to roll out                            │
+│  4. Disable health probes (liveness + readiness)                │
+│     Prevents breakpoints from triggering pod kills              │
+│                                                                  │
+│  5. Wait for the new pod to roll out                            │
 │     kubectl rollout status deployment/my-api --timeout=120s     │
 │                                                                  │
-│  5. Port-forward the debug port to localhost                    │
+│  6. Port-forward the debug port to localhost                    │
 │     kubectl port-forward deployment/my-api 5678:5678            │
 │                                                                  │
-│  6. Write .vscode/launch.json + tasks.json                      │
+│  7. Write .vscode/launch.json + tasks.json                      │
 │     With pathMappings, correct port, preLaunchTask              │
 │                                                                  │
-│  7. Wait for Ctrl-C, then restore original deployment           │
+│  8. Wait for Ctrl-C, then restore original deployment           │
+│     Rollout undo restores command + probes atomically           │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -418,6 +424,122 @@ Go uses `substitutePath` instead of `pathMappings` — same concept, different V
 
 ---
 
+## Walkthrough: Debugging a Ruby Service
+
+Ruby debugging uses [rdbg](https://github.com/ruby/debug), the official Ruby debugger. It works with Sinatra, Rails, Puma, and any Ruby process.
+
+```ruby
+# notifications/app.rb
+require 'sinatra'
+require 'json'
+
+set :bind, '0.0.0.0'
+set :port, 4567
+
+notifications = []
+
+get '/health' do
+  content_type :json
+  { status: 'ok' }.to_json
+end
+
+post '/notifications' do
+  content_type :json
+  payload = JSON.parse(request.body.read)
+  notification = {
+    id: notifications.length + 1,
+    message: payload['message'],
+    created_at: Time.now.iso8601
+  }
+  notifications << notification
+  # BUG: Why is the response missing the timestamp?
+  { id: notification[:id], message: notification[:message] }.to_json
+end
+```
+
+### Prerequisites
+
+Ruby debugging requires the `rdbg` binary installed **locally** on your machine (not just in the container). The VS Code extension uses it to manage the DAP protocol:
+
+```bash
+# macOS — system Ruby is too old (2.6), install a modern one
+brew install ruby
+echo 'export PATH="/opt/homebrew/opt/ruby/bin:$PATH"' >> ~/.zshrc
+source ~/.zshrc
+
+# Install the debug gem (provides rdbg)
+gem install debug
+rdbg --version  # verify
+
+# Install the VS Code extension
+code --install-extension KoichiSasada.vscode-rdbg
+```
+
+### Start debugging
+
+```bash
+cd ~/projects/my-notifications
+kindling debug -d jeff-vincent-notifications
+```
+
+```
+  🔍  Detecting runtime for jeff-vincent-notifications
+  🎯  Detected runtime: Ruby (rdbg)
+  📂  Remote working directory: /app
+  📝  Original command: ruby app.rb
+  🔧  Debug command: gem install debug --no-document -q 2>/dev/null;
+       rdbg -n -c --open --host 0.0.0.0 --port 12345 -- ruby app.rb
+  🔧  Patching deployment with debug command
+  🔧  Disabling health probes for debug session
+  ✅  Debug pod ready: jeff-vincent-notifications-5f8bd594c7-lgjg4
+  🔗  Port-forwarding localhost:12345 → jeff-vincent-notifications:12345
+  🔧 Debugger ready on localhost:12345
+```
+
+Notice two Ruby-specific details:
+- **`-n` (nonstop)** — starts the app immediately. Without this, rdbg waits for a debugger connection before launching the app, causing health probes to fail.
+- **`-c` (command mode)** — treats `ruby app.rb` as a command. Without this, rdbg interprets `ruby` as a script filename.
+
+### Set a breakpoint and debug
+
+Press F5, set a breakpoint on the `notifications << notification` line, and hit the endpoint:
+
+```bash
+curl -X POST http://localhost:8080/api/notifications \
+  -H "Content-Type: application/json" \
+  -d '{"message": "test notification"}'
+```
+
+In the debug console:
+
+```ruby
+> notification
+{:id=>1, :message=>"test notification", :created_at=>"2026-03-02T00:30:00+00:00"}
+> notification.keys
+[:id, :message, :created_at]
+```
+
+The `created_at` key exists in the hash but the response hash doesn't include it. Bug found.
+
+### Generated launch.json for Ruby
+
+```json
+{
+  "name": "kindling: debug jeff-vincent-notifications",
+  "type": "rdbg",
+  "request": "attach",
+  "debugPort": "12345",
+  "localfsMap": "/app:${workspaceFolder}/notifications",
+  "preLaunchTask": "kindling: start debug jeff-vincent-notifications"
+}
+```
+
+The `localfsMap` maps container paths to local paths — Kindling auto-detects the source subdirectory in monorepo setups.
+
+> **Note on Puma**: If your Ruby app uses Puma (common with Sinatra and Rails), Puma rewrites its process title at runtime to something like `puma 6.6.1 (tcp://0.0.0.0:4567) [app]`. Kindling handles this by reading the original command from the container runtime (crictl) rather than `/proc/1/cmdline`, so detection and debug wrapping work correctly.
+
+---
+
 ## Using Debug with Live Sync
 
 Here's where it gets really powerful. `kindling debug` gives you breakpoints on whatever code is **currently in the container**. But what if you want to debug your latest local changes?
@@ -502,9 +624,13 @@ For the full one-click F5 experience, use the CLI from your project directory.
 | **Go** | 2345 | Delve (dlv) | Auto-installed (`go install ...dlv@latest`) | [golang.go](https://marketplace.visualstudio.com/items?itemName=golang.go) |
 | **Ruby** | 12345 | rdbg | Auto-installed (`gem install debug`) | [KoichiSasada.vscode-rdbg](https://marketplace.visualstudio.com/items?itemName=KoichiSasada.vscode-rdbg) |
 
+> **Ruby note**: Unlike other runtimes, Ruby requires the `rdbg` binary installed **locally** on your machine. The VS Code extension runs `rdbg --version` via your login shell to verify. Install with `gem install debug`. macOS system Ruby (2.6) is too old — install Ruby 3.1+ via `brew install ruby` or a version manager first.
+
 ### Runtime auto-detection
 
-Kindling reads the running process from the pod to figure out which runtime you're using. The detection priority is:
+Kindling reads the original container command via `crictl inspect` on
+the Kind node (falling back to `/proc/1/cmdline` if needed). The
+detection priority is:
 
 ```
 python → ruby → deno → bun → node → go
@@ -516,12 +642,12 @@ This ordering prevents false matches — for example, "deno" won't accidentally 
 
 | Runtime | What kindling wraps your command with |
 |---------|--------------------------------------|
-| Python | `pip install debugpy -q 2>/dev/null; python -m debugpy --listen 0.0.0.0:5678 --wait-for-client <your-cmd>` |
+| Python | `pip install debugpy -q 2>/dev/null; python -m debugpy --listen 0.0.0.0:5678 <your-cmd>` |
 | Node.js | `node --inspect=0.0.0.0:9229 <your-script>` |
 | Deno | `deno run --inspect=0.0.0.0:9229 <your-script>` |
 | Bun | `bun --inspect=0.0.0.0:6499 <your-script>` |
 | Go | `dlv exec --headless --listen=:2345 --api-version=2 --accept-multiclient --continue <your-binary>` |
-| Ruby | `gem install debug 2>/dev/null; rdbg --open --host 0.0.0.0 --port 12345 -- ruby <your-script>` |
+| Ruby | `gem install debug -q 2>/dev/null; rdbg -n -c --open --host 0.0.0.0 --port 12345 -- <your-cmd>` |
 
 ---
 
@@ -601,6 +727,38 @@ RUN go build -o /app/server .
 
 # ✅ Correct — preserves debug symbols
 RUN go build -gcflags='all=-N -l' -buildvcs=false -o /app/server .
+```
+
+### Ruby: "rdbg --version: command not found"
+
+The VS Code rdbg extension requires `rdbg` installed **locally**:
+
+```bash
+# macOS system Ruby is too old (2.6) — install a modern one
+brew install ruby
+echo 'export PATH="/opt/homebrew/opt/ruby/bin:$PATH"' >> ~/.zshrc
+source ~/.zshrc
+
+# Install the debug gem
+gem install debug
+rdbg --version  # should print version
+
+# Install the VS Code extension
+code --install-extension KoichiSasada.vscode-rdbg
+```
+
+### Ruby: Pod in CrashLoopBackOff during debug
+
+If the debug pod keeps crashing, check whether health probes are being
+disabled. Older versions of kindling didn't remove probes, causing the
+pod to be killed before the app starts. Update kindling and try again.
+
+If probes are still present:
+
+```bash
+kubectl patch deployment/<name> --context kind-dev --type=json \
+  -p '[{"op":"remove","path":"/spec/template/spec/containers/0/livenessProbe"},
+       {"op":"remove","path":"/spec/template/spec/containers/0/readinessProbe"}]'
 ```
 
 ### The F5 one-click flow

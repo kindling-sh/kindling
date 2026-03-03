@@ -109,6 +109,38 @@ var runtimeTable = map[string]runtimeProfile{
 		Name: "Python (Celery)", Mode: modeKill, Interpreted: true,
 		WaitAfter: 3 * time.Second,
 	},
+	"daphne": {
+		Name: "Python (Daphne)", Mode: modeKill, Interpreted: true,
+		WaitAfter: 2 * time.Second,
+	},
+	"hypercorn": {
+		Name: "Python (Hypercorn)", Mode: modeSignal, Signal: "HUP",
+		Interpreted: true, WaitAfter: 1 * time.Second,
+	},
+	"waitress-serve": {
+		Name: "Python (Waitress)", Mode: modeKill, Interpreted: true,
+		WaitAfter: 2 * time.Second,
+	},
+	"waitress": {
+		Name: "Python (Waitress)", Mode: modeKill, Interpreted: true,
+		WaitAfter: 2 * time.Second,
+	},
+	"tornado": {
+		Name: "Python (Tornado)", Mode: modeKill, Interpreted: true,
+		WaitAfter: 2 * time.Second,
+	},
+	"sanic": {
+		Name: "Python (Sanic)", Mode: modeKill, Interpreted: true,
+		WaitAfter: 2 * time.Second,
+	},
+	"django": {
+		Name: "Python (Django)", Mode: modeKill, Interpreted: true,
+		WaitAfter: 2 * time.Second,
+	},
+	"grpcio": {
+		Name: "Python (gRPC)", Mode: modeKill, Interpreted: true,
+		WaitAfter: 2 * time.Second,
+	},
 
 	// ── Ruby ────────────────────────────────────────────────
 	"ruby": {
@@ -130,6 +162,14 @@ var runtimeTable = map[string]runtimeProfile{
 	"bundle": {
 		Name: "Ruby (Bundler)", Mode: modeKill, Interpreted: true,
 		WaitAfter: 3 * time.Second,
+	},
+	"thin": {
+		Name: "Ruby (Thin)", Mode: modeKill, Interpreted: true,
+		WaitAfter: 2 * time.Second,
+	},
+	"falcon": {
+		Name: "Ruby (Falcon)", Mode: modeKill, Interpreted: true,
+		WaitAfter: 2 * time.Second,
 	},
 
 	// ── PHP ─────────────────────────────────────────────────
@@ -378,6 +418,49 @@ func detectRuntime(pod, namespace, container string) (runtimeProfile, string) {
 		WaitAfter: 3 * time.Second,
 	}
 
+	// ── 1. Try crictl inspect first ──────────────────────────────────
+
+	// Some runtimes (e.g. Puma) rewrite their process title so /proc/1/cmdline
+	// contains shell metacharacters that break downstream commands.
+	// crictl inspect returns the original OCI process args which are always clean.
+	cName := container
+	if cName == "" {
+		// No container name given — skip crictl (we'd need the deployment name
+		// to call containerNameForDeployment, which we don't have here).
+		cName = ""
+	}
+	if cName != "" {
+		cID, _ := runCapture("docker", "exec", clusterName+"-control-plane",
+			"crictl", "ps", "--name", cName, "-q")
+		cID = strings.TrimSpace(cID)
+		if cID != "" {
+			inspectOut, _ := runCapture("docker", "exec", clusterName+"-control-plane",
+				"crictl", "inspect", "--output", "json", cID)
+			if inspectOut != "" {
+				var inspectData struct {
+					Info struct {
+						RuntimeSpec struct {
+							Process struct {
+								Args []string `json:"args"`
+							} `json:"process"`
+						} `json:"runtimeSpec"`
+					} `json:"info"`
+				}
+				if err := json.Unmarshal([]byte(inspectOut), &inspectData); err == nil {
+					if args := inspectData.Info.RuntimeSpec.Process.Args; len(args) > 0 {
+						cmdline := strings.Join(args, " ")
+						fields := strings.Fields(cmdline)
+						proc := filepath.Base(fields[0])
+						if p, ok := matchRuntime(proc, fields); ok {
+							return p, cmdline
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// ── 2. Fall back to /proc/1/cmdline ──────────────────────────────
 	args := []string{"exec", pod, "-n", namespace, "--context", kindContext()}
 	if container != "" {
 		args = append(args, "-c", container)
@@ -460,11 +543,22 @@ func isPythonProc(proc string) bool {
 func matchRuntime(proc string, fields []string) (runtimeProfile, bool) {
 	norm := normalizeProcName(proc)
 
-	// "python[3[.X]] -m <framework>" → match the framework (uvicorn, gunicorn, flask, celery)
+	// "python[3[.X]] -m <framework>" → match the framework (uvicorn, gunicorn, flask, celery, etc.)
 	if isPythonProc(proc) && len(fields) >= 3 && fields[1] == "-m" {
 		framework := filepath.Base(fields[2])
 		if p, ok := runtimeTable[framework]; ok {
 			return p, true
+		}
+	}
+
+	// "python manage.py runserver" → Django
+	if isPythonProc(proc) && len(fields) >= 3 {
+		for _, arg := range fields[1:] {
+			if filepath.Base(arg) == "manage.py" {
+				if p, ok := runtimeTable["django"]; ok {
+					return p, true
+				}
+			}
 		}
 	}
 
@@ -1442,16 +1536,9 @@ func readContainerCommand(deployment, pod, namespace, container string) string {
 		return parseJSONStringArray(currentArgs)
 	}
 
-	// Fall back: read PID 1's cmdline
-	cmdline, _ := runCapture("kubectl", "exec", pod, "-n", namespace,
-		"--context", kindContext(), "--",
-		"cat", "/proc/1/cmdline")
-	if trimmed := strings.TrimSpace(strings.ReplaceAll(cmdline, "\x00", " ")); trimmed != "" {
-		return trimmed
-	}
-
-	// Fall back: read entrypoint from image via crictl on the Kind node
-	// (needed for distroless / scratch images where exec is not possible)
+	// Fall back: read the original entrypoint from crictl inspect on the Kind node.
+	// This is preferred over /proc/1/cmdline because some runtimes (e.g. Puma)
+	// rewrite the process title to something that contains shell metacharacters.
 	cName := container
 	if cName == "" {
 		cName = containerNameForDeployment(deployment, namespace, "")
@@ -1460,23 +1547,33 @@ func readContainerCommand(deployment, pod, namespace, container string) string {
 		"crictl", "ps", "--name", cName, "-q")
 	cID = strings.TrimSpace(cID)
 	if cID != "" {
-		// crictl inspect outputs JSON; extract args (entrypoint) via grep
 		inspectOut, _ := runCapture("docker", "exec", clusterName+"-control-plane",
-			"crictl", "inspect", cID)
-		// Parse the "args" field from the process info — it's the first "args" in the JSON
-		for _, line := range strings.Split(inspectOut, "\n") {
-			trimmed := strings.TrimSpace(line)
-			if strings.HasPrefix(trimmed, `"args"`) {
-				// next lines have the actual args array; let's use a simpler approach
-				break
+			"crictl", "inspect", "--output", "json", cID)
+		if inspectOut != "" {
+			// Parse runtimeSpec.process.args from the JSON
+			var inspectData struct {
+				Info struct {
+					RuntimeSpec struct {
+						Process struct {
+							Args []string `json:"args"`
+						} `json:"process"`
+					} `json:"runtimeSpec"`
+				} `json:"info"`
+			}
+			if err := json.Unmarshal([]byte(inspectOut), &inspectData); err == nil {
+				if args := inspectData.Info.RuntimeSpec.Process.Args; len(args) > 0 {
+					return strings.Join(args, " ")
+				}
 			}
 		}
-		// Use crictl inspect with jsonpath-like grep for the entrypoint
-		argsOut, _ := runCapture("docker", "exec", clusterName+"-control-plane",
-			"sh", "-c", fmt.Sprintf(`crictl inspect %s | grep -A1 '"args"' | tail -1 | tr -d ' "[],'`, cID))
-		if ep := strings.TrimSpace(argsOut); ep != "" {
-			return ep
-		}
+	}
+
+	// Last resort: read PID 1's cmdline (may be rewritten by the process)
+	cmdline, _ := runCapture("kubectl", "exec", pod, "-n", namespace,
+		"--context", kindContext(), "--",
+		"cat", "/proc/1/cmdline")
+	if trimmed := strings.TrimSpace(strings.ReplaceAll(cmdline, "\x00", " ")); trimmed != "" {
+		return trimmed
 	}
 
 	return ""

@@ -149,6 +149,34 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// ── Active Dev Sessions ─────────────────────────────────────
+	header("Active Dev Sessions")
+
+	sessionOut, _ := runCapture("kubectl", "get", "deployments",
+		"-l", "kindling.dev/mode",
+		"-o", "custom-columns=NAME:.metadata.name,MODE:.metadata.labels.kindling\\.dev/mode,RUNTIME:.metadata.labels.kindling\\.dev/runtime,READY:.status.readyReplicas",
+		"--no-headers", "--context", kindContext())
+	if sessionOut == "" || strings.Contains(sessionOut, "No resources") {
+		fmt.Printf("    %sNone — run:%s kindling debug -d <deploy> %sor%s kindling dev -d <deploy>\n", colorDim, colorReset, colorDim, colorReset)
+	} else {
+		for _, line := range strings.Split(sessionOut, "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			parts := strings.Fields(line)
+			if len(parts) >= 3 {
+				icon := "🔧"
+				if parts[1] == "dev" {
+					icon = "🖥️"
+				}
+				fmt.Printf("    %s %s  %s[%s / %s]%s\n", icon, parts[0], colorCyan, parts[1], parts[2], colorReset)
+			} else {
+				fmt.Printf("    🔧 %s\n", line)
+			}
+		}
+	}
+
 	// ── Deployments ─────────────────────────────────────────────
 	header("All Deployments")
 

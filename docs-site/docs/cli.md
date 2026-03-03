@@ -279,6 +279,90 @@ kindling sync -d frontend --src ./dist --dest /usr/share/nginx/html --restart
 
 ---
 
+### `kindling debug`
+
+Attach a VS Code debugger to a running deployment. Detects the runtime
+automatically, injects the debug agent, port-forwards the debug port,
+and writes a launch configuration.
+
+```
+kindling debug -d <deployment> [flags]
+```
+
+| Flag | Short | Default | Description |
+|---|---|---|---|
+| `--deployment` | `-d` | | Deployment name (required) |
+| `--stop` | | `false` | Stop an active debug session |
+| `--namespace` | `-n` | `default` | Kubernetes namespace |
+| `--port` | | (auto) | Override local debug port |
+| `--no-launch` | | `false` | Skip writing launch.json |
+
+**Supported runtimes and app servers:**
+
+| Runtime | App servers | Debug tool | Port |
+|---|---|---|---|
+| **Python** | uvicorn, gunicorn, flask, django, celery, fastapi, daphne, hypercorn, waitress, tornado, sanic, gRPC, plain python | debugpy | 5678 |
+| **Node.js** | node, ts-node, tsx, npm, yarn, pnpm, Express, NestJS | V8 Inspector | 9229 |
+| **Deno** | deno | V8 Inspector | 9229 |
+| **Bun** | bun | Bun Inspector | 6499 |
+| **Go** | any compiled binary (cross-compile + Delve inject) | Delve | 2345 |
+| **Ruby** | ruby, rails, puma, unicorn, thin, falcon, bundle exec | rdbg | 12345 |
+
+```bash
+# Start debugging
+kindling debug -d my-api
+# Press F5 in VS Code to attach
+
+# Stop debugging (restores original deployment)
+kindling debug --stop -d my-api
+# Or press Ctrl-C in the terminal
+```
+
+See [Debugging](/docs/debugging) for full language-specific documentation,
+dependencies, and troubleshooting.
+
+---
+
+### `kindling dev`
+
+Run a frontend dev server locally with full access to cluster APIs.
+Designed for frontend deployments (nginx, caddy, httpd) where you want
+hot reload from your local dev server instead of building and syncing
+static assets.
+
+```
+kindling dev -d <deployment> [flags]
+```
+
+| Flag | Short | Default | Description |
+|---|---|---|---|
+| `--deployment` | `-d` | | Frontend deployment name (required) |
+| `--namespace` | `-n` | `default` | Kubernetes namespace |
+| `--stop` | | `false` | Stop the dev session |
+
+**What it does:**
+1. Detects the frontend deployment (nginx/caddy/httpd serving a SPA)
+2. Resolves the local source directory (monorepo-aware)
+3. Port-forwards all backend API services to localhost
+4. Detects OAuth/OIDC and starts an HTTPS tunnel if needed
+5. Auto-patches Vite/Next.js config for tunnel hostname
+6. Launches your local dev server (`npm/pnpm/yarn run dev`)
+7. Ctrl-C stops the dev server, tunnel, and port-forwards cleanly
+
+```bash
+# Start frontend dev mode
+kindling dev -d my-frontend
+# Dev server starts automatically — edit code, see changes instantly
+
+# Stop dev mode
+kindling dev --stop -d my-frontend
+# Or press Ctrl-C
+```
+
+See [Dev Mode](/docs/dev-mode) for full documentation.
+
+---
+
 ### `kindling load`
 
 Build and load a container image directly into Kind (without CI).
@@ -493,6 +577,8 @@ kindling secrets set STRIPE_KEY sk_live_...
 git push origin main                 # outer loop: build + deploy
 kindling status                      # verify deployment
 kindling sync -d alice-myapp --restart  # inner loop: live sync
+kindling debug -d alice-myapp        # attach debugger (F5 in VS Code)
+kindling dev -d alice-frontend       # frontend hot reload
 kindling dashboard                   # visual control plane
 
 # ── ITERATE ───────────────────────────────────────────────

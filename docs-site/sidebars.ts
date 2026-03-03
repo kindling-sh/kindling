@@ -19,6 +19,8 @@ const sidebars: SidebarsConfig = {
       collapsed: false,
       items: [
         "sync",
+        "debugging",
+        "dev-mode",
         "dashboard",
         "env-vars",
         "github-actions",

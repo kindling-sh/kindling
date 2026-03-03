@@ -30,6 +30,24 @@ func kindContext() string {
 	return "kind-" + clusterName
 }
 
+// labelSession labels a deployment with kindling.dev/mode and kindling.dev/runtime
+// on the Deployment metadata (NOT the pod template) so it doesn't trigger a rollout.
+// These labels let `kindling status` and kubectl queries discover active sessions.
+func labelSession(deployment, namespace, mode, runtime string) {
+	_ = run("kubectl", "label", fmt.Sprintf("deployment/%s", deployment),
+		"-n", namespace, "--context", kindContext(), "--overwrite",
+		"kindling.dev/mode="+mode,
+		"kindling.dev/runtime="+runtime)
+}
+
+// unlabelSession removes the kindling.dev/mode and kindling.dev/runtime labels.
+func unlabelSession(deployment, namespace string) {
+	_ = run("kubectl", "label", fmt.Sprintf("deployment/%s", deployment),
+		"-n", namespace, "--context", kindContext(),
+		"kindling.dev/mode-",
+		"kindling.dev/runtime-")
+}
+
 // resolveProvider returns the CI provider for the given name, or the default
 // if name is empty. This centralises the 5-line pattern that was duplicated
 // across runners, reset, status, generate, and the dashboard API.
@@ -128,7 +146,17 @@ func runCapture(name string, args ...string) (string, error) {
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	err := cmd.Run()
-	return strings.TrimSpace(stdout.String()), err
+	out := strings.TrimSpace(stdout.String())
+	if err != nil && stderr.Len() > 0 {
+		// Include stderr in the output so callers see the actual error message
+		errMsg := strings.TrimSpace(stderr.String())
+		if out == "" {
+			out = errMsg
+		} else {
+			out = out + "\n" + errMsg
+		}
+	}
+	return out, err
 }
 
 // commandExists checks if a binary is on PATH.

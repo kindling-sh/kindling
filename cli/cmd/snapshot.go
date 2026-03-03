@@ -938,7 +938,8 @@ func connectionProtocol(depType string) string {
 // ── Registry helpers ────────────────────────────────────────────
 
 // registryImage builds a clean registry-qualified image reference.
-//   registryImage("orders", "ghcr.io/myorg", "abc123") → "ghcr.io/myorg/orders:abc123"
+//
+//	registryImage("orders", "ghcr.io/myorg", "abc123") → "ghcr.io/myorg/orders:abc123"
 func registryImage(name, registry, tag string) string {
 	registry = strings.TrimRight(registry, "/")
 	return fmt.Sprintf("%s/%s:%s", registry, helmSafe(name), tag)
@@ -979,8 +980,9 @@ func detectNextTag(registry, sampleService string) string {
 
 // registryPullRef rewrites an in-cluster image reference so it can be
 // accessed through a localhost port-forward.
-//   registryPullRef("registry:5000/gateway:abc", 52431) → "localhost:52431/gateway:abc"
-//   registryPullRef("ghcr.io/org/svc:v1", 52431)       → "ghcr.io/org/svc:v1"  (no-op)
+//
+//	registryPullRef("registry:5000/gateway:abc", 52431) → "localhost:52431/gateway:abc"
+//	registryPullRef("ghcr.io/org/svc:v1", 52431)       → "ghcr.io/org/svc:v1"  (no-op)
 func registryPullRef(image string, localPort int) string {
 	prefixes := []string{"registry:5000/", "localhost:5000/", "localhost:5001/"}
 	for _, p := range prefixes {

@@ -105,7 +105,7 @@ func runDashboard(cmd *cobra.Command, args []string) error {
 	mux.HandleFunc("/api/topology/check-path", handleCheckPath)           // GET — check dir existence
 
 	// ── API routes (proxy / API explorer) ───────────────────────
-	mux.HandleFunc("/api/proxy", handleProxy)                        // POST — proxy request to in-cluster service
+	mux.HandleFunc("/api/proxy", handleProxy) // POST — proxy request to in-cluster service
 	mux.HandleFunc("/api/proxy/services/", func(w http.ResponseWriter, r *http.Request) {
 		// Route to spec handler if path ends with /spec
 		if strings.HasSuffix(r.URL.Path, "/spec") {
@@ -114,7 +114,7 @@ func runDashboard(cmd *cobra.Command, args []string) error {
 		}
 		handleProxyServiceDetail(w, r)
 	})
-	mux.HandleFunc("/api/proxy/services", handleProxyServices)       // GET — list proxyable services
+	mux.HandleFunc("/api/proxy/services", handleProxyServices) // GET — list proxyable services
 
 	// ── API routes (debug) ──────────────────────────────────────
 	mux.HandleFunc("/api/debug", handleDebugAction)        // POST=start, DELETE=stop

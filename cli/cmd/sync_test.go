@@ -100,6 +100,20 @@ func TestMatchRuntime_DirectLookup(t *testing.T) {
 		{"perl", "Perl"},
 		{"lua", "Lua"},
 		{"nodemon", "Node.js (nodemon)"},
+
+		// New Python servers
+		{"daphne", "Python (Daphne)"},
+		{"hypercorn", "Python (Hypercorn)"},
+		{"waitress-serve", "Python (Waitress)"},
+		{"waitress", "Python (Waitress)"},
+		{"tornado", "Python (Tornado)"},
+		{"sanic", "Python (Sanic)"},
+		{"django", "Python (Django)"},
+		{"grpcio", "Python (gRPC)"},
+
+		// New Ruby servers
+		{"thin", "Ruby (Thin)"},
+		{"falcon", "Ruby (Falcon)"},
 	}
 	for _, tt := range direct {
 		t.Run("direct_"+tt.proc, func(t *testing.T) {
@@ -180,6 +194,136 @@ func TestMatchRuntime_BundleExec(t *testing.T) {
 	}
 	if p2.Name != "Ruby on Rails" {
 		t.Errorf("got Name=%q, want %q", p2.Name, "Ruby on Rails")
+	}
+}
+
+func TestMatchRuntime_PythonManagePy(t *testing.T) {
+	// "python3 manage.py runserver" → django
+	fields := []string{"python3", "manage.py", "runserver", "0.0.0.0:8000"}
+	p, ok := matchRuntime("python3", fields)
+	if !ok {
+		t.Fatal("matchRuntime(python3 manage.py runserver) returned false")
+	}
+	if p.Name != "Python (Django)" {
+		t.Errorf("got Name=%q, want %q", p.Name, "Python (Django)")
+	}
+	if p.Mode != modeKill {
+		t.Errorf("got Mode=%d, want modeKill(%d)", p.Mode, modeKill)
+	}
+
+	// "python /app/manage.py runserver" — full path to manage.py
+	fields2 := []string{"python", "/app/manage.py", "runserver"}
+	p2, ok := matchRuntime("python", fields2)
+	if !ok {
+		t.Fatal("matchRuntime(python /app/manage.py runserver) returned false")
+	}
+	if p2.Name != "Python (Django)" {
+		t.Errorf("got Name=%q, want %q", p2.Name, "Python (Django)")
+	}
+
+	// "python3.12 manage.py migrate" — versioned python
+	fields3 := []string{"python3.12", "manage.py", "migrate"}
+	p3, ok := matchRuntime("python3.12", fields3)
+	if !ok {
+		t.Fatal("matchRuntime(python3.12 manage.py migrate) returned false")
+	}
+	if p3.Name != "Python (Django)" {
+		t.Errorf("got Name=%q, want %q", p3.Name, "Python (Django)")
+	}
+
+	// Should NOT match "python setup.py install" — that's not manage.py
+	fields4 := []string{"python3", "setup.py", "install"}
+	p4, ok := matchRuntime("python3", fields4)
+	if !ok {
+		// This should match python3 fallback, not django
+		t.Fatal("matchRuntime(python3 setup.py) returned false")
+	}
+	if p4.Name == "Python (Django)" {
+		t.Error("setup.py should NOT match django")
+	}
+}
+
+func TestMatchRuntime_PythonDashM_NewServers(t *testing.T) {
+	// "python3 -m daphne myapp.asgi:app"
+	fields := []string{"python3", "-m", "daphne", "myapp.asgi:app"}
+	p, ok := matchRuntime("python3", fields)
+	if !ok {
+		t.Fatal("matchRuntime(python3 -m daphne) returned false")
+	}
+	if p.Name != "Python (Daphne)" {
+		t.Errorf("got Name=%q, want %q", p.Name, "Python (Daphne)")
+	}
+
+	// "python3 -m hypercorn main:app"
+	fields2 := []string{"python3", "-m", "hypercorn", "main:app"}
+	p2, ok := matchRuntime("python3", fields2)
+	if !ok {
+		t.Fatal("matchRuntime(python3 -m hypercorn) returned false")
+	}
+	if p2.Name != "Python (Hypercorn)" {
+		t.Errorf("got Name=%q, want %q", p2.Name, "Python (Hypercorn)")
+	}
+
+	// "python3 -m waitress --port=8080 myapp:app" (module name is "waitress")
+	fields3 := []string{"python3", "-m", "waitress", "--port=8080", "myapp:app"}
+	p3, ok := matchRuntime("python3", fields3)
+	if !ok {
+		t.Fatal("matchRuntime(python3 -m waitress) returned false")
+	}
+	if p3.Name != "Python (Waitress)" {
+		t.Errorf("got Name=%q, want %q", p3.Name, "Python (Waitress)")
+	}
+
+	// "python3 -m sanic main:app"
+	fields4 := []string{"python3", "-m", "sanic", "main:app"}
+	p4, ok := matchRuntime("python3", fields4)
+	if !ok {
+		t.Fatal("matchRuntime(python3 -m sanic) returned false")
+	}
+	if p4.Name != "Python (Sanic)" {
+		t.Errorf("got Name=%q, want %q", p4.Name, "Python (Sanic)")
+	}
+
+	// "python3 -m tornado app.main" (tornado used as a module)
+	fields5 := []string{"python3", "-m", "tornado", "app.main"}
+	p5, ok := matchRuntime("python3", fields5)
+	if !ok {
+		t.Fatal("matchRuntime(python3 -m tornado) returned false")
+	}
+	if p5.Name != "Python (Tornado)" {
+		t.Errorf("got Name=%q, want %q", p5.Name, "Python (Tornado)")
+	}
+
+	// "python3 -m grpcio app" (grpc module)
+	fields6 := []string{"python3", "-m", "grpcio", "app"}
+	p6, ok := matchRuntime("python3", fields6)
+	if !ok {
+		t.Fatal("matchRuntime(python3 -m grpcio) returned false")
+	}
+	if p6.Name != "Python (gRPC)" {
+		t.Errorf("got Name=%q, want %q", p6.Name, "Python (gRPC)")
+	}
+}
+
+func TestMatchRuntime_BundleExecNewServers(t *testing.T) {
+	// "bundle exec thin start -p 3000"
+	fields := []string{"bundle", "exec", "thin", "start", "-p", "3000"}
+	p, ok := matchRuntime("bundle", fields)
+	if !ok {
+		t.Fatal("matchRuntime(bundle exec thin) returned false")
+	}
+	if p.Name != "Ruby (Thin)" {
+		t.Errorf("got Name=%q, want %q", p.Name, "Ruby (Thin)")
+	}
+
+	// "bundle exec falcon serve"
+	fields2 := []string{"bundle", "exec", "falcon", "serve"}
+	p2, ok := matchRuntime("bundle", fields2)
+	if !ok {
+		t.Fatal("matchRuntime(bundle exec falcon) returned false")
+	}
+	if p2.Name != "Ruby (Falcon)" {
+		t.Errorf("got Name=%q, want %q", p2.Name, "Ruby (Falcon)")
 	}
 }
 
@@ -710,8 +854,9 @@ func TestRuntimeTable_KeyEntries(t *testing.T) {
 		"node", "deno", "bun", "nodemon", "ts-node", "tsx",
 		// Python ecosystem
 		"python", "python3", "uvicorn", "gunicorn", "flask", "celery",
+		"daphne", "hypercorn", "waitress-serve", "waitress", "tornado", "sanic", "django", "grpcio",
 		// Ruby ecosystem
-		"ruby", "rails", "puma", "unicorn", "bundle",
+		"ruby", "rails", "puma", "unicorn", "bundle", "thin", "falcon",
 		// PHP
 		"php", "php-fpm", "apache2",
 		// Elixir
@@ -732,7 +877,7 @@ func TestRuntimeTable_KeyEntries(t *testing.T) {
 
 func TestRuntimeTable_Modes(t *testing.T) {
 	// Verify signal-reload runtimes have signals set
-	signalRuntimes := []string{"uvicorn", "gunicorn", "puma", "unicorn", "nginx", "caddy", "apache2"}
+	signalRuntimes := []string{"uvicorn", "gunicorn", "hypercorn", "puma", "unicorn", "nginx", "caddy", "apache2"}
 	for _, key := range signalRuntimes {
 		p := runtimeTable[key]
 		if p.Mode != modeSignal {
@@ -765,7 +910,11 @@ func TestRuntimeTable_Modes(t *testing.T) {
 	}
 
 	// Verify interpreted kill-restart runtimes
-	killRuntimes := []string{"node", "deno", "bun", "python", "python3", "ruby", "perl", "lua"}
+	killRuntimes := []string{
+		"node", "deno", "bun", "python", "python3", "ruby", "perl", "lua",
+		"flask", "celery", "daphne", "waitress-serve", "waitress", "tornado", "sanic", "django", "grpcio",
+		"rails", "thin", "falcon",
+	}
 	for _, key := range killRuntimes {
 		p := runtimeTable[key]
 		if p.Mode != modeKill {
@@ -901,6 +1050,61 @@ func TestMatchRuntimeEndToEnd(t *testing.T) {
 			"php-fpm",
 			"PHP-FPM",
 			modeNone,
+		},
+		// ── New servers ──
+		{
+			"daphne_direct",
+			"daphne myapp.asgi:application -p 8000",
+			"Python (Daphne)",
+			modeKill,
+		},
+		{
+			"hypercorn_direct",
+			"hypercorn main:app --workers 4",
+			"Python (Hypercorn)",
+			modeSignal,
+		},
+		{
+			"waitress_serve_direct",
+			"waitress-serve --port=8080 myapp:app",
+			"Python (Waitress)",
+			modeKill,
+		},
+		{
+			"tornado_direct",
+			"tornado app.main",
+			"Python (Tornado)",
+			modeKill,
+		},
+		{
+			"sanic_direct",
+			"sanic main:app --port 8000",
+			"Python (Sanic)",
+			modeKill,
+		},
+		{
+			"thin_direct",
+			"thin start -p 3000",
+			"Ruby (Thin)",
+			modeKill,
+		},
+		{
+			"falcon_direct",
+			"falcon serve --port 9292",
+			"Ruby (Falcon)",
+			modeKill,
+		},
+		{
+			"python3_manage_py",
+			"python3 manage.py runserver 0.0.0.0:8000",
+			"Python (Django)",
+			modeKill,
+		},
+		{
+			"bundle_exec_thin",
+			"bundle exec thin start -p 3000",
+			"Ruby (Thin)",
+			modeKill,
 		},
 	}
 	for _, tt := range tests {

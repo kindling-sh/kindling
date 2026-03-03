@@ -35,6 +35,8 @@ Common workflow:
   kindling deploy -f dev-environment.yaml # spin up a staging environment
   kindling load -s orders --context .     # build, load into Kind, roll out
   kindling sync -d orders                 # live-sync files into running pod
+  kindling debug -d orders                # attach a debugger to a service
+  kindling dev -d frontend                # local frontend dev + cluster APIs
   kindling push -s orders                 # git push, rebuild orders only
   kindling expose                         # public HTTPS tunnel for OAuth
   kindling status                         # view everything at a glance

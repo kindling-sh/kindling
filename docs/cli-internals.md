@@ -141,7 +141,7 @@ secrets, which would cause the CI job to fail.
 
 ---
 
-## sync.go — Live file sync (1796 lines)
+## sync.go — Live file sync (1892 lines)
 
 **Command:** `kindling sync -d <deployment>`
 
@@ -178,28 +178,38 @@ main goroutine
 
 **Runtime detection (`detectRuntime()`)**
 
-Executes `cat /proc/1/cmdline` in the target container. Parses the
-process name and arguments to identify the runtime:
+Two-tier detection strategy:
+
+1. **crictl inspect** (preferred) — queries the container runtime on
+   the Kind node for the original OCI process args. This returns the
+   true `CMD`/`ENTRYPOINT` from the image, unaffected by process title
+   rewrites (e.g. Puma rewriting to `puma 6.6.1 (tcp://...)`).
+
+2. **`/proc/1/cmdline` fallback** — if crictl fails (e.g. no container
+   name available), falls back to reading the process cmdline from
+   inside the pod. May return rewritten titles for some runtimes.
 
 ```go
-func detectRuntime(deployment, container string) RuntimeInfo {
-    cmdline := exec("kubectl exec ... -- cat /proc/1/cmdline")
-    binary := parseBinary(cmdline)
-    args := parseArgs(cmdline)
+func detectRuntime(pod, namespace, container string) (runtimeProfile, string) {
+    // 1. Try crictl inspect first (original OCI args)
+    cID := exec("docker exec dev-control-plane crictl ps --name <container> -q")
+    inspect := exec("docker exec dev-control-plane crictl inspect --output json <cID>")
+    args := inspect.info.runtimeSpec.process.args  // e.g. ["ruby", "app.rb"]
 
-    switch {
-    case binary == "node" || binary == "nodejs":
-        return RuntimeInfo{Name: "node", ...}
-    case binary == "python" || binary == "python3":
-        return RuntimeInfo{Name: "python", ...}
-    case contains(binary, "uvicorn"):
-        return RuntimeInfo{Name: "uvicorn", ...}
-    // ... 38+ profiles
-    }
+    // 2. Fall back to /proc/1/cmdline
+    cmdline := exec("kubectl exec <pod> -- cat /proc/1/cmdline")
+
+    // Match against 49 runtime profiles
+    proc := filepath.Base(args[0])  // e.g. "ruby", "node", "python3"
+    return matchRuntime(proc, args)
 }
 ```
 
-**Runtime profiles (38+)**
+**`readContainerCommand()`** — used by `debug.go` to get the original
+command for debug wrapping. Uses the same crictl-first strategy to
+avoid process title rewrites breaking the debug command.
+
+**Runtime profiles (49)**
 
 Each profile defines:
 - `RestartMode` — how to restart the process
@@ -222,9 +232,18 @@ Full profile list:
 | django | wrapper | — | `manage.py runserver` |
 | fastapi | signal | SIGHUP | Via uvicorn |
 | celery | signal | SIGHUP | Worker pool |
+| daphne | kill | — | Django Channels ASGI |
+| hypercorn | signal | SIGHUP | ASGI server |
+| waitress | kill | — | WSGI server |
+| tornado | kill | — | Async framework |
+| sanic | kill | — | Async framework |
+| django | kill | — | `manage.py` detection |
+| grpcio | kill | — | Python gRPC server |
 | ruby/rails | wrapper | — | Puma dev mode |
 | puma | signal | SIGUSR2 | Phased restart |
 | unicorn | signal | SIGUSR2 | Graceful restart |
+| thin | kill | — | Thin web server |
+| falcon | kill | — | Async Ruby server |
 | php/php-fpm | none | — | Per-request reload |
 | nginx | signal | SIGHUP | Config reload |
 | apache/httpd | signal | SIGUSR1 | Graceful restart |
@@ -277,6 +296,281 @@ When a frontend framework is detected (React, Vue, Angular, Next,
 Vite), sync runs the local build command (`npm run build`) and syncs
 the output directory to the pod's webroot (usually `/usr/share/nginx/html`
 or `/app/build`).
+
+---
+
+## debug.go — Debugger attachment (1403 lines)
+
+**Command:** `kindling debug -d <deployment>`
+
+Attaches a VS Code debugger to a running deployment by injecting a
+debug agent, port-forwarding the debug port, and writing launch configs.
+
+**Flags:**
+- `-d, --deployment` — target Deployment name (required)
+- `-n, --namespace` — Kubernetes namespace (default: `default`)
+- `--port` — override local debug port (default: per-runtime)
+- `--stop` — stop an active debug session
+- `--no-launch` — skip writing launch.json
+
+**Architecture:**
+
+```
+startDebug()
+  │
+  ├─ findPodForDeployment()    ← find a running pod
+  ├─ detectRuntime()           ← crictl inspect → /proc/1/cmdline fallback
+  ├─ isFrontendDeployment()    ← if frontend, suggest `kindling dev` and abort
+  ├─ matchDebugProfile()       ← map runtime name → debug config (with aliases)
+  ├─ readContainerCommand()    ← get original CMD (crictl-first)
+  ├─ stripDebugWrapper()       ← remove any existing debug wrapping (prevents double wrap)
+  ├─ buildDebugCommand()       ← wrap with debug agent
+  ├─ remove health probes      ← JSON patch (prevents breakpoint kills)
+  ├─ patch deployment command  ← JSON patch
+  ├─ saveDebugState()          ← persist IMMEDIATELY (safe rollback if process dies)
+  ├─ wait for rollout          ← kubectl rollout status
+  ├─ injectGoDebugTools()      ← Go only: cross-compile + kubectl cp + auto-rollback on failure
+  ├─ port-forward debug port   ← kubectl port-forward (background)
+  ├─ labelSession()            ← add kindling.dev/mode + kindling.dev/runtime labels
+  ├─ writeLaunchConfig()       ← .vscode/launch.json + tasks.json
+  └─ wait for Ctrl-C → stopDebug()
+
+stopDebug()
+  │
+  ├─ loadDebugState()          ← read saved state
+  ├─ kill port-forward         ← os.FindProcess + Kill
+  ├─ unlabelSession()          ← remove session labels
+  ├─ restore deployment        ← rollout undo (if probes removed)
+  │                               or JSON patch (remove command)
+  ├─ wait for rollout
+  └─ clearDebugState()
+```
+
+**Supported runtimes:**
+
+| Runtime | Debugger | Port | Install | VS Code type |
+|---|---|---|---|---|
+| Python | debugpy | 5678 | `pip install debugpy` | `debugpy` |
+| Node.js | V8 Inspector | 9229 | Built-in | `node` |
+| Deno | V8 Inspector | 9229 | Built-in | `node` |
+| Bun | Bun Inspector | 6499 | Built-in | `bun` |
+| Go | Delve | 2345 | Cross-compile + inject | `go` |
+| Ruby | rdbg | 12345 | `gem install debug` | `rdbg` |
+
+**matchDebugProfile():**
+
+Runtime matching uses a priority list to avoid false substring matches
+(`deno` before `node`, etc.). Also supports aliases for runtime names
+that don't contain the debug key (e.g. "TypeScript (tsx)" → `node`).
+Falls back to command-line inspection for Node.js tools (`ts-node`,
+`tsx`, `npx`, `npm`, `yarn`, `pnpm`).
+
+**Special detection patterns in `matchRuntime()`:**
+- `python -m <module>` → looks up `<module>` (e.g. `uvicorn`, `gunicorn`)
+- `python manage.py` → `django`
+- `bundle exec <cmd>` → looks up `<cmd>` (e.g. `puma`, `rails`)
+- `npx <cmd>` → looks up `<cmd>`
+
+**buildDebugCommand():**
+
+| Runtime | Transform |
+|---|---|
+| Node.js | `node server.js` → `node --inspect=0.0.0.0:9229 server.js` |
+| Node.js (framework CLI) | `npm start` → `NODE_OPTIONS='--inspect=0.0.0.0:9229' npm start` |
+| Node.js (ts-node/tsx) | `ts-node src/index.ts` → `ts-node --inspect=0.0.0.0:9229 src/index.ts` |
+| Node.js (wrapper script) | `docker-entrypoint.sh node server.js` → `node --inspect=0.0.0.0:9229 server.js` |
+| Python | `python app.py` → `pip install debugpy -q; python -m debugpy --listen 0.0.0.0:5678 app.py` |
+| Python (uvicorn) | `uvicorn main:app -w 4` → `python -m debugpy --listen 0.0.0.0:5678 -m uvicorn main:app -w 1` |
+| Python (gunicorn) | `gunicorn app:app` → `python -m debugpy --listen 0.0.0.0:5678 -m gunicorn app:app --timeout 0` |
+| Python (daphne) | `daphne myapp.asgi:app` → `python -m debugpy --listen 0.0.0.0:5678 -m daphne myapp.asgi:app` |
+| Python (hypercorn) | `hypercorn main:app -w 4` → `python -m debugpy --listen 0.0.0.0:5678 -m hypercorn main:app -w 1` |
+| Python (waitress) | `waitress-serve --port=8080 myapp:app` → `python -m debugpy --listen 0.0.0.0:5678 -m waitress --port=8080 myapp:app` |
+| Python (manage.py) | `python manage.py runserver` → `python -m debugpy --listen 0.0.0.0:5678 manage.py runserver` |
+| Ruby | `ruby app.rb` → `gem install debug -q; rdbg -n -c --open --host 0.0.0.0 --port 12345 -- ruby app.rb` |
+| Go | `./server` → wait-loop for `/tmp/dlv` → `dlv exec --headless /tmp/_debug_bin` |
+
+**findRuntimeBinary():**
+
+Locates the actual runtime binary in args, skipping entrypoint wrapper
+scripts like `docker-entrypoint.sh`. Falls back to index 0 if not found.
+Handles versioned binary names (python3, python3.12, node18, etc.).
+
+**normalizePythonForDebug():**
+
+Adjusts Python server flags for single-process debugging:
+- `--workers N` / `-w N` → `--workers 1` (debugpy attaches to one process)
+- Gunicorn: adds `--timeout 0` (prevents master from killing paused worker)
+- Prints warnings when values are changed
+
+**stripDebugWrapper():**
+
+Removes any existing debug wrapper from a command before re-wrapping.
+Prevents double-wrapping when restarting a debug session (e.g. after
+a crash) — strips `pip install debugpy ...;`, `gem install debug ...;`,
+`NODE_OPTIONS=...`, and the Delve wait-loop.
+
+**Go sync-inspired approach:**
+
+Instead of requiring Go toolchain in the container:
+1. `detectNodeArch()` — queries Kind node for OS/arch
+2. `findGoSourceDir()` — finds `go.mod` in CWD/subdirectories
+3. Cross-compile locally: `CGO_ENABLED=0 GOOS=linux GOARCH=<arch> go build -gcflags='all=-N -l' -buildvcs=false`
+4. `ensureDelve()` — downloads/caches Delve binary for target arch at `~/.kindling/cache/dlv-<arch>`
+5. `injectGoDebugTools()` — kubectl cp both files into `/tmp/` in the container
+6. **Auto-rollback**: if inject fails, calls `stopDebug()` to restore the original deployment
+
+**Ruby-specific flags:**
+- `-n` (nonstop) — starts the app immediately without waiting for a
+  debugger connection. Without this, health probes fail because the
+  app never starts until a debugger attaches.
+- `-c` (command mode) — treats `ruby app.rb` as a command to execute.
+  Without this, rdbg interprets `ruby` as a script filename and runs
+  `ruby ruby app.rb` → LoadError.
+
+**Health probe handling:**
+
+Breakpoints pause program execution, which causes Kubernetes liveness
+and readiness probes to fail — killing the debug pod. Kindling removes
+probes during debug sessions:
+
+1. **On start**: checks for existing liveness/readiness probes, saves
+   `hadProbes` in debug state, removes probes via JSON patch
+2. **On stop**: if probes were removed, uses `kubectl rollout undo` to
+   revert to the pre-debug revision (restores probes + command atomically)
+
+**Debug state persistence:**
+
+State is saved to `~/.kindling/debug-<deployment>.json`:
+
+```json
+{
+  "deployment": "jeff-vincent-orders",
+  "namespace": "default",
+  "runtime": "python",
+  "localPort": 5678,
+  "remotePort": 5678,
+  "origCmd": "python -m uvicorn main:app --host 0.0.0.0 --port 5000",
+  "hadCommand": false,
+  "hadProbes": true,
+  "pfPid": 12345,
+  "devPid": 0,
+  "srcDir": ""
+}
+```
+
+**Launch config generation (`writeLaunchConfig()`):**
+
+Writes two VS Code configurations:
+1. **"kindling: debug \<name\>"** — includes `preLaunchTask` that starts
+   `kindling debug` as a background VS Code task. Press F5 for one-click.
+2. **"kindling: attach \<name\>"** — attach-only, no task. For re-attaching
+   to an already-running session.
+
+Path mappings are auto-configured using the detected remote working
+directory and optional source subdirectory (monorepo support).
+
+---
+
+## dev.go — Frontend dev mode (597 lines)
+
+**Command:** `kindling dev -d <deployment>`
+
+Runs a local frontend dev server with full access to cluster APIs.
+Designed for frontend deployments (nginx/caddy/httpd serving SPAs)
+where you want hot reload instead of building and syncing static assets.
+
+**Flags:**
+- `-d, --deployment` — target frontend Deployment name (required)
+- `-n, --namespace` — Kubernetes namespace (default: `default`)
+- `--stop` — stop an active dev session
+
+**Architecture:**
+
+```
+runDev()
+  │
+  ├─ findPodForDeployment()           ← find a running pod
+  ├─ detectRuntime() + readContainerCommand()
+  ├─ isFrontendDeployment()           ← verify nginx/caddy/httpd
+  ├─ localSourceDirForDeployment()    ← resolve local source (absolute path)
+  ├─ detect package manager           ← pnpm-lock.yaml / yarn.lock / package-lock.json
+  ├─ discoverAPIServices()            ← find backend services in namespace
+  │    └─ port-forward each service   ← kubectl port-forward (background processes)
+  ├─ detectFrontendOAuth()            ← scan source for OAuth/OIDC patterns
+  │    ├─ core.StartCloudflaredTunnel()  ← HTTPS tunnel
+  │    ├─ patchDevServerAllowedHost()    ← Vite/Next.js config patch
+  │    └─ export KINDLING_TUNNEL_URL
+  ├─ exec.Command(pm, "run", "dev")   ← launch dev server as child process
+  │    └─ SysProcAttr{Setpgid: true}  ← process group for clean kill
+  ├─ saveDebugState()                 ← persist DevPid + SrcDir
+  ├─ labelSession()                   ← kindling.dev/mode=dev, runtime=frontend
+  └─ select on Ctrl-C or dev server exit
+       ├─ syscall.Kill(-pgid, SIGTERM) ← kill process group (npm + vite)
+       ├─ restoreDevServerConfig()     ← revert Vite/Next.js patches
+       ├─ unlabelSession()
+       └─ clearDebugState()
+```
+
+**isFrontendDeployment():**
+
+Checks the container command for known static-file web servers:
+`nginx`, `caddy`, `httpd`, `apache`, `serve`. Also validates that a
+`package.json` exists in the resolved source directory to avoid
+treating plain nginx reverse proxies as frontends.
+
+**localSourceDirForDeployment():**
+
+Resolves the local source directory using a scoring system:
+
+1. **Deployment-suffix fast path** — strips the actor prefix
+   (e.g. `jeff-frontend` → `frontend`) and checks for an exact
+   directory match. Gets a +20 score boost.
+2. **Recursive scan** — walks directories looking for `package.json`,
+   scores based on directory name similarity to deployment name.
+3. Returns absolute paths via `filepath.Abs()`.
+
+**discoverAPIServices():**
+
+Lists services in the namespace, filters out the frontend deployment's
+own service, and port-forwards each to a random local port. Returns
+a `[]serviceURL` with name, local port, and remote port.
+
+**detectFrontendOAuth():**
+
+Scans source files for OAuth/OIDC patterns:
+- `NEXTAUTH`, `NEXT_AUTH`
+- `OIDC`, `OPENID`
+- `oauth`, `OAuth`
+- `AUTH0`, `CLERK`
+- `callback`, `redirect_uri`
+
+If found, starts a cloudflared tunnel for HTTPS callbacks.
+
+**patchDevServerAllowedHost():**
+
+Patches Vite or Next.js config to allow the tunnel hostname:
+- **Vite**: Adds `allowedHosts: ['hostname']` to `server:` block
+  in `vite.config.ts` / `vite.config.js`
+- **Next.js**: Sets `allowedDevHosts` in `next.config.js`
+- Creates `.kindling-dev-backup` files for restoration
+
+**restoreDevServerConfig():**
+
+Restores the original config from `.kindling-dev-backup` files
+when the dev session ends.
+
+**detectDevServerPort():**
+
+Reads `package.json` and config files to determine the dev server
+port (default 5173 for Vite, 3000 for Next.js, etc.). Used for
+display and proxy configuration.
+
+**Process group management:**
+
+The dev server is started with `SysProcAttr{Setpgid: true}` to create
+a new process group. On cleanup, `syscall.Kill(-pgid, SIGTERM)` kills
+the entire group — both the package manager process (npm) and the
+spawned dev server (vite). This prevents orphan vite processes.
 
 ---
 
@@ -666,6 +960,8 @@ Key functions:
 - **`fileExists(path)`** — os.Stat wrapper
 - **`readFileContent(path)`** — os.ReadFile wrapper
 - **`writeFileContent(path, content)`** — os.WriteFile wrapper
+- **`labelSession(deploy, ns, mode, runtime)`** — add `kindling.dev/mode` and `kindling.dev/runtime` labels to Deployment metadata (not pod template, no rollout)
+- **`unlabelSession(deploy, ns)`** — remove session labels from Deployment
 
 **Color constants:**
 ```go

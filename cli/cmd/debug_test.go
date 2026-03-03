@@ -27,6 +27,19 @@ func TestMatchDebugProfile(t *testing.T) {
 		{"Bun 1.0", "bun run index.ts", "bun", false},
 		{"Go", "go run main.go", "go", false},
 		{"Ruby 3.2", "ruby app.rb", "ruby", false},
+		// New Python servers — all contain "python" in Name
+		{"Python (Daphne)", "daphne myapp.asgi:app", "python", false},
+		{"Python (Hypercorn)", "hypercorn main:app", "python", false},
+		{"Python (Waitress)", "waitress-serve myapp:app", "python", false},
+		{"Python (Tornado)", "tornado app.main", "python", false},
+		{"Python (Sanic)", "sanic main:app", "python", false},
+		{"Python (Django)", "python manage.py runserver", "python", false},
+		{"Python (gRPC)", "python -m grpcio app", "python", false},
+
+		// New Ruby servers — all contain "ruby" in Name
+		{"Ruby (Thin)", "thin start -p 3000", "ruby", false},
+		{"Ruby (Falcon)", "falcon serve", "ruby", false},
+
 		{"unknown", "", "", true},
 		{"", "", "", true},
 	}
@@ -101,6 +114,62 @@ func TestBuildDebugCommand(t *testing.T) {
 			origCmd: "./myapp",
 			want:    "dlv exec",
 		},
+		// ── New Python servers ──
+		{
+			name:    "python daphne wraps with debugpy module",
+			key:     "python",
+			origCmd: "daphne myapp.asgi:application -p 8000",
+			want:    "debugpy --listen 0.0.0.0:5678 -m daphne myapp.asgi:application",
+		},
+		{
+			name:    "python hypercorn wraps with debugpy module",
+			key:     "python",
+			origCmd: "hypercorn main:app --workers 4",
+			want:    "debugpy --listen 0.0.0.0:5678 -m hypercorn main:app",
+		},
+		{
+			name:    "python hypercorn workers normalized",
+			key:     "python",
+			origCmd: "hypercorn main:app --workers 4",
+			want:    "--workers 1",
+		},
+		{
+			name:    "python waitress-serve wraps with debugpy module",
+			key:     "python",
+			origCmd: "waitress-serve --port=8080 myapp:app",
+			want:    "debugpy --listen 0.0.0.0:5678 -m waitress-serve",
+		},
+		{
+			name:    "python sanic wraps with debugpy module",
+			key:     "python",
+			origCmd: "sanic main:app --port 8000",
+			want:    "debugpy --listen 0.0.0.0:5678 -m sanic main:app",
+		},
+		{
+			name:    "python manage.py wraps with debugpy",
+			key:     "python",
+			origCmd: "python manage.py runserver 0.0.0.0:8000",
+			want:    "debugpy --listen 0.0.0.0:5678 manage.py runserver",
+		},
+		{
+			name:    "python -m uvicorn workers normalized",
+			key:     "python",
+			origCmd: "python -m uvicorn main:app -w 4",
+			want:    "-w 1",
+		},
+		// ── Ruby thin/falcon ──
+		{
+			name:    "ruby thin wraps with rdbg",
+			key:     "ruby",
+			origCmd: "thin start -p 3000",
+			want:    "rdbg -n -c --open --host 0.0.0.0 --port 12345 -- thin start",
+		},
+		{
+			name:    "ruby falcon wraps with rdbg",
+			key:     "ruby",
+			origCmd: "falcon serve --port 9292",
+			want:    "rdbg -n -c --open --host 0.0.0.0 --port 12345 -- falcon serve",
+		},
 	}
 
 	for _, tt := range tests {
@@ -114,6 +183,118 @@ func TestBuildDebugCommand(t *testing.T) {
 				t.Errorf("buildDebugCommand(%q, %q) = %q, should NOT contain %q", tt.key, tt.origCmd, result, tt.notWant)
 			}
 		})
+	}
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// normalizePythonForDebug
+// ────────────────────────────────────────────────────────────────────────────
+
+func TestNormalizePythonForDebug(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want []string
+	}{
+		{
+			name: "uvicorn workers normalized",
+			args: []string{"uvicorn", "main:app", "--workers", "4"},
+			want: []string{"uvicorn", "main:app", "--workers", "1"},
+		},
+		{
+			name: "uvicorn -w normalized",
+			args: []string{"uvicorn", "main:app", "-w", "8"},
+			want: []string{"uvicorn", "main:app", "-w", "1"},
+		},
+		{
+			name: "gunicorn gets timeout 0",
+			args: []string{"gunicorn", "app:app", "--workers", "4"},
+			want: []string{"gunicorn", "app:app", "--workers", "1", "--timeout", "0"},
+		},
+		{
+			name: "gunicorn existing timeout replaced",
+			args: []string{"gunicorn", "app:app", "--timeout", "30"},
+			want: []string{"gunicorn", "app:app", "--timeout", "0"},
+		},
+		{
+			name: "hypercorn workers normalized",
+			args: []string{"hypercorn", "main:app", "--workers", "4"},
+			want: []string{"hypercorn", "main:app", "--workers", "1"},
+		},
+		{
+			name: "hypercorn no timeout added",
+			args: []string{"hypercorn", "main:app", "-w", "2"},
+			want: []string{"hypercorn", "main:app", "-w", "1"},
+		},
+		{
+			name: "daphne no workers unchanged",
+			args: []string{"daphne", "myapp.asgi:application", "-p", "8000"},
+			want: []string{"daphne", "myapp.asgi:application", "-p", "8000"},
+		},
+		{
+			name: "waitress-serve unchanged",
+			args: []string{"waitress-serve", "--port=8080", "myapp:app"},
+			want: []string{"waitress-serve", "--port=8080", "myapp:app"},
+		},
+		{
+			name: "sanic unchanged",
+			args: []string{"sanic", "main:app", "--port", "8000"},
+			want: []string{"sanic", "main:app", "--port", "8000"},
+		},
+		{
+			name: "tornado unchanged",
+			args: []string{"tornado", "app.main"},
+			want: []string{"tornado", "app.main"},
+		},
+		{
+			name: "single worker already set",
+			args: []string{"uvicorn", "main:app", "--workers", "1"},
+			want: []string{"uvicorn", "main:app", "--workers", "1"},
+		},
+		{
+			name: "no args",
+			args: []string{"flask", "run"},
+			want: []string{"flask", "run"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := normalizePythonForDebug(tt.args)
+			if len(got) != len(tt.want) {
+				t.Errorf("normalizePythonForDebug(%v) = %v, want %v", tt.args, got, tt.want)
+				return
+			}
+			for i, v := range tt.want {
+				if got[i] != v {
+					t.Errorf("normalizePythonForDebug(%v)[%d] = %q, want %q", tt.args, i, got[i], v)
+				}
+			}
+		})
+	}
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// isPythonBinary
+// ────────────────────────────────────────────────────────────────────────────
+
+func TestIsPythonBinary(t *testing.T) {
+	trueCases := []string{"python", "python3", "python3.12", "/usr/bin/python3"}
+	for _, name := range trueCases {
+		if !isPythonBinary(name) {
+			t.Errorf("isPythonBinary(%q) = false, want true", name)
+		}
+	}
+
+	falseCases := []string{
+		"uvicorn", "gunicorn", "daphne", "hypercorn", "waitress-serve",
+		"tornado", "sanic", "grpcio", "flask", "celery",
+		"thin", "falcon", "node", "ruby", "",
+	}
+	for _, name := range falseCases {
+		if isPythonBinary(name) {
+			t.Errorf("isPythonBinary(%q) = true, want false", name)
+		}
 	}
 }
 
@@ -470,6 +651,9 @@ func TestWriteLaunchConfigSubdirNode(t *testing.T) {
 }
 
 // Test that writeLaunchConfig applies sourceSubdir to Go substitutePath
+// Go configs should NOT have substitutePath — locally cross-compiled
+// binaries embed local source paths in debug symbols, so no path
+// translation is needed between VS Code and Delve.
 func TestWriteLaunchConfigSubdirGo(t *testing.T) {
 	tmpDir := t.TempDir()
 	origProjectDir := projectDir
@@ -486,16 +670,8 @@ func TestWriteLaunchConfigSubdirGo(t *testing.T) {
 	json.Unmarshal(data, &launch)
 
 	f5 := launch.Configs[0]
-	sp, ok := f5["substitutePath"].([]interface{})
-	if !ok || len(sp) == 0 {
-		t.Fatal("Go config missing substitutePath")
-	}
-	entry, _ := sp[0].(map[string]interface{})
-	if entry["from"] != "${workspaceFolder}/inventory" {
-		t.Errorf("substitutePath.from = %q, want %q", entry["from"], "${workspaceFolder}/inventory")
-	}
-	if entry["to"] != "/app" {
-		t.Errorf("substitutePath.to = %q, want %q", entry["to"], "/app")
+	if _, exists := f5["substitutePath"]; exists {
+		t.Fatal("Go config should NOT have substitutePath (local cross-compile = local paths in debug symbols)")
 	}
 }
 

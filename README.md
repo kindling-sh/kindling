@@ -167,6 +167,8 @@ kindling expose                          # HTTPS tunnel, one command
 kindling env set my-api LOG_LEVEL=debug  # change env vars live
 kindling secrets set STRIPE_KEY sk_...   # manage credentials
 kindling push -s new-service             # add and deploy a new service
+kindling debug -d my-api                 # attach debugger — F5 in VS Code
+kindling dev -d my-frontend              # frontend hot reload + cluster APIs
 ```
 
 ---
@@ -215,15 +217,24 @@ kindling sync -d <user>-my-app --restart
 
 ---
 
-## Agent Intel — Context for AI Coding Agents
+## Agent Intel — AI Coding Agents as a First-Class Interface
 
-`kindling intel` auto-configures GitHub Copilot, Claude Code, Cursor, and Windsurf with full project context — CLI commands, dependency injection, build protocol, secrets flow, and Kaniko compatibility. Activates on any `kindling` command, restores originals after an hour of inactivity.
+Your AI coding agent (Copilot, Claude Code, Cursor, Windsurf) is a
+legitimate place to run kindling. `kindling intel` teaches the agent
+your full dev environment — CLI commands, dependencies, secrets,
+build protocol — so it can suggest the right one-liner for whatever
+you're doing. A few tokens in, full dev workflow out.
 
 ```bash
 kindling intel on                        # activate now
 kindling intel status                    # check what's active
 kindling intel off                       # restore originals
 ```
+
+The agent knows every command. You describe what you want, the agent
+suggests `kindling debug`, `kindling sync`, or `kindling dev`, you
+run it — the heavy lifting happens outside the agent loop in the
+cluster.
 
 ---
 
