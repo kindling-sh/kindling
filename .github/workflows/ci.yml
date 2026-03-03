@@ -30,6 +30,15 @@ jobs:
             exit 1
           fi
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: cli/cmd/dashboard-ui/package-lock.json
+
+      - name: Build dashboard UI
+        run: cd cli/cmd/dashboard-ui && npm ci && npm run build
+
       - name: go vet
         run: |
           go vet ./...
