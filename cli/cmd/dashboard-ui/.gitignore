@@ -8,7 +8,7 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
-# dist is committed so go:embed works without a separate build step
+dist
 dist-ssr
 *.local
 

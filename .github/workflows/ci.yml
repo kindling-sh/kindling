@@ -50,6 +50,15 @@ jobs:
       - name: Run operator tests
         run: make test
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: cli/cmd/dashboard-ui/package-lock.json
+
+      - name: Build dashboard UI
+        run: cd cli/cmd/dashboard-ui && npm ci && npm run build
+
       - name: Run CLI tests
         run: make test-cli
 
@@ -73,6 +82,15 @@ jobs:
 
       - name: Build operator
         run: make build
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: cli/cmd/dashboard-ui/package-lock.json
+
+      - name: Build dashboard UI
+        run: cd cli/cmd/dashboard-ui && npm ci && npm run build
 
       - name: Build CLI
         run: make cli
