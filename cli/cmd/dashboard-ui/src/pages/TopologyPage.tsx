@@ -244,11 +244,48 @@ function useEdgeOffsets(edges: Edge[]): Map<string, number> {
 
 const EDGE_BORDER_RADIUS = 16;
 
+// ── Node dimensions for smart handle calculations ───────────
+const NODE_WIDTH = 240;
+const NODE_HEIGHT = 72;
+
+// Pick the source/target handle pair whose endpoints are closest
+// together, so edges always attach to the nearest node side.
+function getBestHandles(
+  sourcePos: { x: number; y: number },
+  targetPos: { x: number; y: number },
+): { sourceHandle: string; targetHandle: string } {
+  const pairs = [
+    { source: 'source-right', target: 'target-left',
+      sx: sourcePos.x + NODE_WIDTH, sy: sourcePos.y + NODE_HEIGHT / 2,
+      tx: targetPos.x, ty: targetPos.y + NODE_HEIGHT / 2 },
+    { source: 'source-left', target: 'target-right',
+      sx: sourcePos.x, sy: sourcePos.y + NODE_HEIGHT / 2,
+      tx: targetPos.x + NODE_WIDTH, ty: targetPos.y + NODE_HEIGHT / 2 },
+    { source: 'source-bottom', target: 'target-top',
+      sx: sourcePos.x + NODE_WIDTH / 2, sy: sourcePos.y + NODE_HEIGHT,
+      tx: targetPos.x + NODE_WIDTH / 2, ty: targetPos.y },
+    { source: 'source-top', target: 'target-bottom',
+      sx: sourcePos.x + NODE_WIDTH / 2, sy: sourcePos.y,
+      tx: targetPos.x + NODE_WIDTH / 2, ty: targetPos.y + NODE_HEIGHT },
+  ];
+  let best = pairs[0];
+  let bestDist = Infinity;
+  for (const p of pairs) {
+    const d = (p.tx - p.sx) ** 2 + (p.ty - p.sy) ** 2;
+    if (d < bestDist) { bestDist = d; best = p; }
+  }
+  return { sourceHandle: best.source, targetHandle: best.target };
+}
+
 function ConnectionEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, data, style, markerEnd }: EdgeProps) {
   const edgeData = data as Record<string, unknown> | undefined;
   const offset = (edgeData?._offset as number) || 0;
+  const isVertical = sourcePosition === Position.Top || sourcePosition === Position.Bottom;
   const [edgePath, labelX, labelY] = getSmoothStepPath({
-    sourceX, sourceY: sourceY + offset, targetX, targetY: targetY + offset,
+    sourceX: sourceX + (isVertical ? offset : 0),
+    sourceY: sourceY + (isVertical ? 0 : offset),
+    targetX: targetX + (isVertical ? offset : 0),
+    targetY: targetY + (isVertical ? 0 : offset),
     sourcePosition, targetPosition, borderRadius: EDGE_BORDER_RADIUS,
   });
 
@@ -284,8 +321,12 @@ function ConnectionEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosition
 function ServiceEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, data, style, markerEnd }: EdgeProps) {
   const edgeData = data as Record<string, unknown> | undefined;
   const offset = (edgeData?._offset as number) || 0;
+  const isVertical = sourcePosition === Position.Top || sourcePosition === Position.Bottom;
   const [edgePath, labelX, labelY] = getSmoothStepPath({
-    sourceX, sourceY: sourceY + offset, targetX, targetY: targetY + offset,
+    sourceX: sourceX + (isVertical ? offset : 0),
+    sourceY: sourceY + (isVertical ? 0 : offset),
+    targetX: targetX + (isVertical ? offset : 0),
+    targetY: targetY + (isVertical ? 0 : offset),
     sourcePosition, targetPosition, borderRadius: EDGE_BORDER_RADIUS,
   });
 
@@ -1049,26 +1090,33 @@ function autoLayoutNodes(
   }
 
   // ── Backwards pass: pull earlier layers towards their targets ──
-  for (let l = maxSvcLayer - 1; l >= 0; l--) {
-    for (const n of layers[l]) {
-      const outgoing = svcOutgoing.get(n.id) || new Set<string>();
-      const positions = Array.from(outgoing)
-        .map((id) => nodeYPos.get(id))
-        .filter((p): p is number => p !== undefined);
-      if (positions.length > 0) {
-        const avg = positions.reduce((a, b) => a + b, 0) / positions.length;
-        const current = nodeYPos.get(n.id) || 0;
-        // Nudge towards targets but don't overlap
-        nodeYPos.set(n.id, current + (avg - current) * 0.3);
+  // Two iterations for stronger convergence
+  for (let pass = 0; pass < 2; pass++) {
+    for (let l = maxSvcLayer - 1; l >= 0; l--) {
+      for (const n of layers[l]) {
+        const outgoing = svcOutgoing.get(n.id) || new Set<string>();
+        const outPositions = Array.from(outgoing)
+          .map((id) => nodeYPos.get(id))
+          .filter((p): p is number => p !== undefined);
+        // Also consider connected deps for vertical alignment
+        const depPositions = (svcToDeps.get(n.id) || [])
+          .map((id) => nodeYPos.get(id))
+          .filter((p): p is number => p !== undefined);
+        const allPositions = [...outPositions, ...depPositions];
+        if (allPositions.length > 0) {
+          const avg = allPositions.reduce((a, b) => a + b, 0) / allPositions.length;
+          const current = nodeYPos.get(n.id) || 0;
+          nodeYPos.set(n.id, current + (avg - current) * 0.5);
+        }
       }
-    }
-    // Re-sort and re-space
-    layers[l].sort((a, b) => (nodeYPos.get(a.id) || 0) - (nodeYPos.get(b.id) || 0));
-    let ly = LAYOUT.rowStart;
-    for (const n of layers[l]) {
-      const finalY = Math.max(ly, nodeYPos.get(n.id) || 0);
-      nodeYPos.set(n.id, finalY);
-      ly = finalY + LAYOUT.rowGap;
+      // Re-sort and re-space
+      layers[l].sort((a, b) => (nodeYPos.get(a.id) || 0) - (nodeYPos.get(b.id) || 0));
+      let ly = LAYOUT.rowStart;
+      for (const n of layers[l]) {
+        const finalY = Math.max(ly, nodeYPos.get(n.id) || 0);
+        nodeYPos.set(n.id, finalY);
+        ly = finalY + LAYOUT.rowGap;
+      }
     }
   }
 
@@ -1255,14 +1303,26 @@ export function TopologyPage() {
 
   // ── Compute edge offsets to fan out parallel edges ──────────
   const edgeOffsets = useEdgeOffsets(edges);
-  const edgesWithOffsets = useMemo(() =>
-    edges.map((e) => {
+  const processedEdges = useMemo(() => {
+    const nodeMap = new Map(nodes.map(n => [n.id, n]));
+    return edges.map((e) => {
       const offset = edgeOffsets.get(e.id);
-      if (offset === undefined || offset === 0) return e;
-      return { ...e, data: { ...e.data, _offset: offset } };
-    }),
-    [edges, edgeOffsets],
-  );
+      const source = nodeMap.get(e.source);
+      const target = nodeMap.get(e.target);
+      // Smart handle selection: connect to the side that minimises distance
+      const handles = source && target
+        ? getBestHandles(source.position, target.position)
+        : { sourceHandle: 'source-right', targetHandle: 'target-left' };
+      return {
+        ...e,
+        sourceHandle: handles.sourceHandle,
+        targetHandle: handles.targetHandle,
+        data: offset !== undefined && offset !== 0
+          ? { ...e.data, _offset: offset }
+          : e.data,
+      };
+    });
+  }, [edges, edgeOffsets, nodes]);
 
   // ── Auto-save canvas overlay on changes ─────────────────────
   // Debounce saves: extract non-cluster nodes/edges and persist.
@@ -1973,7 +2033,7 @@ export function TopologyPage() {
       <div className="topo-canvas" ref={reactFlowWrapper}>
         <ReactFlow
           nodes={nodes}
-          edges={edgesWithOffsets}
+          edges={processedEdges}
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           onConnect={onConnect}

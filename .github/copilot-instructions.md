@@ -119,3 +119,9 @@ wrong, and what the correct output should be.
 **NEVER push directly to `main`.** Always create a feature branch and push
 to that. The maintainer will merge to `main` manually. Use descriptive
 branch names like `fix/ci-e2e-dashboard-build` or `feat/topology-layout`.
+
+## Releases
+
+**NEVER create tags or trigger releases.** Only the maintainer decides when
+to release. Do not run `git tag`, do not push tags, and do not modify the
+release workflow unless explicitly asked.
