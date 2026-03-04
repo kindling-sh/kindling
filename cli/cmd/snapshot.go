@@ -22,9 +22,12 @@ var snapshotCmd = &cobra.Command{
 	Long: `Reads all DevStagingEnvironments in the cluster and generates
 production-ready Kubernetes manifests as a Helm chart or Kustomize overlay.
 
-With --registry, images are extracted from the Kind cluster, re-tagged
-with clean names, and pushed to your container registry so the exported
-chart is ready to deploy anywhere.
+With --registry, images are copied from the Kind cluster's in-cluster
+registry to your container registry via crane (no Docker daemon needed).
+
+With --deploy, the generated chart is deployed to a production cluster
+in one step. The --context flag is required to specify the target cluster
+and --registry is required to make images accessible outside Kind.
 
 Examples:
   kindling snapshot                          # Helm chart in ./kindling-snapshot/
@@ -32,16 +35,24 @@ Examples:
   kindling snapshot -o ./my-chart            # custom output directory
   kindling snapshot --name my-platform       # custom chart name
   kindling snapshot -r ghcr.io/myorg         # push images + ready-to-run chart
-  kindling snapshot -r ghcr.io/myorg -t v1.0 # push with specific tag`,
+  kindling snapshot -r ghcr.io/myorg -t v1.0 # push with specific tag
+
+  # Full graduation: snapshot + push images + deploy to production
+  kindling snapshot -r ghcr.io/myorg --deploy --context my-prod-cluster
+  kindling snapshot -r ghcr.io/myorg --deploy --context prod --namespace staging
+  kindling snapshot -f kustomize -r ghcr.io/myorg --deploy --context prod`,
 	RunE: runSnapshot,
 }
 
 var (
-	snapshotFormat   string
-	snapshotOutput   string
-	snapshotName     string
-	snapshotRegistry string
-	snapshotTag      string
+	snapshotFormat    string
+	snapshotOutput    string
+	snapshotName      string
+	snapshotRegistry  string
+	snapshotTag       string
+	snapshotDeploy    bool
+	snapshotContext   string
+	snapshotNamespace string
 )
 
 func init() {
@@ -50,6 +61,9 @@ func init() {
 	snapshotCmd.Flags().StringVarP(&snapshotName, "name", "n", "", "Chart/project name (default: derived from cluster)")
 	snapshotCmd.Flags().StringVarP(&snapshotRegistry, "registry", "r", "", "Container registry (e.g. ghcr.io/myorg, 123456.dkr.ecr.us-east-1.amazonaws.com/myapp)")
 	snapshotCmd.Flags().StringVarP(&snapshotTag, "tag", "t", "", "Image tag (default: git SHA or 'latest')")
+	snapshotCmd.Flags().BoolVar(&snapshotDeploy, "deploy", false, "Deploy to a production cluster after generating the chart")
+	snapshotCmd.Flags().StringVar(&snapshotContext, "context", "", "Kubeconfig context for the production cluster (required with --deploy)")
+	snapshotCmd.Flags().StringVar(&snapshotNamespace, "namespace", "default", "Kubernetes namespace to deploy into (used with --deploy)")
 	rootCmd.AddCommand(snapshotCmd)
 }
 
@@ -211,6 +225,19 @@ var depRegistry = map[string]depDefaults{
 // ── Main command ────────────────────────────────────────────────
 
 func runSnapshot(cmd *cobra.Command, args []string) error {
+	// ── Validate --deploy prerequisites ────────────────────────
+	if snapshotDeploy {
+		if snapshotContext == "" {
+			return fmt.Errorf("--context is required when using --deploy")
+		}
+		if strings.HasPrefix(snapshotContext, "kind-") {
+			return fmt.Errorf("context %q looks like a Kind cluster — use 'kindling deploy' for local dev", snapshotContext)
+		}
+		if snapshotRegistry == "" {
+			return fmt.Errorf("--registry is required when using --deploy (images must be accessible from the production cluster)")
+		}
+	}
+
 	header("Exporting cluster snapshot")
 
 	step("📡", "Reading DevStagingEnvironments from cluster")
@@ -263,14 +290,67 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	var exportErr error
 	switch snapshotFormat {
 	case "helm":
-		return exportHelm(outDir, chartName, dses)
+		exportErr = exportHelm(outDir, chartName, dses)
 	case "kustomize":
-		return exportKustomize(outDir, chartName, dses)
+		exportErr = exportKustomize(outDir, chartName, dses)
 	default:
 		return fmt.Errorf("unknown format %q — use 'helm' or 'kustomize'", snapshotFormat)
 	}
+	if exportErr != nil {
+		return exportErr
+	}
+
+	// ── Deploy to production cluster ───────────────────────────
+	if !snapshotDeploy {
+		return nil
+	}
+
+	header("Deploying to production")
+	step("🔗", fmt.Sprintf("Target context: %s%s%s", colorBold, snapshotContext, colorReset))
+
+	// Verify cluster connectivity
+	step("🔍", "Verifying cluster connectivity")
+	if err := run("kubectl", "cluster-info", "--context", snapshotContext); err != nil {
+		return fmt.Errorf("cannot reach cluster via context %q: %w", snapshotContext, err)
+	}
+
+	switch snapshotFormat {
+	case "helm":
+		if !commandExists("helm") {
+			return fmt.Errorf("helm not found on PATH — install it or deploy manually")
+		}
+		step("🚀", fmt.Sprintf("Running helm upgrade --install %s", chartName))
+		helmArgs := []string{
+			"upgrade", "--install", chartName, outDir,
+			"--kube-context", snapshotContext,
+			"--namespace", snapshotNamespace,
+			"--create-namespace",
+			"-f", filepath.Join(outDir, "values-live.yaml"),
+			"--wait",
+			"--timeout", "5m",
+		}
+		if err := run("helm", helmArgs...); err != nil {
+			return fmt.Errorf("helm deploy failed: %w", err)
+		}
+	case "kustomize":
+		step("🚀", fmt.Sprintf("Running kubectl apply -k %s", outDir))
+		if err := run("kubectl", "--context", snapshotContext, "apply",
+			"-k", outDir,
+			"-n", snapshotNamespace); err != nil {
+			return fmt.Errorf("kustomize deploy failed: %w", err)
+		}
+	}
+
+	success("Deployed to production")
+	fmt.Println()
+	fmt.Printf("  Check pods:     %skubectl --context %s -n %s get pods%s\n", colorCyan, snapshotContext, snapshotNamespace, colorReset)
+	fmt.Printf("  Check services: %skubectl --context %s -n %s get svc%s\n", colorCyan, snapshotContext, snapshotNamespace, colorReset)
+	fmt.Printf("  Check ingress:  %skubectl --context %s -n %s get ingress%s\n", colorCyan, snapshotContext, snapshotNamespace, colorReset)
+	fmt.Println()
+	return nil
 }
 
 // ════════════════════════════════════════════════════════════════
