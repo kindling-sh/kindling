@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 
@@ -433,7 +432,7 @@ func scanRepo(repoPath string) (*repoContext, error) {
 		dockerfiles:    make(map[string]string),
 		depFiles:       make(map[string]string),
 		sourceSnippets: make(map[string]string),
-		hostArch:       runtime.GOARCH, // detect host CPU arch for Kaniko patches
+		hostArch:       "amd64", // always target amd64 for production compatibility
 	}
 
 	var treeLines []string
