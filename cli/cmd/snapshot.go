@@ -446,11 +446,11 @@ func buildValuesYAML(chartName string, dses []snapshotDSE, depsSeen map[string]b
 
 	// ── Service values ──────────────────────────────────────────
 	for _, dse := range dses {
-		safe := helmSafe(dse.Name)
+		vk := helmValuesKey(dse.Name)
 		prodImage := productionImageClean(dse.Image, dse.Name)
 		liveImage := dse.Image
 
-		buf.WriteString(fmt.Sprintf("%s:\n", safe))
+		buf.WriteString(fmt.Sprintf("%s:\n", vk))
 
 		if live {
 			buf.WriteString(fmt.Sprintf("  image: \"%s\"\n", liveImage))
@@ -500,6 +500,7 @@ func buildValuesYAML(chartName string, dses []snapshotDSE, depsSeen map[string]b
 			continue
 		}
 		safe := helmSafe(depType)
+		vk := helmValuesKey(depType)
 
 		// Find version from the first DSE that references this dep
 		version := "latest"
@@ -512,7 +513,7 @@ func buildValuesYAML(chartName string, dses []snapshotDSE, depsSeen map[string]b
 			}
 		}
 
-		buf.WriteString(fmt.Sprintf("%s:\n", safe))
+		buf.WriteString(fmt.Sprintf("%s:\n", vk))
 		buf.WriteString("  enabled: true\n")
 
 		imageStr := fmt.Sprintf("%s:%s", def.Image, version)
@@ -629,6 +630,7 @@ func productionImageClean(image, name string) string {
 
 func helmDeploymentTemplate(dse snapshotDSE) string {
 	safe := helmSafe(dse.Name)
+	vk := helmValuesKey(dse.Name)
 
 	// Build env block — connection strings from deps + user env
 	var envLines strings.Builder
@@ -640,7 +642,7 @@ func helmDeploymentTemplate(dse snapshotDSE) string {
         - name: %s
           value: {{ .Values.%s.env.%s | quote }}
         {{- end }}
-`, safe, def.EnvVarName, def.EnvVarName, safe, def.EnvVarName))
+`, vk, def.EnvVarName, def.EnvVarName, vk, def.EnvVarName))
 		}
 	}
 	// User-defined env vars from values
@@ -650,7 +652,7 @@ func helmDeploymentTemplate(dse snapshotDSE) string {
         - name: %s
           value: {{ .Values.%s.env.%s | quote }}
         {{- end }}
-`, safe, e.Name, e.Name, safe, e.Name))
+`, vk, e.Name, e.Name, vk, e.Name))
 		}
 	}
 
@@ -681,11 +683,12 @@ spec:
         image: {{ .Values.%s.image }}
         ports:
         - containerPort: {{ .Values.%s.port }}
-%s`, safe, safe, "kindling-snapshot", safe, safe, safe, safe, safe, safe, envSection)
+%s`, safe, safe, "kindling-snapshot", vk, safe, safe, safe, vk, vk, envSection)
 }
 
 func helmServiceTemplate(dse snapshotDSE) string {
 	safe := helmSafe(dse.Name)
+	vk := helmValuesKey(dse.Name)
 	return fmt.Sprintf(`apiVersion: v1
 kind: Service
 metadata:
@@ -700,11 +703,12 @@ spec:
   - port: {{ .Values.%s.port }}
     targetPort: {{ .Values.%s.port }}
     protocol: TCP
-`, safe, safe, "kindling-snapshot", safe, safe, safe)
+`, safe, safe, "kindling-snapshot", safe, vk, vk)
 }
 
 func helmDepDeploymentTemplate(depType string, def depDefaults) string {
 	safe := helmSafe(depType)
+	vk := helmValuesKey(depType)
 
 	var envLines strings.Builder
 	if len(def.Env) > 0 {
@@ -712,7 +716,7 @@ func helmDepDeploymentTemplate(depType string, def depDefaults) string {
 		for _, e := range def.Env {
 			envLines.WriteString(fmt.Sprintf(`        - name: %s
           value: {{ .Values.%s.env.%s | quote }}
-`, e.Name, safe, e.Name))
+`, e.Name, vk, e.Name))
 		}
 	}
 
@@ -739,11 +743,12 @@ spec:
         ports:
         - containerPort: {{ .Values.%s.port }}
 %s{{- end }}
-`, safe, safe, safe, safe, safe, safe, safe, safe, envLines.String())
+`, vk, safe, safe, safe, safe, safe, vk, vk, envLines.String())
 }
 
 func helmDepServiceTemplate(depType string, def depDefaults) string {
 	safe := helmSafe(depType)
+	vk := helmValuesKey(depType)
 	return fmt.Sprintf(`{{- if .Values.%s.enabled }}
 apiVersion: v1
 kind: Service
@@ -759,7 +764,7 @@ spec:
     targetPort: {{ .Values.%s.port }}
     protocol: TCP
 {{- end }}
-`, safe, safe, safe, safe, safe, safe)
+`, vk, safe, safe, safe, vk, vk)
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -966,11 +971,21 @@ func writeSnapshotFile(dir, name, content string) {
 	}
 }
 
-// helmSafe makes a name safe for use as a Helm values key / K8s resource name.
+// helmSafe makes a name safe for use as a K8s resource name or label value.
 func helmSafe(name string) string {
 	s := strings.ToLower(name)
 	s = strings.ReplaceAll(s, " ", "-")
 	s = strings.ReplaceAll(s, "_", "-")
+	return s
+}
+
+// helmValuesKey makes a name safe for use as a Helm values.yaml key.
+// Helm's Go template parser treats hyphens as subtraction operators,
+// so we convert to underscores.
+func helmValuesKey(name string) string {
+	s := strings.ToLower(name)
+	s = strings.ReplaceAll(s, " ", "_")
+	s = strings.ReplaceAll(s, "-", "_")
 	return s
 }
 
