@@ -181,7 +181,7 @@ func TestHelmDeploymentTemplate_DepEnvVarsFromValues(t *testing.T) {
 		Env:      []snapshotEnvVar{{Name: "LOG_LEVEL", Value: "debug"}},
 	}
 
-	tmpl := helmDeploymentTemplate(dse)
+	tmpl := helmDeploymentTemplate(dse, "test-chart")
 
 	// Dep env vars should use {{ .Values.orders.env.DATABASE_URL }}
 	if !strings.Contains(tmpl, ".Values.orders.env.DATABASE_URL") {
