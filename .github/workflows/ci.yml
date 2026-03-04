@@ -128,6 +128,15 @@ jobs:
             sudo mv ./kind /usr/local/bin/kind
           }
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: cli/cmd/dashboard-ui/package-lock.json
+
+      - name: Build dashboard UI
+        run: cd cli/cmd/dashboard-ui && npm ci && npm run build
+
       - name: Run E2E tests
         run: make e2e
         env:
