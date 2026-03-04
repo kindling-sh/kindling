@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect, type DragEvent } from 'react';
+import { useState, useCallback, useRef, useEffect, useMemo, type DragEvent } from 'react';
 import {
   ReactFlow,
   Background,
@@ -206,12 +206,52 @@ function ExternalNodeComponent({ data, selected }: NodeProps<Node<TopologyNodeDa
   );
 }
 
+// ── Smart Edge Routing ──────────────────────────────────────────
+// Computes per-edge Y offsets so parallel edges (multiple edges from/to
+// the same node) fan out instead of overlapping.
+
+function useEdgeOffsets(edges: Edge[]): Map<string, number> {
+  return useMemo(() => {
+    const offsets = new Map<string, number>();
+    // Group edges by their source node
+    const bySource = new Map<string, Edge[]>();
+    // Group edges by their target node
+    const byTarget = new Map<string, Edge[]>();
+    for (const e of edges) {
+      bySource.set(e.source, [...(bySource.get(e.source) || []), e]);
+      byTarget.set(e.target, [...(byTarget.get(e.target) || []), e]);
+    }
+    // For each source node, spread its outgoing edges
+    const SPREAD = 20; // px between parallel edges
+    for (const [, group] of bySource) {
+      if (group.length <= 1) continue;
+      const half = (group.length - 1) / 2;
+      group.forEach((e, i) => {
+        offsets.set(e.id, (offsets.get(e.id) || 0) + (i - half) * SPREAD);
+      });
+    }
+    // For each target node with multiple incoming edges, spread them too
+    for (const [, group] of byTarget) {
+      if (group.length <= 1) continue;
+      const half = (group.length - 1) / 2;
+      group.forEach((e, i) => {
+        offsets.set(e.id, (offsets.get(e.id) || 0) + (i - half) * SPREAD * 0.5);
+      });
+    }
+    return offsets;
+  }, [edges]);
+}
+
+const EDGE_BORDER_RADIUS = 16;
+
 function ConnectionEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, data, style, markerEnd }: EdgeProps) {
+  const edgeData = data as Record<string, unknown> | undefined;
+  const offset = (edgeData?._offset as number) || 0;
   const [edgePath, labelX, labelY] = getSmoothStepPath({
-    sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition,
+    sourceX, sourceY: sourceY + offset, targetX, targetY: targetY + offset,
+    sourcePosition, targetPosition, borderRadius: EDGE_BORDER_RADIUS,
   });
 
-  const edgeData = data as Record<string, unknown> | undefined;
   const label = edgeData?._label as string | undefined;
   const envValue = edgeData?._envValue as string | undefined;
 
@@ -242,11 +282,13 @@ function ConnectionEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosition
 }
 
 function ServiceEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, data, style, markerEnd }: EdgeProps) {
+  const edgeData = data as Record<string, unknown> | undefined;
+  const offset = (edgeData?._offset as number) || 0;
   const [edgePath, labelX, labelY] = getSmoothStepPath({
-    sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition,
+    sourceX, sourceY: sourceY + offset, targetX, targetY: targetY + offset,
+    sourcePosition, targetPosition, borderRadius: EDGE_BORDER_RADIUS,
   });
 
-  const edgeData = data as Record<string, unknown> | undefined;
   const label = edgeData?._label as string | undefined;
   const envValue = edgeData?._envValue as string | undefined;
 
@@ -867,117 +909,228 @@ function PaletteItem({ depType, label, icon, onDragStart }: {
 }
 
 // ── Auto-Layout Utility ─────────────────────────────────────────
-// Positions nodes in clean left-to-right columns:
-//   External (col 0) → Services (col 1) → Dependencies (col 2)
-// Within each column, nodes are stacked top-down with consistent spacing.
+// ── Smart Layout Algorithm ──────────────────────────────────────
+// Layered graph layout (Sugiyama-style):
+//   1. Topological sort to assign layers (L→R)
+//   2. External → upstream services → downstream services → dependencies
+//   3. Barycenter heuristic to minimise edge crossings within each layer
+//   4. Vertical centering of connected nodes
 
 const LAYOUT = {
-  colExternal: 60,
-  colService: 400,
-  colDep: 800,
-  rowStart: 80,
-  rowGapService: 220,   // vertical gap between services
-  rowGapDep: 160,       // vertical gap between deps
-  rowGapExternal: 200,  // vertical gap between external nodes
+  layerGap: 340,        // horizontal gap between layers
+  rowGap: 200,          // vertical gap between nodes in same layer
+  rowStart: 80,         // top margin
+  leftMargin: 60,       // left margin for first layer
+};
+
+// Shorthand positions for palette drops (when exact layer isn't known)
+const DROP_X = {
+  external: LAYOUT.leftMargin,
+  service: LAYOUT.leftMargin + LAYOUT.layerGap,
+  dependency: LAYOUT.leftMargin + LAYOUT.layerGap * 2,
 };
 
 function autoLayoutNodes(
   nodes: Node<TopologyNodeData>[],
   edges: Edge[],
 ): Node<TopologyNodeData>[] {
+  if (nodes.length === 0) return nodes;
+
   const externals = nodes.filter((n) => n.data.kind === 'external');
   const services = nodes.filter((n) => n.data.kind === 'service');
   const deps = nodes.filter((n) => n.data.kind === 'dependency');
 
-  // Build adjacency maps
-  const svcToDeps = new Map<string, string[]>(); // serviceId → depIds
-  const depToSvcs = new Map<string, string[]>(); // depId → serviceIds
-  const svcToSvcs = new Map<string, string[]>(); // service → connected services
+  // Build directed adjacency: source → targets (service→service edges)
+  const svcOutgoing = new Map<string, Set<string>>();
+  const svcIncoming = new Map<string, Set<string>>();
+  const svcToDeps = new Map<string, string[]>();
+  const depToSvcs = new Map<string, string[]>();
+  const extToSvcs = new Map<string, string[]>();
+
+  for (const s of services) {
+    svcOutgoing.set(s.id, new Set());
+    svcIncoming.set(s.id, new Set());
+  }
+
   for (const e of edges) {
-    const srcNode = nodes.find((n) => n.id === e.source);
-    const tgtNode = nodes.find((n) => n.id === e.target);
-    if (srcNode?.data.kind === 'service' && tgtNode?.data.kind === 'dependency') {
+    const src = nodes.find((n) => n.id === e.source);
+    const tgt = nodes.find((n) => n.id === e.target);
+    if (!src || !tgt) continue;
+
+    if (src.data.kind === 'service' && tgt.data.kind === 'service') {
+      svcOutgoing.get(e.source)?.add(e.target);
+      svcIncoming.get(e.target)?.add(e.source);
+    } else if (src.data.kind === 'service' && tgt.data.kind === 'dependency') {
       svcToDeps.set(e.source, [...(svcToDeps.get(e.source) || []), e.target]);
       depToSvcs.set(e.target, [...(depToSvcs.get(e.target) || []), e.source]);
-    } else if (srcNode?.data.kind === 'service' && tgtNode?.data.kind === 'service') {
-      svcToSvcs.set(e.source, [...(svcToSvcs.get(e.source) || []), e.target]);
-      svcToSvcs.set(e.target, [...(svcToSvcs.get(e.target) || []), e.source]);
+    } else if (src.data.kind === 'external') {
+      extToSvcs.set(e.source, [...(extToSvcs.get(e.source) || []), e.target]);
     }
   }
 
-  // Sort services: those with the most deps first (visually anchor the graph),
-  // then connected services nearby, then standalone services at the end
-  const scored = services.map((s) => ({
-    node: s,
-    depCount: (svcToDeps.get(s.id) || []).length,
-    connectedSvcCount: (svcToSvcs.get(s.id) || []).length,
-  }));
-  scored.sort((a, b) => {
-    // Services with deps come first
-    if (a.depCount !== b.depCount) return b.depCount - a.depCount;
-    // Then by connected services
-    if (a.connectedSvcCount !== b.connectedSvcCount) return b.connectedSvcCount - a.connectedSvcCount;
-    return 0;
-  });
-  const sortedServices = scored.map((s) => s.node);
-
-  // Position services in the center column
-  let svcY = LAYOUT.rowStart;
-  const svcPositions = new Map<string, { x: number; y: number }>();
-  for (const svc of sortedServices) {
-    svcPositions.set(svc.id, { x: LAYOUT.colService, y: svcY });
-    svcY += LAYOUT.rowGapService;
+  // ── Layer assignment via topological sort (Kahn's algorithm) ──
+  // Services with no incoming service edges go to layer 0 (leftmost)
+  const svcLayer = new Map<string, number>();
+  const inDegree = new Map<string, number>();
+  for (const s of services) {
+    inDegree.set(s.id, svcIncoming.get(s.id)?.size || 0);
   }
 
-  // Position dependencies, vertically centered among their connected services
-  // Sort deps by earliest connected service position
+  const queue: string[] = [];
+  for (const s of services) {
+    if ((inDegree.get(s.id) || 0) === 0) queue.push(s.id);
+  }
+
+  while (queue.length > 0) {
+    const id = queue.shift()!;
+    const layer = svcLayer.get(id) ?? 0;
+    svcLayer.set(id, layer);
+    for (const target of svcOutgoing.get(id) || []) {
+      const currentLayer = svcLayer.get(target) ?? 0;
+      svcLayer.set(target, Math.max(currentLayer, layer + 1));
+      const deg = (inDegree.get(target) || 1) - 1;
+      inDegree.set(target, deg);
+      if (deg === 0) queue.push(target);
+    }
+  }
+
+  // Handle cycles: any service not yet assigned gets layer 0
+  for (const s of services) {
+    if (!svcLayer.has(s.id)) svcLayer.set(s.id, 0);
+  }
+
+  // Group services by layer
+  const maxSvcLayer = Math.max(0, ...Array.from(svcLayer.values()));
+  const layers: Node<TopologyNodeData>[][] = [];
+  for (let i = 0; i <= maxSvcLayer; i++) layers.push([]);
+  for (const s of services) {
+    layers[svcLayer.get(s.id) || 0].push(s);
+  }
+
+  // ── Barycenter ordering to reduce edge crossings ──
+  // First pass: order layer 0 by dependency count (most connected first)
+  layers[0].sort((a, b) => {
+    const aDeps = (svcToDeps.get(a.id) || []).length + (svcOutgoing.get(a.id)?.size || 0);
+    const bDeps = (svcToDeps.get(b.id) || []).length + (svcOutgoing.get(b.id)?.size || 0);
+    return bDeps - aDeps;
+  });
+
+  // Assign initial Y positions to layer 0
+  const nodeYPos = new Map<string, number>();
+  let y = LAYOUT.rowStart;
+  for (const n of layers[0]) {
+    nodeYPos.set(n.id, y);
+    y += LAYOUT.rowGap;
+  }
+
+  // Subsequent layers: order by barycenter of connected nodes in previous layer
+  for (let l = 1; l <= maxSvcLayer; l++) {
+    for (const n of layers[l]) {
+      const incoming = svcIncoming.get(n.id) || new Set<string>();
+      const positions = Array.from(incoming)
+        .map((id) => nodeYPos.get(id))
+        .filter((p): p is number => p !== undefined);
+      if (positions.length > 0) {
+        nodeYPos.set(n.id, positions.reduce((a, b) => a + b, 0) / positions.length);
+      } else {
+        nodeYPos.set(n.id, LAYOUT.rowStart);
+      }
+    }
+    // Sort by barycenter Y, then space evenly to avoid overlap
+    layers[l].sort((a, b) => (nodeYPos.get(a.id) || 0) - (nodeYPos.get(b.id) || 0));
+    // Re-space to guarantee minimum gap
+    let ly = LAYOUT.rowStart;
+    for (const n of layers[l]) {
+      const bary = nodeYPos.get(n.id) || 0;
+      const finalY = Math.max(ly, bary);
+      nodeYPos.set(n.id, finalY);
+      ly = finalY + LAYOUT.rowGap;
+    }
+  }
+
+  // ── Backwards pass: pull earlier layers towards their targets ──
+  for (let l = maxSvcLayer - 1; l >= 0; l--) {
+    for (const n of layers[l]) {
+      const outgoing = svcOutgoing.get(n.id) || new Set<string>();
+      const positions = Array.from(outgoing)
+        .map((id) => nodeYPos.get(id))
+        .filter((p): p is number => p !== undefined);
+      if (positions.length > 0) {
+        const avg = positions.reduce((a, b) => a + b, 0) / positions.length;
+        const current = nodeYPos.get(n.id) || 0;
+        // Nudge towards targets but don't overlap
+        nodeYPos.set(n.id, current + (avg - current) * 0.3);
+      }
+    }
+    // Re-sort and re-space
+    layers[l].sort((a, b) => (nodeYPos.get(a.id) || 0) - (nodeYPos.get(b.id) || 0));
+    let ly = LAYOUT.rowStart;
+    for (const n of layers[l]) {
+      const finalY = Math.max(ly, nodeYPos.get(n.id) || 0);
+      nodeYPos.set(n.id, finalY);
+      ly = finalY + LAYOUT.rowGap;
+    }
+  }
+
+  // ── Compute X positions ──
+  // External nodes get layer -1, deps get maxSvcLayer + 1
+  const extLayerX = LAYOUT.leftMargin;
+  const depLayerX = LAYOUT.leftMargin + (maxSvcLayer + 2) * LAYOUT.layerGap;
+
+  const positions = new Map<string, { x: number; y: number }>();
+
+  // Service positions
+  for (const s of services) {
+    const layer = svcLayer.get(s.id) || 0;
+    // Offset by 1 layer to leave room for externals
+    const x = LAYOUT.leftMargin + (layer + 1) * LAYOUT.layerGap;
+    positions.set(s.id, { x, y: nodeYPos.get(s.id) || LAYOUT.rowStart });
+  }
+
+  // Dependency positions — vertically centered among connected services
   const sortedDeps = [...deps].sort((a, b) => {
     const aSvcs = depToSvcs.get(a.id) || [];
     const bSvcs = depToSvcs.get(b.id) || [];
-    const aMinY = aSvcs.length > 0 ? Math.min(...aSvcs.map((s) => svcPositions.get(s)?.y ?? 9999)) : 9999;
-    const bMinY = bSvcs.length > 0 ? Math.min(...bSvcs.map((s) => svcPositions.get(s)?.y ?? 9999)) : 9999;
+    const aMinY = aSvcs.length > 0 ? Math.min(...aSvcs.map((s) => nodeYPos.get(s) ?? 9999)) : 9999;
+    const bMinY = bSvcs.length > 0 ? Math.min(...bSvcs.map((s) => nodeYPos.get(s) ?? 9999)) : 9999;
     return aMinY - bMinY;
   });
 
-  const depPositions = new Map<string, { x: number; y: number }>();
   const usedDepYs: number[] = [];
   for (const dep of sortedDeps) {
     const connectedSvcs = depToSvcs.get(dep.id) || [];
     let targetY: number;
     if (connectedSvcs.length > 0) {
-      // Center vertically among connected services
-      const ys = connectedSvcs.map((s) => svcPositions.get(s)?.y ?? 0);
+      const ys = connectedSvcs.map((s) => nodeYPos.get(s) ?? 0);
       targetY = ys.reduce((a, b) => a + b, 0) / ys.length;
     } else {
-      // No connections — place after the last service
-      targetY = svcY;
+      targetY = (usedDepYs.length > 0 ? usedDepYs[usedDepYs.length - 1] + LAYOUT.rowGap : LAYOUT.rowStart);
     }
-    // Avoid overlapping with already-placed deps
+    // Avoid overlap with placed deps
     for (const usedY of usedDepYs) {
-      if (Math.abs(targetY - usedY) < LAYOUT.rowGapDep) {
-        targetY = usedY + LAYOUT.rowGapDep;
+      if (Math.abs(targetY - usedY) < LAYOUT.rowGap * 0.8) {
+        targetY = usedY + LAYOUT.rowGap * 0.8;
       }
     }
-    depPositions.set(dep.id, { x: LAYOUT.colDep, y: targetY });
+    positions.set(dep.id, { x: depLayerX, y: targetY });
     usedDepYs.push(targetY);
   }
 
-  // Position external nodes in the left column, aligned with their connected service
+  // External positions — aligned with their target service
   let extY = LAYOUT.rowStart;
-  const extPositions = new Map<string, { x: number; y: number }>();
   for (const ext of externals) {
-    const connEdge = edges.find((e) => e.source === ext.id);
-    if (connEdge) {
-      const svcPos = svcPositions.get(connEdge.target);
-      if (svcPos) extY = svcPos.y;
+    const targets = extToSvcs.get(ext.id) || [];
+    if (targets.length > 0) {
+      const ys = targets.map((t) => positions.get(t)?.y ?? LAYOUT.rowStart);
+      extY = ys.reduce((a, b) => a + b, 0) / ys.length;
     }
-    extPositions.set(ext.id, { x: LAYOUT.colExternal, y: extY });
-    extY += LAYOUT.rowGapExternal;
+    positions.set(ext.id, { x: extLayerX, y: extY });
+    extY += LAYOUT.rowGap;
   }
 
   // Apply positions
   return nodes.map((n) => {
-    const pos = svcPositions.get(n.id) || depPositions.get(n.id) || extPositions.get(n.id);
+    const pos = positions.get(n.id);
     if (pos) return { ...n, position: pos };
     return n;
   });
@@ -1099,6 +1252,17 @@ export function TopologyPage() {
       }),
     );
   }, [statusMap]);
+
+  // ── Compute edge offsets to fan out parallel edges ──────────
+  const edgeOffsets = useEdgeOffsets(edges);
+  const edgesWithOffsets = useMemo(() =>
+    edges.map((e) => {
+      const offset = edgeOffsets.get(e.id);
+      if (offset === undefined || offset === 0) return e;
+      return { ...e, data: { ...e.data, _offset: offset } };
+    }),
+    [edges, edgeOffsets],
+  );
 
   // ── Auto-save canvas overlay on changes ─────────────────────
   // Debounce saves: extract non-cluster nodes/edges and persist.
@@ -1307,8 +1471,8 @@ export function TopologyPage() {
         // Reposition dep to the right of the nearest service, in the dependency column
         const existingDeps = nodes.filter((n) => n.data.kind === 'dependency');
         const snapPosition = {
-          x: LAYOUT.colDep,
-          y: nearest.position.y + existingDeps.length * LAYOUT.rowGapDep,
+          x: DROP_X.dependency,
+          y: nearest.position.y + existingDeps.length * LAYOUT.rowGap * 0.8,
         };
         // Update the node position we just added
         setNodes((nds) =>
@@ -1353,7 +1517,7 @@ export function TopologyPage() {
         }
         // Position in the external column, aligned with the service
         setNodes((nds) =>
-          nds.map((n) => n.id === nodeId ? { ...n, position: { x: LAYOUT.colExternal, y: nearest.position.y } } : n)
+          nds.map((n) => n.id === nodeId ? { ...n, position: { x: DROP_X.external, y: nearest.position.y } } : n)
         );
         const edgeId = `e-${nodeId}-${nearest.id}`;
         setEdges((eds) => [...eds, { id: edgeId, source: nodeId, target: nearest.id, type: 'connection', data: { _label: 'ingress' } }]);
@@ -1422,7 +1586,7 @@ export function TopologyPage() {
     const newNode: Node<TopologyNodeData> = {
       id: nodeId,
       type: 'service',
-      position: { x: LAYOUT.colService, y: LAYOUT.rowStart + svcCount * LAYOUT.rowGapService },
+      position: { x: DROP_X.service, y: LAYOUT.rowStart + svcCount * LAYOUT.rowGap },
       data: {
         kind: 'service',
         label: customName.trim(),
@@ -1461,7 +1625,7 @@ export function TopologyPage() {
     const newNode: Node<TopologyNodeData> = {
       id: nodeId,
       type: 'service',
-      position: { x: LAYOUT.colService, y: LAYOUT.rowStart + svcCount * LAYOUT.rowGapService },
+      position: { x: DROP_X.service, y: LAYOUT.rowStart + svcCount * LAYOUT.rowGap },
       data: {
         kind: 'service',
         label: customName,
@@ -1809,7 +1973,7 @@ export function TopologyPage() {
       <div className="topo-canvas" ref={reactFlowWrapper}>
         <ReactFlow
           nodes={nodes}
-          edges={edges}
+          edges={edgesWithOffsets}
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           onConnect={onConnect}
