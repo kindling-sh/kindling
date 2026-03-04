@@ -392,8 +392,8 @@ type: application
 	// ── Templates: service deployments ──────────────────────────
 	for _, dse := range dses {
 		safe := helmSafe(dse.Name)
-		writeSnapshotFile(templatesDir, safe+"-deployment.yaml", helmDeploymentTemplate(dse))
-		writeSnapshotFile(templatesDir, safe+"-service.yaml", helmServiceTemplate(dse))
+		writeSnapshotFile(templatesDir, safe+"-deployment.yaml", helmDeploymentTemplate(dse, chartName))
+		writeSnapshotFile(templatesDir, safe+"-service.yaml", helmServiceTemplate(dse, chartName))
 	}
 
 	// ── Templates: dependency deployments ───────────────────────
@@ -628,7 +628,7 @@ func productionImageClean(image, name string) string {
 	return image
 }
 
-func helmDeploymentTemplate(dse snapshotDSE) string {
+func helmDeploymentTemplate(dse snapshotDSE, chartName string) string {
 	safe := helmSafe(dse.Name)
 	vk := helmValuesKey(dse.Name)
 
@@ -683,10 +683,10 @@ spec:
         image: {{ .Values.%s.image }}
         ports:
         - containerPort: {{ .Values.%s.port }}
-%s`, safe, safe, "kindling-snapshot", vk, safe, safe, safe, vk, vk, envSection)
+%s`, safe, safe, chartName, vk, safe, safe, safe, vk, vk, envSection)
 }
 
-func helmServiceTemplate(dse snapshotDSE) string {
+func helmServiceTemplate(dse snapshotDSE, chartName string) string {
 	safe := helmSafe(dse.Name)
 	vk := helmValuesKey(dse.Name)
 	return fmt.Sprintf(`apiVersion: v1
@@ -703,7 +703,7 @@ spec:
   - port: {{ .Values.%s.port }}
     targetPort: {{ .Values.%s.port }}
     protocol: TCP
-`, safe, safe, "kindling-snapshot", safe, vk, vk)
+`, safe, safe, chartName, safe, vk, vk)
 }
 
 func helmDepDeploymentTemplate(depType string, def depDefaults) string {
