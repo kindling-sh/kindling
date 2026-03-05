@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/huh"
 	"github.com/jeffvincent/kindling/cli/core"
 	"github.com/spf13/cobra"
 )
@@ -374,6 +375,49 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("cannot reach cluster via context %q: %w", snapshotContext, err)
 	}
 
+	// ── Ingress selector ──────────────────────────────────────
+	// Collect services that have ingress defined
+	var ingressServices []string
+	for _, dse := range dses {
+		if dse.Ingress != nil && dse.Ingress.Enabled {
+			ingressServices = append(ingressServices, dse.Name)
+		}
+	}
+
+	var selectedIngress []string
+	if len(ingressServices) > 0 {
+		// Build multi-select options
+		options := make([]huh.Option[string], len(ingressServices))
+		for i, svc := range ingressServices {
+			options[i] = huh.NewOption(svc, svc)
+		}
+
+		form := huh.NewForm(
+			huh.NewGroup(
+				huh.NewMultiSelect[string]().
+					Title("Which services should be publicly accessible?").
+					Description("Selected services will have Ingress enabled.\nUse space to toggle, enter to confirm.").
+					Options(options...).
+					Value(&selectedIngress),
+			),
+		)
+
+		if err := form.Run(); err != nil {
+			return fmt.Errorf("ingress selection cancelled: %w", err)
+		}
+	}
+
+	// Build a set of selected ingress services for quick lookup
+	selectedSet := make(map[string]bool)
+	for _, svc := range selectedIngress {
+		selectedSet[svc] = true
+	}
+	if len(selectedIngress) > 0 {
+		step("🌐", fmt.Sprintf("Ingress enabled for: %s", strings.Join(selectedIngress, ", ")))
+	} else if len(ingressServices) > 0 {
+		step("🌐", "No services selected for public ingress")
+	}
+
 	switch snapshotFormat {
 	case "helm":
 		if !commandExists("helm") {
@@ -388,6 +432,12 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 			"-f", filepath.Join(outDir, "values-live.yaml"),
 			"--wait",
 			"--timeout", "5m",
+		}
+		// Disable ingress for services the user didn't select
+		for _, svc := range ingressServices {
+			if !selectedSet[svc] {
+				helmArgs = append(helmArgs, "--set", fmt.Sprintf("%s.ingress.enabled=false", helmValuesKey(svc)))
+			}
 		}
 		if err := run("helm", helmArgs...); err != nil {
 			return fmt.Errorf("helm deploy failed: %w", err)
