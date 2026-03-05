@@ -4,7 +4,7 @@ import type * as Preset from "@docusaurus/preset-classic";
 
 const config: Config = {
   title: "kindling",
-  tagline: "Dev on your laptop. Deploy to production. One tool.",
+  tagline: "Dev. Iterate. Ship.",
   favicon: "img/favicon.svg",
 
   url: "https://kindling.sh",

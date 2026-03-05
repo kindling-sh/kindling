@@ -195,6 +195,10 @@
   color: #fff !important;
 }
 
+.heroSecondary svg {
+  flex-shrink: 0;
+}
+
 /* Terminal */
 .heroTerminal {
   border-radius: 12px;
@@ -313,9 +317,25 @@
   transform: translateY(-3px);
 }
 
-.featureEmoji {
-  font-size: 2rem;
+.featureIcon {
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(255, 107, 53, 0.12), rgba(255, 107, 53, 0.04));
+  border: 1px solid rgba(255, 107, 53, 0.15);
+  color: #ff8c42;
   margin-bottom: 1rem;
+  transition: all 0.25s ease;
+}
+
+.featureCard:hover .featureIcon {
+  background: linear-gradient(135deg, rgba(255, 107, 53, 0.2), rgba(255, 107, 53, 0.08));
+  border-color: rgba(255, 107, 53, 0.35);
+  color: #ffad60;
+  box-shadow: 0 0 20px rgba(255, 107, 53, 0.15);
 }
 
 .featureTitle {
