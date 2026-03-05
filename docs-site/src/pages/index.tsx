@@ -7,6 +7,87 @@ import styles from "./index.module.css";
 
 const INSTALL_CMD = "brew install kindling-sh/tap/kindling";
 
+// ── SVG Icons (stroke-based, dashboard-aligned) ─────────────────
+
+function IconSearch({ size = 28 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="11" cy="11" r="8" />
+      <line x1="21" y1="21" x2="16.65" y2="16.65" />
+    </svg>
+  );
+}
+
+function IconCpu({ size = 28 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="4" y="4" width="16" height="16" rx="2" />
+      <rect x="9" y="9" width="6" height="6" />
+      <line x1="9" y1="1" x2="9" y2="4" /><line x1="15" y1="1" x2="15" y2="4" />
+      <line x1="9" y1="20" x2="9" y2="23" /><line x1="15" y1="20" x2="15" y2="23" />
+      <line x1="20" y1="9" x2="23" y2="9" /><line x1="20" y1="14" x2="23" y2="14" />
+      <line x1="1" y1="9" x2="4" y2="9" /><line x1="1" y1="14" x2="4" y2="14" />
+    </svg>
+  );
+}
+
+function IconZap({ size = 28 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+    </svg>
+  );
+}
+
+function IconPackage({ size = 28 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="16.5" y1="9.4" x2="7.5" y2="4.21" />
+      <path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z" />
+      <polyline points="3.27 6.96 12 12.01 20.73 6.96" />
+      <line x1="12" y1="22.08" x2="12" y2="12" />
+    </svg>
+  );
+}
+
+function IconBrain({ size = 28 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M9.5 2A5.5 5.5 0 005 7.5c0 1.02.28 1.97.76 2.79" />
+      <path d="M14.5 2A5.5 5.5 0 0120 7.5c0 1.02-.28 1.97-.76 2.79" />
+      <path d="M4.76 10.29A5.5 5.5 0 003 14.5 5.5 5.5 0 008.5 20h1" />
+      <path d="M19.24 10.29A5.5 5.5 0 0121 14.5a5.5 5.5 0 01-5.5 5.5h-1" />
+      <line x1="12" y1="2" x2="12" y2="22" />
+    </svg>
+  );
+}
+
+function IconGlobe({ size = 28 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="10" />
+      <line x1="2" y1="12" x2="22" y2="12" />
+      <path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z" />
+    </svg>
+  );
+}
+
+function IconShield({ size = 28 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+    </svg>
+  );
+}
+
+function IconStar({ size = 16 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" stroke="none">
+      <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+    </svg>
+  );
+}
+
 function InstallCommand() {
   const [copied, setCopied] = useState(false);
 
@@ -52,10 +133,10 @@ function HeroSection() {
           </div>
           <p className={styles.heroSubtitle}>{siteConfig.tagline}</p>
           <p className={styles.heroDescription}>
-            A free and open-source Kubernetes operator that takes your project from
-            first commit to production. Analyze your repo, AI-generate a CI workflow,
-            dev with live sync on localhost, then graduate to production — from the CLI
-            or the visual dashboard.
+            Minimize the time from idea to prod. Designed for builders, Kindling
+            enforces SDLC best practices so your project — multi-agent
+            architectures, microservices or any flavor of containerized apps —
+            runs everywhere. Your project just works. In prod.
           </p>
           <InstallCommand />
           <div className={styles.heroButtons}>
@@ -69,7 +150,7 @@ function HeroSection() {
               className={clsx("button button--lg", styles.heroSecondary)}
               to="https://github.com/kindling-sh/kindling"
             >
-              Source
+              <IconStar size={16} /> Star on GitHub
             </Link>
           </div>
         </div>
@@ -126,60 +207,60 @@ function HeroSection() {
 }
 
 type FeatureItem = {
-  emoji: string;
+  icon: React.ReactNode;
   title: string;
   description: string;
 };
 
 const features: FeatureItem[] = [
   {
-    emoji: "🔍",
+    icon: <IconSearch />,
     title: "Analyze Before You Build",
     description:
       "kindling analyze checks your repo's readiness — Dockerfiles, dependencies, secrets, agent architecture, Kaniko compatibility — before you generate a single line of CI.",
   },
   {
-    emoji: "🤖",
+    icon: <IconCpu />,
     title: "AI-Generated Workflows",
     description:
       "kindling generate scans your repo and produces a complete GitHub Actions or GitLab CI workflow. Detects agent frameworks, MCP servers, inter-service calls, and secrets.",
   },
   {
-    emoji: "⚡",
+    icon: <IconZap />,
     title: "Two-Speed Dev Loop",
     description:
       "Outer loop: git push → build → deploy. Inner loop: edit → sync → reload in under a second. Both run on your laptop, zero cloud CI minutes.",
   },
   {
-    emoji: "📦",
+    icon: <IconPackage />,
     title: "15 Auto-Provisioned Dependencies",
     description:
       "Declare postgres, redis, kafka, elasticsearch, and 11 more. The operator provisions them and injects connection URLs automatically.",
   },
   {
-    emoji: "🧠",
+    icon: <IconBrain />,
     title: "Agent Intel",
     description:
       "Auto-configures GitHub Copilot, Claude Code, Cursor, and Windsurf with full project context. Activates on any command, restores originals when you're done.",
   },
   {
-    emoji: "🌐",
+    icon: <IconGlobe />,
     title: "Localhost to Production",
     description:
-      "Dev on localhost with instant staging. Need OAuth callbacks? kindling expose creates a public HTTPS tunnel. Ready to ship? kindling promote (coming soon) graduates to production.",
+      "Dev on localhost with instant staging. Need OAuth callbacks? kindling expose creates a public HTTPS tunnel. Ready to ship? kindling snapshot graduates to any cluster.",
   },
   {
-    emoji: "🔐",
+    icon: <IconShield />,
     title: "Secrets & Credentials Built In",
     description:
       "Manage API keys with kindling secrets. Automatic detection during analyze and generate. Local backup survives cluster rebuilds.",
   },
 ];
 
-function FeatureCard({ emoji, title, description }: FeatureItem) {
+function FeatureCard({ icon, title, description }: FeatureItem) {
   return (
     <div className={styles.featureCard}>
-      <div className={styles.featureEmoji}>{emoji}</div>
+      <div className={styles.featureIcon}>{icon}</div>
       <h3 className={styles.featureTitle}>{title}</h3>
       <p className={styles.featureDescription}>{description}</p>
     </div>
@@ -243,10 +324,11 @@ function HowItWorksSection() {
           <div className={styles.stepArrow}>→</div>
           <div className={styles.step}>
             <div className={styles.stepNumber}>4</div>
-            <h3>Promote <em>(coming soon)</em></h3>
+            <h3>Snapshot & Deploy</h3>
             <p>
-              <code>kindling promote</code> will graduate your app to a
-              production cluster with TLS, DNS, and real infrastructure.
+              <code>kindling snapshot --deploy</code> copies images to your
+              registry, generates a Helm chart, and deploys to any production
+              cluster.
             </p>
           </div>
         </div>
