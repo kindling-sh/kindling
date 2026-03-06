@@ -32,7 +32,7 @@ spec:
   ingress:
     enabled: true
     host: my-app.localhost
-    ingressClassName: nginx
+    ingressClassName: traefik
   dependencies:
     - type: postgres
       version: "16"

@@ -62,7 +62,7 @@ Three-tier fallback:
 3. Create Kind cluster from `kind-config.yaml`
 4. Deploy in-cluster registry (`registry:5000`)
 5. Configure containerd mirror (`localhost:5000` → `registry:5000`)
-6. Deploy ingress-nginx controller
+6. Deploy Traefik ingress controller
 7. Wait for ingress to be ready
 8. Deploy kindling operator (kustomize build + kubectl apply)
 9. Wait for operator to be ready

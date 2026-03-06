@@ -37,7 +37,7 @@ inputs:
   ingress-class:
     description: "Ingress class name"
     required: false
-    default: "nginx"
+    default: "traefik"
   health-check-path:
     description: "HTTP health check path"
     required: false

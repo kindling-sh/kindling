@@ -449,7 +449,7 @@ func handleInitCluster(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Setup ingress
-	send("Setting up ingress-nginx...")
+	send("Setting up Traefik ingress...")
 	projDir, _ := resolveProjectDir()
 	ingressScript := projDir + "/setup-ingress.sh"
 	if _, err := os.Stat(ingressScript); err == nil {
@@ -457,7 +457,7 @@ func handleInitCluster(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			send("Warning: ingress setup issue: " + out)
 		} else {
-			send("Ingress-nginx configured")
+			send("Traefik ingress configured")
 		}
 	}
 

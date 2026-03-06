@@ -59,9 +59,9 @@ spec:
     host: "app.localhost"
     path: "/"
     pathType: "Prefix"
-    ingressClassName: "nginx"
+    ingressClassName: "traefik"
     annotations:
-      nginx.ingress.kubernetes.io/rewrite-target: /
+      traefik.ingress.kubernetes.io/router.entrypoints: web
     tls:
       secretName: "tls-secret"
       hosts:
@@ -113,7 +113,7 @@ spec:
 | `host` | string | ❌ | — | Hostname for the Ingress rule |
 | `path` | string | ❌ | `"/"` | URL path prefix |
 | `pathType` | string | ❌ | `"Prefix"` | `Prefix`, `Exact`, `ImplementationSpecific` |
-| `ingressClassName` | *string | ❌ | — | IngressClass name (e.g. `"nginx"`) |
+| `ingressClassName` | *string | ❌ | — | IngressClass name (e.g. `"traefik"`) |
 | `annotations` | map[string]string | ❌ | — | Extra Ingress annotations |
 | `tls` | *IngressTLSSpec | ❌ | — | TLS configuration |
 
@@ -190,7 +190,7 @@ spec:
   ingress:
     enabled: true
     host: platform.localhost
-    ingressClassName: nginx
+    ingressClassName: traefik
   dependencies:
     - type: postgres
       version: "16"

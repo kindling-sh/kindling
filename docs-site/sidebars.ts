@@ -26,6 +26,7 @@ const sidebars: SidebarsConfig = {
         "github-actions",
         "gitlab-ci",
         "oauth-tunnels",
+        "graduation",
       ],
     },
     {

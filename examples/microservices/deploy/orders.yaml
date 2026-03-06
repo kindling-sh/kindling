@@ -34,7 +34,7 @@ spec:
   ingress:
     enabled: true
     host: orders.localhost
-    ingressClassName: nginx
+    ingressClassName: traefik
 
   # ── Dependencies ────────────────────────────────────────────────
   dependencies:

@@ -43,7 +43,7 @@ make deploy IMG=localhost:5001/kindling-controller:latest
   DSE applies on behalf of the workflow.
 
 ### CLI (cli/cmd/)
-- **init.go** — creates Kind cluster, deploys ingress-nginx, in-cluster registry, builds
+- **init.go** — creates Kind cluster, deploys Traefik ingress controller, in-cluster registry, builds
   and deploys the operator. Has `--expose` flag to also start a tunnel.
 - **runners.go** (formerly quickstart.go) — creates CI runner token secret and
   CIRunnerPool CR. Supports `--ci-provider github` (default) and `--ci-provider gitlab`.

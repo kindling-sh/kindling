@@ -34,7 +34,7 @@ The dashboard provides a single-page view of your entire kindling cluster:
 - **Cluster health** — node status, resource usage
 - **Operator status** — controller-manager readiness
 - **Registry** — in-cluster registry deployment
-- **Ingress controller** — ingress-nginx status
+- **Ingress controller** — Traefik status
 - **Runner pools** — GitHub Actions runners, connected repos, online status
 - **Dev environments** — every DevStagingEnvironment CR with image, replicas, ready state
 - **Pods** — all pods in the default namespace with status and age

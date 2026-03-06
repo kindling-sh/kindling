@@ -321,7 +321,7 @@ spec:
   ingress:
     enabled: true
     host: jeff-dev.localhost
-    ingressClassName: nginx
+    ingressClassName: traefik
   dependencies:
     - type: postgres
       version: "16"

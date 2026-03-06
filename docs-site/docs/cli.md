@@ -7,7 +7,7 @@ description: Complete reference for all kindling CLI commands, organized by jour
 # CLI Reference
 
 The `kindling` CLI guides you through the full developer journey:
-**analyze → generate → dev loop → promote**. Commands are organized
+**analyze → generate → dev loop → graduate**. Commands are organized
 by the phase of the journey they belong to.
 
 ## Installation
@@ -58,7 +58,7 @@ kindling init [flags]
 1. Preflight checks (kind, kubectl, docker on PATH; also go, make if `--build`)
 2. `kind create cluster --name dev --config kind-config.yaml`
 3. Switch kubectl context to `kind-dev`
-4. Run `setup-ingress.sh` (installs ingress-nginx + in-cluster registry)
+4. Run `setup-ingress.sh` (installs Traefik ingress controller + in-cluster registry)
 5. Pull operator image from GHCR, or build from source with `--build`
 6. Tag as `controller:latest` and load into Kind
 7. Apply CRDs and deploy operator via kustomize
@@ -498,14 +498,10 @@ Delete the Kind cluster and all resources.
 kindling destroy [-y]
 ```
 
-### `kindling promote` *(coming soon)*
-
-> Graduate your staging environment to a production cluster with TLS, DNS,
-> and real infrastructure.
-
 ### `kindling snapshot`
 
-Export a Helm chart or Kustomize overlay from the current cluster state.
+Export a Helm chart or Kustomize overlay from the current cluster state,
+optionally push images to a container registry, and deploy to a production cluster.
 Reads all DevStagingEnvironments in the cluster and generates
 production-ready Kubernetes manifests.
 
@@ -520,6 +516,11 @@ kindling snapshot [flags]
 | `--format` | `-f` | `helm` | Export format: `helm` or `kustomize` |
 | `--output` | `-o` | `./kindling-snapshot` | Output directory |
 | `--name` | `-n` | `kindling-snapshot` | Chart/project name |
+| `--registry` | `-r` | | Container registry (e.g. `ghcr.io/myorg`, `123456.dkr.ecr.us-east-1.amazonaws.com/myapp`) |
+| `--tag` | `-t` | git SHA | Image tag (default: git SHA or `latest`) |
+| `--deploy` | | `false` | Deploy to a production cluster after generating the chart |
+| `--context` | | | Kubeconfig context for the production cluster (required with `--deploy`) |
+| `--namespace` | | `default` | Kubernetes namespace to deploy into (used with `--deploy`) |
 
 **What it does:**
 
@@ -532,17 +533,26 @@ kindling snapshot [flags]
    - Dependency deployments (Postgres, Redis, MongoDB, etc.)
 4. Auto-injected env vars (e.g. `DATABASE_URL`, `MONGO_URL`, `REDIS_URL`) are
    real configurable values in `values.yaml`, not hardcoded dev values
+5. With `--registry`, pushes images from the local Kind registry to the target
+   registry using `crane copy`
+6. With `--deploy`, installs the Helm chart on the production cluster using
+   the specified `--context`
 
 **Examples:**
 
 ```bash
+# Generate only
 kindling snapshot                          # Helm chart in ./kindling-snapshot/
 kindling snapshot --format kustomize       # Kustomize overlay
 kindling snapshot -o ./my-chart            # custom output directory
 kindling snapshot --name my-platform       # custom chart name
+
+# Push images + deploy to production
+kindling snapshot -r ghcr.io/myorg --deploy --context do-prod
+kindling snapshot -r ghcr.io/myorg -t v1.2.0 --deploy --context do-prod --namespace staging
 ```
 
-**Using the output:**
+**Using the output manually:**
 
 ```bash
 # Dry-run with live dev values
@@ -552,6 +562,44 @@ helm template my-app ./kindling-snapshot -f values-live.yaml
 helm install my-app ./kindling-snapshot \
   --set gateway.env.DATABASE_URL=postgres://prod-host:5432/mydb \
   --set inventory.env.MONGO_URL=mongodb://prod-host:27017
+```
+
+### `kindling production tls`
+
+Configure TLS with cert-manager for production Ingress resources. Installs
+cert-manager (if not already present), creates a ClusterIssuer for Let's Encrypt,
+and optionally patches a DSE YAML file to enable TLS.
+
+```
+kindling production tls [flags]
+```
+
+**Flags:**
+
+| Flag | Default | Description |
+|---|---|---|
+| `--context` | *(required)* | Kubeconfig context for the production cluster |
+| `--domain` | *(required)* | Domain name for the TLS certificate |
+| `--email` | *(required)* | Email for Let's Encrypt registration |
+| `--issuer` | `letsencrypt-prod` | ClusterIssuer name |
+| `--staging` | `false` | Use Let's Encrypt staging server (for testing) |
+| `--file` / `-f` | | Optional: DSE YAML to patch with TLS config |
+| `--ingress-class` | `traefik` | IngressClass for the ACME solver |
+
+**What it does:**
+
+1. Refuses Kind contexts (use `kindling expose` for local dev TLS)
+2. Installs cert-manager v1.17.1 if not already present
+3. Creates a Let's Encrypt ClusterIssuer
+4. Optionally patches a DSE YAML file with `host`, `ingressClassName`,
+   `cert-manager.io/cluster-issuer` annotation, and TLS secret config
+
+**Examples:**
+
+```bash
+kindling production tls --context my-prod --domain app.example.com --email admin@example.com
+kindling production tls --context my-prod --domain app.example.com --staging
+kindling production tls --context my-prod --domain app.example.com -f dev-environment.yaml
 ```
 
 ### `kindling version`
@@ -585,6 +633,10 @@ kindling dashboard                   # visual control plane
 kindling env set alice-myapp LOG_LEVEL=debug
 kindling push -s alice-myapp         # one-service rebuild
 kindling expose                      # public URL for OAuth
+
+# ── GRADUATE TO PRODUCTION ────────────────────────────────
+kindling snapshot -r ghcr.io/myorg --deploy --context my-prod
+kindling production tls --context my-prod --domain app.example.com --email admin@example.com
 
 # ── LIFECYCLE ─────────────────────────────────────────────
 kindling reset                       # switch repos

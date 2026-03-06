@@ -36,6 +36,7 @@ var dashboardPort int
 
 func init() {
 	dashboardCmd.Flags().IntVar(&dashboardPort, "port", 9090, "Port to serve the dashboard on")
+	dashboardCmd.Flags().StringVar(&prodContext, "prod-context", "", "Kubeconfig context for production cluster (enables production panel)")
 	rootCmd.AddCommand(dashboardCmd)
 }
 
@@ -120,6 +121,52 @@ func runDashboard(cmd *cobra.Command, args []string) error {
 	mux.HandleFunc("/api/debug", handleDebugAction)        // POST=start, DELETE=stop
 	mux.HandleFunc("/api/debug/status", handleDebugStatus) // GET — active debug sessions
 
+	// ── API routes (production cluster) ─────────────────────────
+	if prodContext != "" {
+		mux.HandleFunc("/api/prod/cluster", handleProdCluster)
+		mux.HandleFunc("/api/prod/contexts", handleProdContexts)
+		mux.HandleFunc("/api/prod/nodes", handleProdNodes)
+		mux.HandleFunc("/api/prod/namespaces", handleProdNamespaces)
+		mux.HandleFunc("/api/prod/deployments", handleProdDeployments)
+		mux.HandleFunc("/api/prod/pods", handleProdPods)
+		mux.HandleFunc("/api/prod/services", handleProdServices)
+		mux.HandleFunc("/api/prod/ingresses", handleProdIngresses)
+		mux.HandleFunc("/api/prod/events", handleProdEvents)
+		mux.HandleFunc("/api/prod/secrets", handleProdSecrets)
+		mux.HandleFunc("/api/prod/statefulsets", handleProdStatefulSets)
+		mux.HandleFunc("/api/prod/daemonsets", handleProdDaemonSets)
+		mux.HandleFunc("/api/prod/replicasets", handleProdReplicaSets)
+		mux.HandleFunc("/api/prod/clusterroles", handleProdClusterRoles)
+		mux.HandleFunc("/api/prod/clusterrolebindings", handleProdClusterRoleBindings)
+		mux.HandleFunc("/api/prod/logs/", handleProdLogs)
+		mux.HandleFunc("/api/prod/restart/", handleProdRestart)
+		mux.HandleFunc("/api/prod/scale/", handleProdScale)
+		mux.HandleFunc("/api/prod/delete-pod/", handleProdDeletePod)
+		mux.HandleFunc("/api/prod/rollout-history/", handleProdRolloutHistory)
+		mux.HandleFunc("/api/prod/rollback/", handleProdRollback)
+		mux.HandleFunc("/api/prod/rollout-status/", handleProdRolloutStatus)
+		mux.HandleFunc("/api/prod/exec", handleProdExec)
+		mux.HandleFunc("/api/prod/describe/", handleProdDescribe)
+		mux.HandleFunc("/api/prod/certificates", handleProdCertificates)
+		mux.HandleFunc("/api/prod/clusterissuers", handleProdClusterIssuers)
+		mux.HandleFunc("/api/prod/node-metrics", handleProdNodeMetrics)
+		mux.HandleFunc("/api/prod/pod-metrics", handleProdPodMetrics)
+		mux.HandleFunc("/api/prod/apply", handleProdApply)
+
+		// Prometheus
+		mux.HandleFunc("/api/prod/prometheus/status", handlePromStatus)
+		mux.HandleFunc("/api/prod/prometheus/query", handlePromQuery)
+		mux.HandleFunc("/api/prod/prometheus/query_range", handlePromQueryRange)
+	} else {
+		// Return a minimal handler so the frontend can detect no prod context
+		mux.HandleFunc("/api/prod/cluster", func(w http.ResponseWriter, r *http.Request) {
+			jsonResponse(w, map[string]interface{}{
+				"context":   "",
+				"connected": false,
+			})
+		})
+	}
+
 	// ── Static frontend ─────────────────────────────────────────
 	distFS, err := fs.Sub(dashboardFS, "dashboard-ui/dist")
 	if err != nil {
@@ -168,6 +215,7 @@ func runDashboard(cmd *cobra.Command, args []string) error {
 	go func() {
 		<-stop
 		fmt.Fprintln(os.Stderr, "\nShutting down dashboard...")
+		cleanupPromForward()
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		server.Shutdown(ctx)
@@ -175,6 +223,9 @@ func runDashboard(cmd *cobra.Command, args []string) error {
 
 	fmt.Fprintf(os.Stderr, "\n%s%s▸ Kindling Dashboard%s\n", colorBold, colorCyan, colorReset)
 	fmt.Fprintf(os.Stderr, "  🌐  http://localhost:%d\n", dashboardPort)
+	if prodContext != "" {
+		fmt.Fprintf(os.Stderr, "  🏭  Production context: %s%s%s\n", colorBold, prodContext, colorReset)
+	}
 	fmt.Fprintf(os.Stderr, "  %sPress Ctrl+C to stop%s\n\n", colorDim, colorReset)
 
 	if err := server.ListenAndServe(); err != http.ErrServerClosed {

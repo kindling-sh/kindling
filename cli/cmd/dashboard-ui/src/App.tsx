@@ -15,6 +15,11 @@ import { EventsPage } from './pages/EventsPage';
 import { RBACPage } from './pages/RBACPage';
 import { TopologyPage } from './pages/TopologyPage';
 import { ApiExplorerPage } from './pages/ApiExplorerPage';
+import { ProductionOverviewPage } from './pages/ProductionOverviewPage';
+import { ProductionWorkloadsPage } from './pages/ProductionWorkloadsPage';
+import { ProductionNetworkPage } from './pages/ProductionNetworkPage';
+import { ProductionMetricsPage } from './pages/ProductionMetricsPage';
+import { ProductionEventsPage } from './pages/ProductionEventsPage';
 import type { K8sList, K8sIngress } from './types';
 
 type Page =
@@ -29,7 +34,12 @@ type Page =
   | 'ingresses'
   | 'secrets'
   | 'events'
-  | 'rbac';
+  | 'rbac'
+  | 'prod-overview'
+  | 'prod-workloads'
+  | 'prod-network'
+  | 'prod-metrics'
+  | 'prod-events';
 
 interface NavGroup {
   label: string;
@@ -79,6 +89,16 @@ const NAV_GROUPS: NavGroup[] = [
       { page: 'rbac', icon: '⊘', label: 'RBAC' },
     ],
   },
+  {
+    label: 'Production',
+    items: [
+      { page: 'prod-overview', icon: '🏭', label: 'Overview' },
+      { page: 'prod-workloads', icon: '□', label: 'Workloads' },
+      { page: 'prod-network', icon: '◎', label: 'Network & TLS' },
+      { page: 'prod-metrics', icon: '📊', label: 'Metrics' },
+      { page: 'prod-events', icon: '⚡', label: 'Events' },
+    ],
+  },
 ];
 
 const PAGES: Record<Page, () => ReactNode> = {
@@ -94,6 +114,11 @@ const PAGES: Record<Page, () => ReactNode> = {
   secrets: SecretsPage,
   events: EventsPage,
   rbac: RBACPage,
+  'prod-overview': ProductionOverviewPage,
+  'prod-workloads': ProductionWorkloadsPage,
+  'prod-network': ProductionNetworkPage,
+  'prod-metrics': ProductionMetricsPage,
+  'prod-events': ProductionEventsPage,
 };
 
 function App() {
@@ -234,7 +259,7 @@ function ExposeModal({ running, onStart, onStop, onClose }: {
   const [selected, setSelected] = useState('');
 
   const ingresses = (data?.items || []).filter(
-    (i) => i.metadata.namespace !== 'kube-system' && i.metadata.namespace !== 'ingress-nginx'
+    (i) => i.metadata.namespace !== 'kube-system' && i.metadata.namespace !== 'traefik'
   );
 
   if (running) {
