@@ -58,7 +58,7 @@ kindling init [flags]
 1. Preflight checks (kind, kubectl, docker on PATH; also go, make if `--build`)
 2. `kind create cluster --name dev --config kind-config.yaml`
 3. Switch kubectl context to `kind-dev`
-4. Run `setup-ingress.sh` (installs ingress-nginx + in-cluster registry)
+4. Run `setup-ingress.sh` (installs Traefik ingress controller + in-cluster registry)
 5. Pull operator image from GHCR, or build from source with `--build`
 6. Tag as `controller:latest` and load into Kind
 7. Apply CRDs and deploy operator via kustomize

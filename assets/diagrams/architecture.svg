@@ -39,9 +39,9 @@
   <text x="140" y="213" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#fff">🔥 kindling</text>
   <text x="140" y="233" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#fff">operator</text>
 
-  <!-- ingress-nginx -->
+  <!-- Traefik -->
   <rect x="310" y="190" width="175" height="55" rx="10" fill="#fff2cc" stroke="#d6b656" stroke-width="2"/>
-  <text x="398" y="213" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#333">🔶 ingress-nginx</text>
+  <text x="398" y="213" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#333">🔶 Traefik</text>
   <text x="398" y="233" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#333">controller</text>
 
   <!-- Runner Pod -->

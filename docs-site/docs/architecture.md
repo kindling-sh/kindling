@@ -40,7 +40,7 @@ flowchart TB
                 end
             end
 
-            ingress_ctrl["🔶 ingress-nginx\ncontroller"]
+            ingress_ctrl["🔶 Traefik\ningress controller"]
         end
     end
 
@@ -192,10 +192,11 @@ Service at `registry:5000`. The Kind node's containerd is configured to
 mirror this registry, so `image: registry:5000/myapp:tag` works without
 any `imagePullPolicy` hacks.
 
-### 6. Ingress-nginx controller
+### 6. Traefik ingress controller
 
-Provides HTTP routing from `*.localhost` hostnames to in-cluster
-Services. The Kind config maps host ports 80/443 → the ingress controller pod.
+Traefik v3.6 runs as a DaemonSet with hostNetwork in the `traefik`
+namespace, providing HTTP routing from `*.localhost` hostnames to
+in-cluster Services. The IngressClass name is `traefik`.
 
 ---
 
@@ -243,7 +244,7 @@ sequenceDiagram
 |---|---|
 | `kindling-system` | Operator Deployment, ServiceAccount, RBAC |
 | `default` | Runner pods, DSE resources (apps, deps, services, ingresses), registry |
-| `ingress-nginx` | ingress-nginx controller pods |
+| `traefik` | Traefik ingress controller pods |
 
 ---
 
@@ -351,7 +352,7 @@ to re-create all secrets from the backup.
 `kindling expose` creates a secure tunnel for OAuth callbacks:
 
 ```
-Internet → Tunnel Provider (TLS) → localhost:80 → ingress-nginx → App Pod
+Internet → Tunnel Provider (TLS) → localhost:80 → Traefik → App Pod
 ```
 
 Supported providers:

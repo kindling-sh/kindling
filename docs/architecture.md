@@ -38,7 +38,7 @@ loops running on a local [Kind](https://kind.sigs.k8s.io) cluster. The
 │  │                        │  └─ redis Deployment       │ │  │
 │  │                        └────────────────────────────┘ │  │
 │  │                                                       │  │
-│  │  ingress-nginx controller                             │  │
+│  │  Traefik ingress controller                           │  │
 │  │  (localhost:80/443 → *.localhost)                     │  │
 │  └───────────────────────────────────────────────────────┘  │
 │                                                             │
@@ -61,7 +61,7 @@ regardless of how many services you deploy.
 |---|---|---|---|
 | controller-manager | 15m | 128 Mi | Operator + kube-rbac-proxy |
 | registry | ~5m | ~30 Mi | In-cluster image registry |
-| ingress-nginx | ~10m | ~90 Mi | Localhost HTTP routing |
+| Traefik | ~10m | ~90 Mi | Localhost HTTP routing |
 | **Total** | **~30m** | **~250 Mi** | |
 
 ### Per-service overhead
@@ -156,8 +156,9 @@ iteration. Key design decisions:
    the default namespace. containerd is configured via `hosts.toml`
    to mirror `registry:5000` to `localhost:5000`.
 
-3. **ingress-nginx** — the standard Kind-compatible nginx ingress
-   controller. Routes `*.localhost` → Services via Ingress rules.
+3. **Traefik** — Traefik v3.6 ingress controller, deployed as a
+   DaemonSet with hostNetwork in the `traefik` namespace. Routes
+   `*.localhost` → Services via Ingress rules.
 
 4. **kindling operator** — `kindling-controller-manager` Deployment in
    `kindling-system` namespace. Watches `DevStagingEnvironment` and
@@ -169,12 +170,12 @@ iteration. Key design decisions:
 |---|---|
 | `kindling-system` | Operator Deployment, kube-rbac-proxy sidecar |
 | `default` | Registry, runner pods, DSE workloads, dependencies |
-| `ingress-nginx` | Ingress controller pods |
+| `traefik` | Traefik ingress controller pods |
 
 ### Networking
 
 - **Host → Cluster:** `localhost:80` and `localhost:443` map to the
-  Kind node's ports, which route through ingress-nginx.
+  Kind node's ports, which route through Traefik.
 - **Cluster internal:** Services use ClusterIP. Dependencies are
   addressed by DNS name (e.g., `myapp-postgres:5432`).
 - **Registry:** In-cluster `registry:5000`, host-accessible as
@@ -373,7 +374,7 @@ Deployment directly) with the new image tag.
   to production clusters
 - **Multi-node capable** — can simulate realistic topologies (though
   we default to single-node for speed)
-- **ingress-nginx** — `*.localhost` routing works out of the box
+- **Traefik** — `*.localhost` routing works out of the box
 - **Registry support** — containerd mirror configuration is clean
 - **Docker Desktop integration** — resource limits via Docker Desktop
   settings, no separate VM management

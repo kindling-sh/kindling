@@ -2,7 +2,7 @@
 # Kind cluster config with Ingress support.
 #
 # This maps container ports 80/443 to localhost so that the
-# ingress-nginx controller can receive traffic directly:
+# Traefik ingress controller can receive traffic directly:
 #
 #   http://sample-app.localhost   → sample-app Service
 #   http://gateway.localhost      → microservices gateway Service

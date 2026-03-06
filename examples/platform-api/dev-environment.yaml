@@ -47,7 +47,7 @@ spec:
   ingress:
     enabled: true
     host: platform-api.localhost
-    ingressClassName: nginx
+    ingressClassName: traefik
 
   # ── Dependencies (5 services) ──────────────────────────────────
   #   postgres        → DATABASE_URL
@@ -92,4 +92,4 @@ spec:
   ingress:
     enabled: true
     host: platform-ui.localhost
-    ingressClassName: nginx
+    ingressClassName: traefik

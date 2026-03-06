@@ -253,7 +253,7 @@ func patchIngressesForTunnel(publicURL string) {
 			"--type=json", "-p="+string(patchBytes)); err == nil {
 			step("🔀", fmt.Sprintf("Routing tunnel → ingress/%s", name))
 			patched++
-			// Only one ingress can own a given host+path in nginx,
+			// Only one ingress can own a given host+path in Traefik,
 			// so stop after the first successful patch.
 			break
 		}

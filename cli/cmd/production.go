@@ -60,7 +60,7 @@ func init() {
 	productionTLSCmd.Flags().StringVar(&prodTLSIssuer, "issuer", "letsencrypt-prod", "ClusterIssuer name")
 	productionTLSCmd.Flags().BoolVar(&prodTLSStaging, "staging", false, "Use Let's Encrypt staging server (for testing)")
 	productionTLSCmd.Flags().StringVarP(&prodTLSDSEFile, "file", "f", "", "Optional: DSE YAML to patch with TLS config")
-	productionTLSCmd.Flags().StringVar(&prodTLSIngressClass, "ingress-class", "nginx", "IngressClass for the ACME solver")
+	productionTLSCmd.Flags().StringVar(&prodTLSIngressClass, "ingress-class", "traefik", "IngressClass for the ACME solver")
 	_ = productionTLSCmd.MarkFlagRequired("context")
 	_ = productionTLSCmd.MarkFlagRequired("domain")
 	_ = productionTLSCmd.MarkFlagRequired("email")

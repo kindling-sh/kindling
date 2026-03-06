@@ -144,7 +144,7 @@ type IngressSpec struct {
 	//+kubebuilder:default="Prefix"
 	PathType string `json:"pathType,omitempty"`
 
-	// IngressClassName is the name of the IngressClass to use (e.g. "nginx").
+	// IngressClassName is the name of the IngressClass to use (e.g. "traefik").
 	//+optional
 	IngressClassName *string `json:"ingressClassName,omitempty"`
 

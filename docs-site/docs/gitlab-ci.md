@@ -126,7 +126,7 @@ deploy-my-app:
         ingress:
           enabled: true
           host: ${KINDLING_USER}-my-app.localhost
-          ingressClassName: nginx
+          ingressClassName: traefik
       EOF
     - touch /builds/${KINDLING_USER}-my-app-dse.apply
     - |
@@ -238,7 +238,7 @@ deploy-api:
         ingress:
           enabled: true
           host: ${KINDLING_USER}-api.localhost
-          ingressClassName: nginx
+          ingressClassName: traefik
         dependencies:
           - type: postgres
             version: "16"
@@ -276,7 +276,7 @@ deploy-ui:
         ingress:
           enabled: true
           host: ${KINDLING_USER}-ui.localhost
-          ingressClassName: nginx
+          ingressClassName: traefik
       EOF
     - touch /builds/${KINDLING_USER}-ui-dse.apply
     - |

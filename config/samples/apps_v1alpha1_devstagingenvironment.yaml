@@ -22,7 +22,7 @@ spec:
   ingress:
     enabled: true
     host: orders.localhost
-    ingressClassName: nginx
+    ingressClassName: traefik
   dependencies:
     - type: postgres
       version: "16"
@@ -56,7 +56,7 @@ spec:
   ingress:
     enabled: true
     host: inventory.localhost
-    ingressClassName: nginx
+    ingressClassName: traefik
   dependencies:
     - type: mongodb
 
@@ -90,7 +90,7 @@ spec:
   ingress:
     enabled: true
     host: gateway.localhost
-    ingressClassName: nginx
+    ingressClassName: traefik
 
 ---
 # ── UI Dashboard ───────────────────────────────────────────────────
@@ -119,4 +119,4 @@ spec:
   ingress:
     enabled: true
     host: ui.localhost
-    ingressClassName: nginx
+    ingressClassName: traefik

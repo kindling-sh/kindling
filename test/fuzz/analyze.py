@@ -378,7 +378,7 @@ def services_to_dse_manifests(
             dse["spec"]["ingress"] = {
                 "enabled": True,
                 "host": host,
-                "ingressClassName": "nginx",
+                "ingressClassName": "traefik",
             }
 
         manifests.append(dse)

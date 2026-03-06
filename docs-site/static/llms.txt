@@ -43,7 +43,7 @@ kindling runs a Kind cluster on your Mac or Linux machine. It registers self-hos
 
 ## Key Concepts
 
-- **Kind cluster**: Local Kubernetes via Kind with ingress-nginx, in-cluster registry, and the kindling operator
+- **Kind cluster**: Local Kubernetes via Kind with Traefik ingress controller, in-cluster registry, and the kindling operator
 - **DevStagingEnvironment (DSE)**: Custom resource that declares an app + backing services; operator reconciles Deployment, Service, Ingress, and dependencies
 - **GithubActionRunnerPool**: Custom resource that registers self-hosted GitHub Actions runners bound to a repo
 - **Kaniko build-agent**: Sidecar in runner pods that builds container images via signal-file protocol

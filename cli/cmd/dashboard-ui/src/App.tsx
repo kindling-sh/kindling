@@ -234,7 +234,7 @@ function ExposeModal({ running, onStart, onStop, onClose }: {
   const [selected, setSelected] = useState('');
 
   const ingresses = (data?.items || []).filter(
-    (i) => i.metadata.namespace !== 'kube-system' && i.metadata.namespace !== 'ingress-nginx'
+    (i) => i.metadata.namespace !== 'kube-system' && i.metadata.namespace !== 'traefik'
   );
 
   if (running) {

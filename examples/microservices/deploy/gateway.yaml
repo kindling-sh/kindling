@@ -34,9 +34,9 @@ spec:
 
   # ── Ingress ────────────────────────────────────────────────────
   # The gateway is the public entry point — expose it via Ingress.
-  # Works out of the box with ingress-nginx on Kind.
+  # Works out of the box with Traefik on Kind.
   # Access via: http://gateway.localhost
   ingress:
     enabled: true
     host: gateway.localhost
-    ingressClassName: nginx
+    ingressClassName: traefik

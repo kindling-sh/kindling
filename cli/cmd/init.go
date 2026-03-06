@@ -13,7 +13,7 @@ var initCmd = &cobra.Command{
 	Use:   "init",
 	Short: "Bootstrap a Kind cluster with the kindling operator",
 	Long: `Creates a Kind cluster, installs the in-cluster image registry and
-ingress-nginx controller, pulls the pre-built kindling operator image from
+Traefik ingress controller, pulls the pre-built kindling operator image from
 GHCR (or builds it from source with --build), and deploys it into the cluster.
 
 By default the operator image is pulled from:
@@ -133,7 +133,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 	}
 
 	// ── Setup ingress + registry ────────────────────────────────
-	header("Installing ingress-nginx + in-cluster registry")
+	header("Installing Traefik + in-cluster registry")
 
 	ingressScript := filepath.Join(dir, "setup-ingress.sh")
 	if _, err := os.Stat(ingressScript); os.IsNotExist(err) {

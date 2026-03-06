@@ -42,7 +42,7 @@ git push origin main
 ```
 Browser → OAuth Provider → redirect to callback URL
                                     ↓
-Internet → Tunnel Provider (TLS termination) → localhost:80 → ingress-nginx → App Pod
+Internet → Tunnel Provider (TLS termination) → localhost:80 → Traefik → App Pod
 ```
 
 The tunnel provider (Cloudflare or ngrok) handles TLS termination, so
@@ -214,7 +214,7 @@ A common pattern is a React/Next.js frontend that handles OAuth callbacks,
 talking to an API backend:
 
 ```
-Internet → tunnel → ingress-nginx → alice-ui (handles /auth/callback)
+Internet → tunnel → Traefik → alice-ui (handles /auth/callback)
                                    ↘ alice-api (internal only, no tunnel needed)
 ```
 
@@ -271,4 +271,4 @@ a public URL.
   require a paid plan.
 - The tunnel must remain running in a terminal while you're developing.
 - TLS is handled entirely by the tunnel provider — the Kind cluster
-  itself serves plain HTTP via ingress-nginx.
+  itself serves plain HTTP via Traefik.
