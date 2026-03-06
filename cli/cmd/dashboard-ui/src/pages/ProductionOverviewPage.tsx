@@ -1,7 +1,7 @@
 import { useApi } from '../api';
-import { fetchProdNodeMetrics } from '../api';
+import { fetchProdNodeMetrics, fetchProdAdvisor } from '../api';
 import { useState, useEffect } from 'react';
-import type { ProdClusterInfo, K8sList, K8sNode, K8sDeployment, K8sPod, NodeMetric, PrometheusStatus } from '../types';
+import type { ProdClusterInfo, K8sList, K8sNode, K8sDeployment, K8sPod, NodeMetric, PrometheusStatus, Advisory } from '../types';
 import { StatusBadge, TimeAgo } from './shared';
 
 function parsePct(s: string): number {
@@ -16,11 +16,29 @@ export function ProductionOverviewPage() {
   const { data: prom } = useApi<PrometheusStatus>('/api/prod/prometheus/status', 15000);
 
   const [nodeMetrics, setNodeMetrics] = useState<NodeMetric[]>([]);
+  const [advisories, setAdvisories] = useState<Advisory[]>([]);
+  const [advisorLoading, setAdvisorLoading] = useState(true);
+  const [advisorChecked, setAdvisorChecked] = useState('');
+
   useEffect(() => {
     fetchProdNodeMetrics().then(r => setNodeMetrics(r.items || [])).catch(() => {});
     const id = setInterval(() => {
       fetchProdNodeMetrics().then(r => setNodeMetrics(r.items || [])).catch(() => {});
     }, 10000);
+    return () => clearInterval(id);
+  }, []);
+
+  // Advisor poll — check every 30s
+  useEffect(() => {
+    const load = () => {
+      fetchProdAdvisor().then(r => {
+        setAdvisories(r.advisories || []);
+        setAdvisorChecked(r.checked_at || '');
+        setAdvisorLoading(false);
+      }).catch(() => setAdvisorLoading(false));
+    };
+    load();
+    const id = setInterval(load, 30000);
     return () => clearInterval(id);
   }, []);
 
@@ -103,6 +121,38 @@ export function ProductionOverviewPage() {
           <div className={`metric-value ${avgMem > 85 ? 'text-red' : avgMem > 70 ? 'text-yellow' : 'text-green'}`}>{avgMem}%</div>
         </div>
       </div>
+
+      {/* Cluster advisor */}
+      {!advisorLoading && advisories.length > 0 && (
+        <div className="card advisor-card" style={{ marginBottom: 20 }}>
+          <div className="card-header">
+            <span className="card-icon">{advisories.some(a => a.severity === 'critical') ? '🔴' : advisories.some(a => a.severity === 'warning') ? '🟡' : '🟢'}</span>
+            <h3>Cluster Advisor</h3>
+            {advisorChecked && (
+              <span className="text-dim" style={{ marginLeft: 'auto', fontSize: 11 }}>
+                checked <TimeAgo timestamp={advisorChecked} />
+              </span>
+            )}
+          </div>
+          <div className="card-body" style={{ padding: 0 }}>
+            <div className="advisor-list">
+              {advisories.map((a, i) => (
+                <div key={i} className={`advisor-item advisor-${a.severity}`}>
+                  <div className="advisor-severity">
+                    {a.severity === 'critical' ? '●' : a.severity === 'warning' ? '▲' : '✓'}
+                  </div>
+                  <div className="advisor-content">
+                    <div className="advisor-title">{a.title}</div>
+                    <div className="advisor-detail">{a.detail}</div>
+                    {a.action && <div className="advisor-action">→ {a.action}</div>}
+                    {a.resource && <span className="advisor-resource">{a.resource}</span>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Infrastructure status */}
       <div className="card-grid card-grid-3">

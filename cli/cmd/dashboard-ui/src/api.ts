@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import type { RuntimeInfo, SyncStatus, ServiceDir, IntelStatus, TopologyGraph, TopologyStatusMap, TopologyNodeDetail, TopologyLogs, ProdClusterInfo, NodeMetric, PodMetric, RolloutRevision, PrometheusStatus, PromQueryResult, CertificateItem, ClusterIssuerItem } from './types';
+import type { RuntimeInfo, SyncStatus, ServiceDir, IntelStatus, TopologyGraph, TopologyStatusMap, TopologyNodeDetail, TopologyLogs, ProdClusterInfo, NodeMetric, PodMetric, RolloutRevision, PrometheusStatus, PromQueryResult, CertificateItem, ClusterIssuerItem, AdvisorResponse } from './types';
 
 const API_BASE = '';
 
@@ -430,4 +430,8 @@ export async function promQuery(query: string): Promise<PromQueryResult> {
 export async function promQueryRange(query: string, start: string, end: string, step: string): Promise<PromQueryResult> {
   const params = new URLSearchParams({ query, start, end, step });
   return apiFetch<PromQueryResult>(`/api/prod/prometheus/query_range?${params}`);
+}
+
+export async function fetchProdAdvisor(): Promise<AdvisorResponse> {
+  return apiFetch<AdvisorResponse>('/api/prod/advisor');
 }

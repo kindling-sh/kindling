@@ -4210,3 +4210,79 @@ details[open] summary {
 .prod-node-row:hover {
   background: color-mix(in srgb, var(--accent) 5%, transparent) !important;
 }
+
+/* ── Cluster Advisor ─────────────────────────────────────────── */
+
+.advisor-list {
+  display: flex;
+  flex-direction: column;
+}
+.advisor-item {
+  display: flex;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  transition: background 0.15s ease;
+}
+.advisor-item:last-child {
+  border-bottom: none;
+}
+.advisor-item:hover {
+  background: color-mix(in srgb, var(--text-primary) 3%, transparent);
+}
+.advisor-severity {
+  flex-shrink: 0;
+  width: 20px;
+  text-align: center;
+  font-size: 12px;
+  padding-top: 2px;
+}
+.advisor-critical .advisor-severity {
+  color: #ef4444;
+}
+.advisor-warning .advisor-severity {
+  color: #f59e0b;
+}
+.advisor-info .advisor-severity {
+  color: #10b981;
+}
+.advisor-content {
+  flex: 1;
+  min-width: 0;
+}
+.advisor-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 2px;
+}
+.advisor-detail {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+.advisor-action {
+  font-size: 12px;
+  color: var(--accent);
+  margin-top: 4px;
+  line-height: 1.5;
+}
+.advisor-resource {
+  display: inline-block;
+  margin-top: 4px;
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--text-tertiary);
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: var(--bg-inset);
+}
+.advisor-critical {
+  border-left: 3px solid #ef4444;
+}
+.advisor-warning {
+  border-left: 3px solid #f59e0b;
+}
+.advisor-info {
+  border-left: 3px solid #10b981;
+}

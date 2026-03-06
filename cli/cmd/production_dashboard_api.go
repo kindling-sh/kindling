@@ -829,6 +829,463 @@ func handlePromQueryRange(w http.ResponseWriter, r *http.Request) {
 	io.Copy(w, resp.Body)
 }
 
+// ── /api/prod/advisor — rule-based cluster advisor ──────────────
+
+type advisory struct {
+	Severity string `json:"severity"` // critical, warning, info
+	Title    string `json:"title"`
+	Detail   string `json:"detail"`
+	Action   string `json:"action"`
+	Resource string `json:"resource,omitempty"` // e.g. "pod/my-app-xyz"
+}
+
+func handleProdAdvisor(w http.ResponseWriter, r *http.Request) {
+	var advisories []advisory
+
+	// ── Collect cluster state ───────────────────────────────────
+	type podItem struct {
+		Metadata struct {
+			Name      string `json:"name"`
+			Namespace string `json:"namespace"`
+		} `json:"metadata"`
+		Status struct {
+			Phase             string `json:"phase"`
+			ContainerStatuses []struct {
+				Name         string `json:"name"`
+				RestartCount int    `json:"restartCount"`
+				Ready        bool   `json:"ready"`
+				State        struct {
+					Waiting *struct {
+						Reason  string `json:"reason"`
+						Message string `json:"message"`
+					} `json:"waiting"`
+					Terminated *struct {
+						Reason   string `json:"reason"`
+						ExitCode int    `json:"exitCode"`
+					} `json:"terminated"`
+				} `json:"state"`
+				LastState struct {
+					Terminated *struct {
+						Reason   string `json:"reason"`
+						ExitCode int    `json:"exitCode"`
+					} `json:"terminated"`
+				} `json:"lastState"`
+			} `json:"containerStatuses"`
+			Conditions []struct {
+				Type   string `json:"type"`
+				Status string `json:"status"`
+				Reason string `json:"reason"`
+			} `json:"conditions"`
+		} `json:"status"`
+	}
+
+	type nodeItem struct {
+		Metadata struct {
+			Name string `json:"name"`
+		} `json:"metadata"`
+		Status struct {
+			Conditions []struct {
+				Type   string `json:"type"`
+				Status string `json:"status"`
+			} `json:"conditions"`
+		} `json:"status"`
+	}
+
+	type deployItem struct {
+		Metadata struct {
+			Name      string `json:"name"`
+			Namespace string `json:"namespace"`
+		} `json:"metadata"`
+		Spec struct {
+			Replicas int `json:"replicas"`
+		} `json:"spec"`
+		Status struct {
+			ReadyReplicas       int `json:"readyReplicas"`
+			UnavailableReplicas int `json:"unavailableReplicas"`
+		} `json:"status"`
+	}
+
+	type eventItem struct {
+		Type           string `json:"type"`
+		Reason         string `json:"reason"`
+		Message        string `json:"message"`
+		Count          int    `json:"count"`
+		InvolvedObject struct {
+			Kind      string `json:"kind"`
+			Name      string `json:"name"`
+			Namespace string `json:"namespace"`
+		} `json:"involvedObject"`
+	}
+
+	// Fetch pods
+	var podList struct{ Items []podItem }
+	if out, err := prodKubectlJSON("get", "pods", "--all-namespaces", "-o", "json"); err == nil {
+		json.Unmarshal([]byte(out), &podList)
+	}
+
+	// Fetch nodes
+	var nodeList struct{ Items []nodeItem }
+	if out, err := prodKubectlJSON("get", "nodes", "-o", "json"); err == nil {
+		json.Unmarshal([]byte(out), &nodeList)
+	}
+
+	// Fetch deployments
+	var depList struct{ Items []deployItem }
+	if out, err := prodKubectlJSON("get", "deployments", "--all-namespaces", "-o", "json"); err == nil {
+		json.Unmarshal([]byte(out), &depList)
+	}
+
+	// Fetch recent warning events
+	var eventList struct{ Items []eventItem }
+	if out, err := prodKubectlJSON("get", "events", "--all-namespaces",
+		"--field-selector", "type=Warning", "--sort-by=.lastTimestamp",
+		"-o", "json"); err == nil {
+		json.Unmarshal([]byte(out), &eventList)
+	}
+
+	// ── Node rules ──────────────────────────────────────────────
+	for _, n := range nodeList.Items {
+		for _, c := range n.Status.Conditions {
+			switch c.Type {
+			case "MemoryPressure":
+				if c.Status == "True" {
+					advisories = append(advisories, advisory{
+						Severity: "critical",
+						Title:    "Node memory pressure",
+						Detail:   fmt.Sprintf("Node %s is under memory pressure — pod eviction is imminent.", n.Metadata.Name),
+						Action:   "Drain non-critical workloads, reduce memory limits, or add a node to the cluster.",
+						Resource: "node/" + n.Metadata.Name,
+					})
+				}
+			case "DiskPressure":
+				if c.Status == "True" {
+					advisories = append(advisories, advisory{
+						Severity: "critical",
+						Title:    "Node disk pressure",
+						Detail:   fmt.Sprintf("Node %s is running low on disk — kubelet may start evicting pods.", n.Metadata.Name),
+						Action:   "Clean up unused images (kubectl node debug), expand disk, or delete old PVCs.",
+						Resource: "node/" + n.Metadata.Name,
+					})
+				}
+			case "PIDPressure":
+				if c.Status == "True" {
+					advisories = append(advisories, advisory{
+						Severity: "warning",
+						Title:    "Node PID pressure",
+						Detail:   fmt.Sprintf("Node %s is running low on process IDs.", n.Metadata.Name),
+						Action:   "Check for runaway processes or fork bombs in pods on this node.",
+						Resource: "node/" + n.Metadata.Name,
+					})
+				}
+			case "Ready":
+				if c.Status != "True" {
+					advisories = append(advisories, advisory{
+						Severity: "critical",
+						Title:    "Node not ready",
+						Detail:   fmt.Sprintf("Node %s is in NotReady state — it cannot schedule or run pods.", n.Metadata.Name),
+						Action:   "Check kubelet logs on the node, verify network connectivity, and check cloud provider status.",
+						Resource: "node/" + n.Metadata.Name,
+					})
+				}
+			}
+		}
+	}
+
+	// ── Pod rules ───────────────────────────────────────────────
+	for _, p := range podList.Items {
+		podRef := fmt.Sprintf("%s/%s", p.Metadata.Namespace, p.Metadata.Name)
+
+		for _, cs := range p.Status.ContainerStatuses {
+			// CrashLoopBackOff
+			if cs.State.Waiting != nil && cs.State.Waiting.Reason == "CrashLoopBackOff" {
+				reason := "unknown"
+				if cs.LastState.Terminated != nil {
+					reason = cs.LastState.Terminated.Reason
+					if reason == "" {
+						reason = fmt.Sprintf("exit code %d", cs.LastState.Terminated.ExitCode)
+					}
+				}
+				advisories = append(advisories, advisory{
+					Severity: "critical",
+					Title:    "Container in CrashLoopBackOff",
+					Detail:   fmt.Sprintf("Container %q in pod %s keeps crashing (last exit: %s, %d restarts).", cs.Name, podRef, reason, cs.RestartCount),
+					Action:   "Check logs with 'kubectl logs --previous'. Common causes: OOMKilled, bad entrypoint, missing config/secrets.",
+					Resource: "pod/" + podRef,
+				})
+			}
+
+			// ImagePullBackOff / ErrImagePull
+			if cs.State.Waiting != nil && (cs.State.Waiting.Reason == "ImagePullBackOff" || cs.State.Waiting.Reason == "ErrImagePull") {
+				advisories = append(advisories, advisory{
+					Severity: "critical",
+					Title:    "Image pull failure",
+					Detail:   fmt.Sprintf("Container %q in pod %s cannot pull its image: %s", cs.Name, podRef, cs.State.Waiting.Message),
+					Action:   "Verify the image tag exists, check registry credentials (imagePullSecrets), and confirm network access to the registry.",
+					Resource: "pod/" + podRef,
+				})
+			}
+
+			// OOMKilled (last terminated state)
+			if cs.LastState.Terminated != nil && cs.LastState.Terminated.Reason == "OOMKilled" {
+				advisories = append(advisories, advisory{
+					Severity: "warning",
+					Title:    "Container OOMKilled",
+					Detail:   fmt.Sprintf("Container %q in pod %s was killed by the OOM killer (%d restarts).", cs.Name, podRef, cs.RestartCount),
+					Action:   "Increase the container's memory limit in the deployment spec, or investigate the memory leak.",
+					Resource: "pod/" + podRef,
+				})
+			}
+
+			// CreateContainerConfigError
+			if cs.State.Waiting != nil && cs.State.Waiting.Reason == "CreateContainerConfigError" {
+				advisories = append(advisories, advisory{
+					Severity: "critical",
+					Title:    "Container config error",
+					Detail:   fmt.Sprintf("Container %q in pod %s has a configuration error: %s", cs.Name, podRef, cs.State.Waiting.Message),
+					Action:   "Check that referenced Secrets and ConfigMaps exist and have the expected keys.",
+					Resource: "pod/" + podRef,
+				})
+			}
+
+			// High restart count (not crash-looping yet, but concerning)
+			if cs.RestartCount >= 5 && (cs.State.Waiting == nil || cs.State.Waiting.Reason != "CrashLoopBackOff") {
+				advisories = append(advisories, advisory{
+					Severity: "warning",
+					Title:    "High restart count",
+					Detail:   fmt.Sprintf("Container %q in pod %s has restarted %d times.", cs.Name, podRef, cs.RestartCount),
+					Action:   "Check resource limits, liveness probes, and application logs for intermittent failures.",
+					Resource: "pod/" + podRef,
+				})
+			}
+		}
+
+		// Pending pods (unschedulable)
+		if p.Status.Phase == "Pending" {
+			for _, c := range p.Status.Conditions {
+				if c.Type == "PodScheduled" && c.Status != "True" {
+					action := "Check resource requests vs available node capacity."
+					if strings.Contains(c.Reason, "Unschedulable") {
+						action = "No node matches the pod's requirements. Check resource requests, node selectors, tolerations, and anti-affinity rules."
+					}
+					advisories = append(advisories, advisory{
+						Severity: "warning",
+						Title:    "Pod stuck pending",
+						Detail:   fmt.Sprintf("Pod %s cannot be scheduled: %s", podRef, c.Reason),
+						Action:   action,
+						Resource: "pod/" + podRef,
+					})
+				}
+			}
+		}
+	}
+
+	// ── Deployment rules ────────────────────────────────────────
+	for _, d := range depList.Items {
+		depRef := fmt.Sprintf("%s/%s", d.Metadata.Namespace, d.Metadata.Name)
+
+		// Zero ready replicas
+		if d.Spec.Replicas > 0 && d.Status.ReadyReplicas == 0 {
+			advisories = append(advisories, advisory{
+				Severity: "critical",
+				Title:    "Deployment has no ready replicas",
+				Detail:   fmt.Sprintf("Deployment %s has 0/%d ready replicas — the service is down.", depRef, d.Spec.Replicas),
+				Action:   "Check pod status and events. A failed rollout, bad image, or resource constraint is likely.",
+				Resource: "deployment/" + depRef,
+			})
+		} else if d.Status.UnavailableReplicas > 0 && d.Status.ReadyReplicas > 0 {
+			// Partial availability
+			advisories = append(advisories, advisory{
+				Severity: "warning",
+				Title:    "Deployment partially unavailable",
+				Detail:   fmt.Sprintf("Deployment %s has %d unavailable replica(s) out of %d desired.", depRef, d.Status.UnavailableReplicas, d.Spec.Replicas),
+				Action:   "A rollout may be in progress, or some pods are failing. Check pod events for details.",
+				Resource: "deployment/" + depRef,
+			})
+		}
+	}
+
+	// ── Event-based rules ───────────────────────────────────────
+	// Look for frequently recurring warning events
+	seen := map[string]bool{}
+	for _, e := range eventList.Items {
+		key := e.Reason + "/" + e.InvolvedObject.Name
+
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+
+		if e.Reason == "FailedScheduling" && e.Count >= 3 {
+			advisories = append(advisories, advisory{
+				Severity: "warning",
+				Title:    "Repeated scheduling failures",
+				Detail:   fmt.Sprintf("%s %s/%s has failed scheduling %d times: %s", e.InvolvedObject.Kind, e.InvolvedObject.Namespace, e.InvolvedObject.Name, e.Count, e.Message),
+				Action:   "Cluster may be at capacity. Consider scaling the node pool or reducing resource requests.",
+				Resource: strings.ToLower(e.InvolvedObject.Kind) + "/" + e.InvolvedObject.Namespace + "/" + e.InvolvedObject.Name,
+			})
+		}
+
+		if e.Reason == "FailedMount" || e.Reason == "FailedAttachVolume" {
+			advisories = append(advisories, advisory{
+				Severity: "warning",
+				Title:    "Volume mount failure",
+				Detail:   fmt.Sprintf("Pod %s/%s cannot mount a volume: %s", e.InvolvedObject.Namespace, e.InvolvedObject.Name, e.Message),
+				Action:   "Check PVC status, storage class availability, and that the volume exists in the correct AZ.",
+				Resource: "pod/" + e.InvolvedObject.Namespace + "/" + e.InvolvedObject.Name,
+			})
+		}
+
+		if e.Reason == "Unhealthy" && e.Count >= 5 {
+			advisories = append(advisories, advisory{
+				Severity: "warning",
+				Title:    "Repeated probe failures",
+				Detail:   fmt.Sprintf("Pod %s/%s failing health checks (%d times): %s", e.InvolvedObject.Namespace, e.InvolvedObject.Name, e.Count, e.Message),
+				Action:   "Check liveness/readiness probe configuration — path, port, and timeouts. The app may be slow to start or unresponsive.",
+				Resource: "pod/" + e.InvolvedObject.Namespace + "/" + e.InvolvedObject.Name,
+			})
+		}
+
+		if e.Reason == "BackOff" && strings.Contains(e.Message, "back-off pulling image") {
+			advisories = append(advisories, advisory{
+				Severity: "warning",
+				Title:    "Image pull back-off",
+				Detail:   fmt.Sprintf("Pod %s/%s is in image pull back-off: %s", e.InvolvedObject.Namespace, e.InvolvedObject.Name, e.Message),
+				Action:   "Verify image name and tag, check imagePullSecrets, and ensure the cluster can reach the registry.",
+				Resource: "pod/" + e.InvolvedObject.Namespace + "/" + e.InvolvedObject.Name,
+			})
+		}
+	}
+
+	// ── Certificate rules ───────────────────────────────────────
+	if certOut, err := prodKubectlJSON("get", "certificates", "--all-namespaces", "-o", "json"); err == nil {
+		var certList struct {
+			Items []struct {
+				Metadata struct {
+					Name      string `json:"name"`
+					Namespace string `json:"namespace"`
+				} `json:"metadata"`
+				Status struct {
+					NotAfter   string `json:"notAfter"`
+					Conditions []struct {
+						Type   string `json:"type"`
+						Status string `json:"status"`
+						Reason string `json:"reason"`
+					} `json:"conditions"`
+				} `json:"status"`
+			} `json:"items"`
+		}
+		if json.Unmarshal([]byte(certOut), &certList) == nil {
+			for _, cert := range certList.Items {
+				certRef := fmt.Sprintf("%s/%s", cert.Metadata.Namespace, cert.Metadata.Name)
+
+				// Check for not-ready certificates
+				for _, c := range cert.Status.Conditions {
+					if c.Type == "Ready" && c.Status != "True" {
+						advisories = append(advisories, advisory{
+							Severity: "warning",
+							Title:    "Certificate not ready",
+							Detail:   fmt.Sprintf("Certificate %s is not ready: %s", certRef, c.Reason),
+							Action:   "Check ClusterIssuer status, DNS configuration, and ACME solver logs.",
+							Resource: "certificate/" + certRef,
+						})
+					}
+				}
+
+				// Check expiry
+				if cert.Status.NotAfter != "" {
+					if expiry, err := time.Parse(time.RFC3339, cert.Status.NotAfter); err == nil {
+						until := time.Until(expiry)
+						if until < 0 {
+							advisories = append(advisories, advisory{
+								Severity: "critical",
+								Title:    "Certificate expired",
+								Detail:   fmt.Sprintf("Certificate %s expired %s ago.", certRef, (-until).Round(time.Hour)),
+								Action:   "Check cert-manager logs and ClusterIssuer. Renewal may have failed due to DNS or rate limits.",
+								Resource: "certificate/" + certRef,
+							})
+						} else if until < 7*24*time.Hour {
+							advisories = append(advisories, advisory{
+								Severity: "warning",
+								Title:    "Certificate expiring soon",
+								Detail:   fmt.Sprintf("Certificate %s expires in %s.", certRef, until.Round(time.Hour)),
+								Action:   "Verify cert-manager is renewing. Check ClusterIssuer and ACME challenge status.",
+								Resource: "certificate/" + certRef,
+							})
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// ── Node metrics rules (high resource usage) ────────────────
+	if topOut, err := prodKubectlJSON("top", "nodes", "--no-headers"); err == nil {
+		for _, line := range strings.Split(strings.TrimSpace(topOut), "\n") {
+			fields := strings.Fields(line)
+			if len(fields) >= 5 {
+				nodeName := fields[0]
+				cpuPct := strings.TrimSuffix(fields[2], "%")
+				memPct := strings.TrimSuffix(fields[4], "%")
+
+				var cpuVal, memVal int
+				fmt.Sscanf(cpuPct, "%d", &cpuVal)
+				fmt.Sscanf(memPct, "%d", &memVal)
+
+				if cpuVal >= 90 {
+					advisories = append(advisories, advisory{
+						Severity: "critical",
+						Title:    "Node CPU critically high",
+						Detail:   fmt.Sprintf("Node %s is at %d%% CPU utilisation.", nodeName, cpuVal),
+						Action:   "Reduce workload, increase CPU limits, or add nodes. Check for runaway processes.",
+						Resource: "node/" + nodeName,
+					})
+				} else if cpuVal >= 75 {
+					advisories = append(advisories, advisory{
+						Severity: "warning",
+						Title:    "Node CPU elevated",
+						Detail:   fmt.Sprintf("Node %s is at %d%% CPU utilisation.", nodeName, cpuVal),
+						Action:   "Monitor for trends. Consider scaling horizontally before it becomes critical.",
+						Resource: "node/" + nodeName,
+					})
+				}
+
+				if memVal >= 90 {
+					advisories = append(advisories, advisory{
+						Severity: "critical",
+						Title:    "Node memory critically high",
+						Detail:   fmt.Sprintf("Node %s is at %d%% memory utilisation.", nodeName, memVal),
+						Action:   "Pod eviction is likely. Reduce memory limits on workloads or add a node immediately.",
+						Resource: "node/" + nodeName,
+					})
+				} else if memVal >= 80 {
+					advisories = append(advisories, advisory{
+						Severity: "warning",
+						Title:    "Node memory elevated",
+						Detail:   fmt.Sprintf("Node %s is at %d%% memory utilisation.", nodeName, memVal),
+						Action:   "Review pod memory requests/limits. Consider scaling the node pool before evictions start.",
+						Resource: "node/" + nodeName,
+					})
+				}
+			}
+		}
+	}
+
+	// ── All clear ───────────────────────────────────────────────
+	if len(advisories) == 0 {
+		advisories = []advisory{{
+			Severity: "info",
+			Title:    "Cluster looks healthy",
+			Detail:   "No issues detected across nodes, pods, deployments, events, or certificates.",
+			Action:   "",
+		}}
+	}
+
+	jsonResponse(w, map[string]interface{}{
+		"advisories": advisories,
+		"checked_at": time.Now().UTC().Format(time.RFC3339),
+	})
+}
+
 // ── /api/prod/apply — kubectl apply raw YAML ────────────────────
 
 func handleProdApply(w http.ResponseWriter, r *http.Request) {

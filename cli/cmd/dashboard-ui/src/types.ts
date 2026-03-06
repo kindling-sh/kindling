@@ -620,3 +620,16 @@ export interface K8sDaemonSet {
     numberUnavailable?: number;
   };
 }
+
+export interface Advisory {
+  severity: 'critical' | 'warning' | 'info';
+  title: string;
+  detail: string;
+  action: string;
+  resource?: string;
+}
+
+export interface AdvisorResponse {
+  advisories: Advisory[];
+  checked_at: string;
+}

@@ -152,6 +152,7 @@ func runDashboard(cmd *cobra.Command, args []string) error {
 		mux.HandleFunc("/api/prod/node-metrics", handleProdNodeMetrics)
 		mux.HandleFunc("/api/prod/pod-metrics", handleProdPodMetrics)
 		mux.HandleFunc("/api/prod/apply", handleProdApply)
+		mux.HandleFunc("/api/prod/advisor", handleProdAdvisor)
 
 		// Prometheus
 		mux.HandleFunc("/api/prod/prometheus/status", handlePromStatus)
