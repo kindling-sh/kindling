@@ -596,6 +596,8 @@ func detectPrometheus() (namespace, service string, port int) {
 		ns   string
 		name string
 	}{
+		{"monitoring", "vmsingle"},
+		{"monitoring", "victoria-metrics"},
 		{"monitoring", "prometheus-server"},
 		{"monitoring", "prometheus-kube-prometheus-prometheus"},
 		{"monitoring", "kube-prometheus-stack-prometheus"},
@@ -648,30 +650,32 @@ func detectPrometheus() (namespace, service string, port int) {
 	}
 
 	// Also try app=prometheus label
-	out, err = prodKubectlJSON("get", "svc", "--all-namespaces",
-		"-l", "app=prometheus",
-		"-o", "json")
-	if err == nil && out != "" {
-		var list struct {
-			Items []struct {
-				Metadata struct {
-					Name      string `json:"name"`
-					Namespace string `json:"namespace"`
-				} `json:"metadata"`
-				Spec struct {
-					Ports []struct {
-						Port int `json:"port"`
-					} `json:"ports"`
-				} `json:"spec"`
-			} `json:"items"`
-		}
-		if json.Unmarshal([]byte(out), &list) == nil && len(list.Items) > 0 {
-			svc := list.Items[0]
-			svcPort := 9090
-			if len(svc.Spec.Ports) > 0 {
-				svcPort = svc.Spec.Ports[0].Port
+	for _, label := range []string{"app=prometheus", "app=vmsingle", "app.kubernetes.io/name=vmsingle"} {
+		out, err = prodKubectlJSON("get", "svc", "--all-namespaces",
+			"-l", label,
+			"-o", "json")
+		if err == nil && out != "" {
+			var list struct {
+				Items []struct {
+					Metadata struct {
+						Name      string `json:"name"`
+						Namespace string `json:"namespace"`
+					} `json:"metadata"`
+					Spec struct {
+						Ports []struct {
+							Port int `json:"port"`
+						} `json:"ports"`
+					} `json:"spec"`
+				} `json:"items"`
 			}
-			return svc.Metadata.Namespace, svc.Metadata.Name, svcPort
+			if json.Unmarshal([]byte(out), &list) == nil && len(list.Items) > 0 {
+				svc := list.Items[0]
+				svcPort := 9090
+				if len(svc.Spec.Ports) > 0 {
+					svcPort = svc.Spec.Ports[0].Port
+				}
+				return svc.Metadata.Namespace, svc.Metadata.Name, svcPort
+			}
 		}
 	}
 
