@@ -130,11 +130,11 @@ func readClusterDSEs() ([]snapshotDSE, error) {
 					Port    *int   `json:"port,omitempty"`
 				} `json:"dependencies"`
 				Ingress *struct {
-					Enabled          bool              `json:"enabled"`
-					Host             string            `json:"host,omitempty"`
-					Path             string            `json:"path,omitempty"`
-					PathType         string            `json:"pathType,omitempty"`
-					IngressClassName *string           `json:"ingressClassName,omitempty"`
+					Enabled          bool    `json:"enabled"`
+					Host             string  `json:"host,omitempty"`
+					Path             string  `json:"path,omitempty"`
+					PathType         string  `json:"pathType,omitempty"`
+					IngressClassName *string `json:"ingressClassName,omitempty"`
 					TLS              *struct {
 						SecretName string `json:"secretName"`
 					} `json:"tls,omitempty"`
