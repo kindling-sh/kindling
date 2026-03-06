@@ -101,7 +101,7 @@ Deploy a DevStagingEnvironment CR via the build-agent sidecar.
 | `env` | ❌ | `""` | Extra env vars as YAML block |
 | `dependencies` | ❌ | `""` | Dependencies as YAML block |
 | `ingress-host` | ❌ | `""` | Ingress hostname (omit to skip ingress) |
-| `ingress-class` | ❌ | `nginx` | Ingress class name |
+| `ingress-class` | ❌ | `traefik` | Ingress class name |
 | `health-check-path` | ❌ | `/healthz` | HTTP health check path |
 | `replicas` | ❌ | `1` | Number of replicas |
 | `service-type` | ❌ | `ClusterIP` | Service type |

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/huh"
 	"github.com/jeffvincent/kindling/cli/core"
 	"github.com/spf13/cobra"
 )
@@ -22,9 +23,12 @@ var snapshotCmd = &cobra.Command{
 	Long: `Reads all DevStagingEnvironments in the cluster and generates
 production-ready Kubernetes manifests as a Helm chart or Kustomize overlay.
 
-With --registry, images are extracted from the Kind cluster, re-tagged
-with clean names, and pushed to your container registry so the exported
-chart is ready to deploy anywhere.
+With --registry, images are copied from the Kind cluster's in-cluster
+registry to your container registry via crane (no Docker daemon needed).
+
+With --deploy, the generated chart is deployed to a production cluster
+in one step. The --context flag is required to specify the target cluster
+and --registry is required to make images accessible outside Kind.
 
 Examples:
   kindling snapshot                          # Helm chart in ./kindling-snapshot/
@@ -32,16 +36,24 @@ Examples:
   kindling snapshot -o ./my-chart            # custom output directory
   kindling snapshot --name my-platform       # custom chart name
   kindling snapshot -r ghcr.io/myorg         # push images + ready-to-run chart
-  kindling snapshot -r ghcr.io/myorg -t v1.0 # push with specific tag`,
+  kindling snapshot -r ghcr.io/myorg -t v1.0 # push with specific tag
+
+  # Full graduation: snapshot + push images + deploy to production
+  kindling snapshot -r ghcr.io/myorg --deploy --context my-prod-cluster
+  kindling snapshot -r ghcr.io/myorg --deploy --context prod --namespace staging
+  kindling snapshot -f kustomize -r ghcr.io/myorg --deploy --context prod`,
 	RunE: runSnapshot,
 }
 
 var (
-	snapshotFormat   string
-	snapshotOutput   string
-	snapshotName     string
-	snapshotRegistry string
-	snapshotTag      string
+	snapshotFormat    string
+	snapshotOutput    string
+	snapshotName      string
+	snapshotRegistry  string
+	snapshotTag       string
+	snapshotDeploy    bool
+	snapshotContext   string
+	snapshotNamespace string
 )
 
 func init() {
@@ -50,6 +62,9 @@ func init() {
 	snapshotCmd.Flags().StringVarP(&snapshotName, "name", "n", "", "Chart/project name (default: derived from cluster)")
 	snapshotCmd.Flags().StringVarP(&snapshotRegistry, "registry", "r", "", "Container registry (e.g. ghcr.io/myorg, 123456.dkr.ecr.us-east-1.amazonaws.com/myapp)")
 	snapshotCmd.Flags().StringVarP(&snapshotTag, "tag", "t", "", "Image tag (default: git SHA or 'latest')")
+	snapshotCmd.Flags().BoolVar(&snapshotDeploy, "deploy", false, "Deploy to a production cluster after generating the chart")
+	snapshotCmd.Flags().StringVar(&snapshotContext, "context", "", "Kubeconfig context for the production cluster (required with --deploy)")
+	snapshotCmd.Flags().StringVar(&snapshotNamespace, "namespace", "default", "Kubernetes namespace to deploy into (used with --deploy)")
 	rootCmd.AddCommand(snapshotCmd)
 }
 
@@ -62,6 +77,7 @@ type snapshotDSE struct {
 	Replicas int
 	Env      []snapshotEnvVar
 	Deps     []snapshotDep
+	Ingress  *snapshotIngress
 }
 
 type snapshotEnvVar struct {
@@ -73,6 +89,15 @@ type snapshotDep struct {
 	Type    string
 	Version string
 	Port    int
+}
+
+type snapshotIngress struct {
+	Enabled          bool
+	Host             string
+	Path             string
+	PathType         string
+	IngressClassName string
+	TLSSecretName    string
 }
 
 func readClusterDSEs() ([]snapshotDSE, error) {
@@ -104,6 +129,17 @@ func readClusterDSEs() ([]snapshotDSE, error) {
 					Version string `json:"version,omitempty"`
 					Port    *int   `json:"port,omitempty"`
 				} `json:"dependencies"`
+				Ingress *struct {
+					Enabled          bool    `json:"enabled"`
+					Host             string  `json:"host,omitempty"`
+					Path             string  `json:"path,omitempty"`
+					PathType         string  `json:"pathType,omitempty"`
+					IngressClassName *string `json:"ingressClassName,omitempty"`
+					TLS              *struct {
+						SecretName string `json:"secretName"`
+					} `json:"tls,omitempty"`
+					Annotations map[string]string `json:"annotations,omitempty"`
+				} `json:"ingress,omitempty"`
 			} `json:"spec"`
 		} `json:"items"`
 	}
@@ -139,6 +175,31 @@ func readClusterDSEs() ([]snapshotDSE, error) {
 			})
 		}
 		dses = append(dses, d)
+	}
+
+	// Populate ingress from parsed spec
+	for i, item := range list.Items {
+		if item.Spec.Ingress != nil && item.Spec.Ingress.Enabled {
+			ing := &snapshotIngress{
+				Enabled:  true,
+				Host:     item.Spec.Ingress.Host,
+				Path:     item.Spec.Ingress.Path,
+				PathType: item.Spec.Ingress.PathType,
+			}
+			if ing.Path == "" {
+				ing.Path = "/"
+			}
+			if ing.PathType == "" {
+				ing.PathType = "Prefix"
+			}
+			if item.Spec.Ingress.IngressClassName != nil {
+				ing.IngressClassName = *item.Spec.Ingress.IngressClassName
+			}
+			if item.Spec.Ingress.TLS != nil {
+				ing.TLSSecretName = item.Spec.Ingress.TLS.SecretName
+			}
+			dses[i].Ingress = ing
+		}
 	}
 
 	return dses, nil
@@ -211,6 +272,19 @@ var depRegistry = map[string]depDefaults{
 // ── Main command ────────────────────────────────────────────────
 
 func runSnapshot(cmd *cobra.Command, args []string) error {
+	// ── Validate --deploy prerequisites ────────────────────────
+	if snapshotDeploy {
+		if snapshotContext == "" {
+			return fmt.Errorf("--context is required when using --deploy")
+		}
+		if strings.HasPrefix(snapshotContext, "kind-") {
+			return fmt.Errorf("context %q looks like a Kind cluster — use 'kindling deploy' for local dev", snapshotContext)
+		}
+		if snapshotRegistry == "" {
+			return fmt.Errorf("--registry is required when using --deploy (images must be accessible from the production cluster)")
+		}
+	}
+
 	header("Exporting cluster snapshot")
 
 	step("📡", "Reading DevStagingEnvironments from cluster")
@@ -225,11 +299,22 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 	success(fmt.Sprintf("Found %d service(s)", len(dses)))
 
 	// Strip GitHub actor prefix (e.g. "jeff-vincent-gateway" → "gateway")
+	var userPrefix string
 	if prefix := detectUserPrefix(dses); prefix != "" {
+		userPrefix = prefix
 		step("✂️", fmt.Sprintf("Stripping user prefix %q from service names", strings.TrimSuffix(prefix, "-")))
 		for i := range dses {
 			if stripped := strings.TrimPrefix(dses[i].Name, prefix); stripped != "" {
 				dses[i].Name = stripped
+			}
+			// Also strip prefix from ingress host
+			if dses[i].Ingress != nil && dses[i].Ingress.Host != "" {
+				dses[i].Ingress.Host = strings.TrimPrefix(dses[i].Ingress.Host, prefix)
+			}
+			// Strip prefix from env var values (e.g. service URLs like
+			// "http://jeff-vincent-orders:5000" → "http://orders:5000")
+			for j := range dses[i].Env {
+				dses[i].Env[j].Value = strings.ReplaceAll(dses[i].Env[j].Value, prefix, "")
 			}
 		}
 	}
@@ -253,7 +338,7 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 		}
 		step("🏷", fmt.Sprintf("Re-tagging images → %s (tag: %s)", snapshotRegistry, tag))
 
-		if err := craneCopyImages(dses, snapshotRegistry, tag); err != nil {
+		if err := craneCopyImages(dses, snapshotRegistry, tag, userPrefix); err != nil {
 			warn(fmt.Sprintf("Could not push images: %v", err))
 			warn("Falling back to image references only (no push)")
 			// Still rewrite image refs so the chart targets the right registry
@@ -263,14 +348,120 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	var exportErr error
 	switch snapshotFormat {
 	case "helm":
-		return exportHelm(outDir, chartName, dses)
+		exportErr = exportHelm(outDir, chartName, dses)
 	case "kustomize":
-		return exportKustomize(outDir, chartName, dses)
+		exportErr = exportKustomize(outDir, chartName, dses)
 	default:
 		return fmt.Errorf("unknown format %q — use 'helm' or 'kustomize'", snapshotFormat)
 	}
+	if exportErr != nil {
+		return exportErr
+	}
+
+	// ── Deploy to production cluster ───────────────────────────
+	if !snapshotDeploy {
+		return nil
+	}
+
+	header("Deploying to production")
+	step("🔗", fmt.Sprintf("Target context: %s%s%s", colorBold, snapshotContext, colorReset))
+
+	// Verify cluster connectivity
+	step("🔍", "Verifying cluster connectivity")
+	if err := run("kubectl", "cluster-info", "--context", snapshotContext); err != nil {
+		return fmt.Errorf("cannot reach cluster via context %q: %w", snapshotContext, err)
+	}
+
+	// ── Ingress selector ──────────────────────────────────────
+	// Collect services that have ingress defined
+	var ingressServices []string
+	for _, dse := range dses {
+		if dse.Ingress != nil && dse.Ingress.Enabled {
+			ingressServices = append(ingressServices, dse.Name)
+		}
+	}
+
+	var selectedIngress []string
+	if len(ingressServices) > 0 {
+		// Build multi-select options
+		options := make([]huh.Option[string], len(ingressServices))
+		for i, svc := range ingressServices {
+			options[i] = huh.NewOption(svc, svc)
+		}
+
+		form := huh.NewForm(
+			huh.NewGroup(
+				huh.NewMultiSelect[string]().
+					Title("Which services should be publicly accessible?").
+					Description("Selected services will have Ingress enabled.\nUse space to toggle, enter to confirm.").
+					Options(options...).
+					Value(&selectedIngress),
+			),
+		)
+
+		if err := form.Run(); err != nil {
+			return fmt.Errorf("ingress selection cancelled: %w", err)
+		}
+	}
+
+	// Build a set of selected ingress services for quick lookup
+	selectedSet := make(map[string]bool)
+	for _, svc := range selectedIngress {
+		selectedSet[svc] = true
+	}
+	if len(selectedIngress) > 0 {
+		step("🌐", fmt.Sprintf("Ingress enabled for: %s", strings.Join(selectedIngress, ", ")))
+	} else if len(ingressServices) > 0 {
+		step("🌐", "No services selected for public ingress")
+	}
+
+	switch snapshotFormat {
+	case "helm":
+		if !commandExists("helm") {
+			return fmt.Errorf("helm not found on PATH — install it or deploy manually")
+		}
+		step("🚀", fmt.Sprintf("Running helm upgrade --install %s", chartName))
+		helmArgs := []string{
+			"upgrade", "--install", chartName, outDir,
+			"--kube-context", snapshotContext,
+			"--namespace", snapshotNamespace,
+			"--create-namespace",
+			"-f", filepath.Join(outDir, "values-live.yaml"),
+			"--timeout", "10m",
+		}
+		// Disable ingress for services the user didn't select;
+		// clear the dev-cluster hostname for selected services so the
+		// ingress catches all traffic on the LoadBalancer IP.
+		for _, svc := range ingressServices {
+			vk := helmValuesKey(svc)
+			if !selectedSet[svc] {
+				helmArgs = append(helmArgs, "--set", fmt.Sprintf("%s.ingress.enabled=false", vk))
+			} else {
+				helmArgs = append(helmArgs, "--set", fmt.Sprintf("%s.ingress.host=", vk))
+			}
+		}
+		if err := run("helm", helmArgs...); err != nil {
+			return fmt.Errorf("helm deploy failed: %w", err)
+		}
+	case "kustomize":
+		step("🚀", fmt.Sprintf("Running kubectl apply -k %s", outDir))
+		if err := run("kubectl", "--context", snapshotContext, "apply",
+			"-k", outDir,
+			"-n", snapshotNamespace); err != nil {
+			return fmt.Errorf("kustomize deploy failed: %w", err)
+		}
+	}
+
+	success("Deployed to production")
+	fmt.Println()
+	fmt.Printf("  Check pods:     %skubectl --context %s -n %s get pods%s\n", colorCyan, snapshotContext, snapshotNamespace, colorReset)
+	fmt.Printf("  Check services: %skubectl --context %s -n %s get svc%s\n", colorCyan, snapshotContext, snapshotNamespace, colorReset)
+	fmt.Printf("  Check ingress:  %skubectl --context %s -n %s get ingress%s\n", colorCyan, snapshotContext, snapshotNamespace, colorReset)
+	fmt.Println()
+	return nil
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -301,6 +492,26 @@ type: application
 `, chartName)
 	writeSnapshotFile(outDir, "Chart.yaml", chartYAML)
 
+	// ── .helmignore ─────────────────────────────────────────────
+	// Prevents Helm from packaging unrelated project files when the
+	// chart is generated inside an existing source tree (e.g. -o .).
+	helmIgnore := `# Generated by kindling snapshot
+.git
+node_modules
+__pycache__
+*.pyc
+.env
+.venv
+vendor
+dist
+build
+tmp
+.DS_Store
+*.swp
+*.swo
+`
+	writeSnapshotFile(outDir, ".helmignore", helmIgnore)
+
 	// ── values.yaml (clean chart with commented examples) ───────
 	valuesYAML := buildValuesYAML(chartName, dses, depsSeen, false)
 	writeSnapshotFile(outDir, "values.yaml", valuesYAML)
@@ -312,8 +523,11 @@ type: application
 	// ── Templates: service deployments ──────────────────────────
 	for _, dse := range dses {
 		safe := helmSafe(dse.Name)
-		writeSnapshotFile(templatesDir, safe+"-deployment.yaml", helmDeploymentTemplate(dse))
-		writeSnapshotFile(templatesDir, safe+"-service.yaml", helmServiceTemplate(dse))
+		writeSnapshotFile(templatesDir, safe+"-deployment.yaml", helmDeploymentTemplate(dse, chartName, dses))
+		writeSnapshotFile(templatesDir, safe+"-service.yaml", helmServiceTemplate(dse, chartName))
+		if dse.Ingress != nil && dse.Ingress.Enabled {
+			writeSnapshotFile(templatesDir, safe+"-ingress.yaml", helmIngressTemplate(dse, chartName))
+		}
 	}
 
 	// ── Templates: dependency deployments ───────────────────────
@@ -366,11 +580,11 @@ func buildValuesYAML(chartName string, dses []snapshotDSE, depsSeen map[string]b
 
 	// ── Service values ──────────────────────────────────────────
 	for _, dse := range dses {
-		safe := helmSafe(dse.Name)
+		vk := helmValuesKey(dse.Name)
 		prodImage := productionImageClean(dse.Image, dse.Name)
 		liveImage := dse.Image
 
-		buf.WriteString(fmt.Sprintf("%s:\n", safe))
+		buf.WriteString(fmt.Sprintf("%s:\n", vk))
 
 		if live {
 			buf.WriteString(fmt.Sprintf("  image: \"%s\"\n", liveImage))
@@ -410,6 +624,28 @@ func buildValuesYAML(chartName string, dses []snapshotDSE, depsSeen map[string]b
 				}
 			}
 		}
+
+		// Ingress config
+		if dse.Ingress != nil && dse.Ingress.Enabled {
+			buf.WriteString("  ingress:\n")
+			buf.WriteString("    enabled: true\n")
+			if live {
+				buf.WriteString(fmt.Sprintf("    host: \"%s\"\n", dse.Ingress.Host))
+			} else {
+				buf.WriteString(fmt.Sprintf("    host: \"\"  # TODO: set your production hostname (dev: %s)\n", dse.Ingress.Host))
+			}
+			buf.WriteString(fmt.Sprintf("    path: \"%s\"\n", dse.Ingress.Path))
+			buf.WriteString(fmt.Sprintf("    pathType: \"%s\"\n", dse.Ingress.PathType))
+			if dse.Ingress.IngressClassName != "" {
+				buf.WriteString(fmt.Sprintf("    ingressClassName: \"%s\"\n", dse.Ingress.IngressClassName))
+			}
+			if dse.Ingress.TLSSecretName != "" {
+				buf.WriteString("    tls:\n")
+				buf.WriteString(fmt.Sprintf("      secretName: \"%s\"\n", dse.Ingress.TLSSecretName))
+			}
+			buf.WriteString("    annotations: {}\n")
+		}
+
 		buf.WriteString("\n")
 	}
 
@@ -420,6 +656,7 @@ func buildValuesYAML(chartName string, dses []snapshotDSE, depsSeen map[string]b
 			continue
 		}
 		safe := helmSafe(depType)
+		vk := helmValuesKey(depType)
 
 		// Find version from the first DSE that references this dep
 		version := "latest"
@@ -432,7 +669,7 @@ func buildValuesYAML(chartName string, dses []snapshotDSE, depsSeen map[string]b
 			}
 		}
 
-		buf.WriteString(fmt.Sprintf("%s:\n", safe))
+		buf.WriteString(fmt.Sprintf("%s:\n", vk))
 		buf.WriteString("  enabled: true\n")
 
 		imageStr := fmt.Sprintf("%s:%s", def.Image, version)
@@ -547,8 +784,15 @@ func productionImageClean(image, name string) string {
 	return image
 }
 
-func helmDeploymentTemplate(dse snapshotDSE) string {
+func helmDeploymentTemplate(dse snapshotDSE, chartName string, allDSEs []snapshotDSE) string {
 	safe := helmSafe(dse.Name)
+	vk := helmValuesKey(dse.Name)
+
+	// Build a set of known service names for rewriting env var values
+	knownServices := make(map[string]bool)
+	for _, d := range allDSEs {
+		knownServices[helmSafe(d.Name)] = true
+	}
 
 	// Build env block — connection strings from deps + user env
 	var envLines strings.Builder
@@ -560,17 +804,24 @@ func helmDeploymentTemplate(dse snapshotDSE) string {
         - name: %s
           value: {{ .Values.%s.env.%s | quote }}
         {{- end }}
-`, safe, def.EnvVarName, def.EnvVarName, safe, def.EnvVarName))
+`, vk, def.EnvVarName, def.EnvVarName, vk, def.EnvVarName))
 		}
 	}
-	// User-defined env vars from values
+	// User-defined env vars — if the value references a sibling service,
+	// generate a Helm template expression so the URL uses the release name.
+	// Otherwise source from values.yaml.
 	if len(dse.Env) > 0 {
 		for _, e := range dse.Env {
-			envLines.WriteString(fmt.Sprintf(`        {{- if .Values.%s.env.%s }}
+			if helmVal := rewriteServiceURL(e.Value, knownServices); helmVal != "" {
+				// Directly embed the Helm-templated value
+				envLines.WriteString(fmt.Sprintf("        - name: %s\n          value: %s\n", e.Name, helmVal))
+			} else {
+				envLines.WriteString(fmt.Sprintf(`        {{- if .Values.%s.env.%s }}
         - name: %s
           value: {{ .Values.%s.env.%s | quote }}
         {{- end }}
-`, safe, e.Name, e.Name, safe, e.Name))
+`, vk, e.Name, e.Name, vk, e.Name))
+			}
 		}
 	}
 
@@ -599,13 +850,15 @@ spec:
       containers:
       - name: %s
         image: {{ .Values.%s.image }}
+        imagePullPolicy: Always
         ports:
         - containerPort: {{ .Values.%s.port }}
-%s`, safe, safe, "kindling-snapshot", safe, safe, safe, safe, safe, safe, envSection)
+%s`, safe, safe, chartName, vk, safe, safe, safe, vk, vk, envSection)
 }
 
-func helmServiceTemplate(dse snapshotDSE) string {
+func helmServiceTemplate(dse snapshotDSE, chartName string) string {
 	safe := helmSafe(dse.Name)
+	vk := helmValuesKey(dse.Name)
 	return fmt.Sprintf(`apiVersion: v1
 kind: Service
 metadata:
@@ -620,11 +873,59 @@ spec:
   - port: {{ .Values.%s.port }}
     targetPort: {{ .Values.%s.port }}
     protocol: TCP
-`, safe, safe, "kindling-snapshot", safe, safe, safe)
+`, safe, safe, chartName, safe, vk, vk)
+}
+
+func helmIngressTemplate(dse snapshotDSE, chartName string) string {
+	safe := helmSafe(dse.Name)
+	vk := helmValuesKey(dse.Name)
+
+	// Build TLS block if configured
+	var tlsBlock string
+	if dse.Ingress.TLSSecretName != "" {
+		tlsBlock = fmt.Sprintf(`
+  {{- if .Values.%s.ingress.tls.secretName }}
+  tls:
+  - secretName: {{ .Values.%s.ingress.tls.secretName }}
+    hosts:
+    - {{ .Values.%s.ingress.host }}
+  {{- end }}`, vk, vk, vk)
+	}
+
+	return fmt.Sprintf(`{{- if .Values.%s.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ .Release.Name }}-%s
+  labels:
+    app: %s
+    {{- include "%s.labels" . | nindent 4 }}
+  {{- with .Values.%s.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if .Values.%s.ingress.ingressClassName }}
+  ingressClassName: {{ .Values.%s.ingress.ingressClassName }}
+  {{- end }}%s
+  rules:
+  - host: {{ .Values.%s.ingress.host }}
+    http:
+      paths:
+      - path: {{ .Values.%s.ingress.path }}
+        pathType: {{ .Values.%s.ingress.pathType }}
+        backend:
+          service:
+            name: {{ .Release.Name }}-%s
+            port:
+              number: {{ .Values.%s.port }}
+{{- end }}
+`, vk, safe, safe, chartName, vk, vk, vk, tlsBlock, vk, vk, vk, safe, vk)
 }
 
 func helmDepDeploymentTemplate(depType string, def depDefaults) string {
 	safe := helmSafe(depType)
+	vk := helmValuesKey(depType)
 
 	var envLines strings.Builder
 	if len(def.Env) > 0 {
@@ -632,7 +933,7 @@ func helmDepDeploymentTemplate(depType string, def depDefaults) string {
 		for _, e := range def.Env {
 			envLines.WriteString(fmt.Sprintf(`        - name: %s
           value: {{ .Values.%s.env.%s | quote }}
-`, e.Name, safe, e.Name))
+`, e.Name, vk, e.Name))
 		}
 	}
 
@@ -656,14 +957,16 @@ spec:
       containers:
       - name: %s
         image: {{ .Values.%s.image }}
+        imagePullPolicy: Always
         ports:
         - containerPort: {{ .Values.%s.port }}
 %s{{- end }}
-`, safe, safe, safe, safe, safe, safe, safe, safe, envLines.String())
+`, vk, safe, safe, safe, safe, safe, vk, vk, envLines.String())
 }
 
 func helmDepServiceTemplate(depType string, def depDefaults) string {
 	safe := helmSafe(depType)
+	vk := helmValuesKey(depType)
 	return fmt.Sprintf(`{{- if .Values.%s.enabled }}
 apiVersion: v1
 kind: Service
@@ -679,7 +982,7 @@ spec:
     targetPort: {{ .Values.%s.port }}
     protocol: TCP
 {{- end }}
-`, safe, safe, safe, safe, safe, safe)
+`, vk, safe, safe, safe, vk, vk)
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -703,6 +1006,12 @@ func exportKustomize(outDir, name string, dses []snapshotDSE) error {
 		writeSnapshotFile(baseDir, safe+"-deployment.yaml", depYAML)
 		writeSnapshotFile(baseDir, safe+"-service.yaml", svcYAML)
 		resources = append(resources, safe+"-deployment.yaml", safe+"-service.yaml")
+
+		if dse.Ingress != nil && dse.Ingress.Enabled {
+			ingYAML := kustomizeIngress(dse)
+			writeSnapshotFile(baseDir, safe+"-ingress.yaml", ingYAML)
+			resources = append(resources, safe+"-ingress.yaml")
+		}
 
 		for _, dep := range dse.Deps {
 			if !depsSeen[dep.Type] {
@@ -772,6 +1081,9 @@ resources:
 }
 
 func kustomizeDeployment(dse snapshotDSE) string {
+	// Build set of known service names for detecting service URLs
+	// (note: in kustomize path we don't have allDSEs, but the env values
+	// have already been prefix-stripped, so we just add a TODO comment)
 	var envLines strings.Builder
 	// Dependency connection strings
 	for _, dep := range dse.Deps {
@@ -780,9 +1092,10 @@ func kustomizeDeployment(dse snapshotDSE) string {
 				def.EnvVarName, dep.Type))
 		}
 	}
-	// User env
+	// User env — note: namePrefix will rename services, so URLs referencing
+	// sibling services need updating to include the namePrefix.
 	for _, e := range dse.Env {
-		envLines.WriteString(fmt.Sprintf("        - name: %s\n          value: \"%s\"\n", e.Name, e.Value))
+		envLines.WriteString(fmt.Sprintf("        - name: %s\n          value: \"%s\"  # TODO: update hostname if namePrefix changes service names\n", e.Name, e.Value))
 	}
 
 	envSection := ""
@@ -807,6 +1120,7 @@ spec:
       containers:
       - name: %s
         image: %s
+        imagePullPolicy: Always
         ports:
         - containerPort: %d
 %s`, dse.Name, dse.Replicas, dse.Name, dse.Name, dse.Name,
@@ -826,6 +1140,47 @@ spec:
     targetPort: %d
     protocol: TCP
 `, dse.Name, dse.Name, dse.Port, dse.Port)
+}
+
+func kustomizeIngress(dse snapshotDSE) string {
+	ing := dse.Ingress
+
+	var classLine string
+	if ing.IngressClassName != "" {
+		classLine = fmt.Sprintf("  ingressClassName: %s\n", ing.IngressClassName)
+	}
+
+	var tlsBlock string
+	if ing.TLSSecretName != "" {
+		tlsBlock = fmt.Sprintf(`  tls:
+  - secretName: %s
+    hosts:
+    - %s
+`, ing.TLSSecretName, ing.Host)
+	}
+
+	host := ing.Host
+	if host == "" {
+		host = dse.Name + ".example.com  # TODO: set your production hostname"
+	}
+
+	return fmt.Sprintf(`apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: %s
+spec:
+%s%s  rules:
+  - host: %s
+    http:
+      paths:
+      - path: %s
+        pathType: %s
+        backend:
+          service:
+            name: %s
+            port:
+              number: %d
+`, dse.Name, classLine, tlsBlock, host, ing.Path, ing.PathType, dse.Name, dse.Port)
 }
 
 func kustomizeDepDeployment(depType string, def depDefaults, version string) string {
@@ -886,11 +1241,21 @@ func writeSnapshotFile(dir, name, content string) {
 	}
 }
 
-// helmSafe makes a name safe for use as a Helm values key / K8s resource name.
+// helmSafe makes a name safe for use as a K8s resource name or label value.
 func helmSafe(name string) string {
 	s := strings.ToLower(name)
 	s = strings.ReplaceAll(s, " ", "-")
 	s = strings.ReplaceAll(s, "_", "-")
+	return s
+}
+
+// helmValuesKey makes a name safe for use as a Helm values.yaml key.
+// Helm's Go template parser treats hyphens as subtraction operators,
+// so we convert to underscores.
+func helmValuesKey(name string) string {
+	s := strings.ToLower(name)
+	s = strings.ReplaceAll(s, " ", "_")
+	s = strings.ReplaceAll(s, "-", "_")
 	return s
 }
 
@@ -933,6 +1298,35 @@ func connectionProtocol(depType string) string {
 	default:
 		return "tcp"
 	}
+}
+
+// rewriteServiceURL checks if an env var value contains a URL referencing
+// a known sibling service by hostname. If so, it returns a Helm template
+// expression that uses {{ .Release.Name }}-<service> so the URL works
+// regardless of the Helm release name.
+//
+// Example:
+//
+//	"http://orders:5000" → `"http://{{ .Release.Name }}-orders:5000"`
+//	"some-plain-value"   → "" (no rewrite needed)
+func rewriteServiceURL(value string, knownServices map[string]bool) string {
+	// Match patterns like http://service-name:port or http://service-name/path
+	for svc := range knownServices {
+		// Check for hostname-style references: ://<svc>: or ://<svc>/
+		for _, pattern := range []string{
+			"://" + svc + ":",
+			"://" + svc + "/",
+			"://" + svc + "\"",
+		} {
+			if strings.Contains(value, pattern) {
+				rewritten := strings.ReplaceAll(value,
+					"://"+svc,
+					"://{{ .Release.Name }}-"+svc)
+				return fmt.Sprintf(`"%s"`, rewritten)
+			}
+		}
+	}
+	return ""
 }
 
 // ── Registry helpers ────────────────────────────────────────────
@@ -1059,10 +1453,16 @@ func startRegistryPortForward() (int, func(), error) {
 	return port, cleanup, nil
 }
 
-// craneCopyImages uses `crane copy` to transfer images directly from the
-// in-cluster registry to the target registry. This avoids the Docker daemon
-// entirely — crane copies OCI blobs registry-to-registry.
-func craneCopyImages(dses []snapshotDSE, registry, tag string) error {
+// craneCopyImages pushes images to the target registry. It first tries
+// `crane copy` from the in-cluster registry; if that fails (e.g. the image
+// was loaded via `kindling load` and only exists in the Docker daemon),
+// it falls back to `docker tag` + `docker push`.
+//
+// userPrefix is the GitHub actor prefix (e.g. "jeff-vincent-") that was
+// stripped from DSE names. It's needed to find images in the Docker daemon
+// because `kindling load` tags them with the original prefixed name
+// (e.g. "jeff-vincent-gateway:12345").
+func craneCopyImages(dses []snapshotDSE, registry, tag, userPrefix string) error {
 	// Check crane is installed
 	if _, err := exec.LookPath("crane"); err != nil {
 		return fmt.Errorf("crane is required for --registry (brew install crane)")
@@ -1091,30 +1491,96 @@ func craneCopyImages(dses []snapshotDSE, registry, tag string) error {
 	}
 
 	seen := make(map[string]bool)
+	var failed []string
 	for i := range dses {
 		if dses[i].Image == "" || seen[dses[i].Image] {
 			continue
 		}
 		seen[dses[i].Image] = true
 
-		src := registryPullRef(dses[i].Image, localPort)
 		dst := registryImage(dses[i].Name, registry, tag)
-
 		step("📤", fmt.Sprintf("%s → %s", dses[i].Name, dst))
 
-		args := []string{"copy"}
-		if isClusterRegistryImage(dses[i].Image) {
-			args = append(args, "--insecure") // in-cluster registry is HTTP
-		}
-		args = append(args, src, dst)
+		pushed := false
 
-		if out, err := runSilent("crane", args...); err != nil {
-			return fmt.Errorf("crane copy %s failed: %s", dses[i].Name, out)
+		// Prefer Docker daemon images — they're built by `kindling load`
+		// with --platform linux/amd64, so they're the correct arch for
+		// production. The in-cluster registry may have stale CI-built
+		// images that match the host arch (arm64 on Apple Silicon).
+		if localImg := findDockerImage(dses[i].Name, userPrefix); localImg != "" {
+			step("🐳", fmt.Sprintf("Found %s in Docker daemon — pushing directly", localImg))
+			if err := dockerTagAndPush(localImg, dst); err != nil {
+				warn(fmt.Sprintf("Docker push failed for %s: %v — trying registry", dses[i].Name, err))
+			} else {
+				pushed = true
+			}
 		}
 
+		// Fallback: crane copy from in-cluster registry
+		if !pushed && isClusterRegistryImage(dses[i].Image) {
+			src := registryPullRef(dses[i].Image, localPort)
+			args := []string{"copy", "--insecure", src, dst}
+			if _, err := runSilent("crane", args...); err == nil {
+				pushed = true
+			}
+		}
+
+		if !pushed {
+			warn(fmt.Sprintf("Could not push %s — not in Docker daemon or registry", dses[i].Name))
+			failed = append(failed, dses[i].Name)
+		}
+
+		// Always rewrite image ref to target the production registry
 		dses[i].Image = dst
 	}
 
+	if len(failed) == len(seen) {
+		return fmt.Errorf("all image pushes failed — check registry credentials and source images")
+	}
+	if len(failed) > 0 {
+		warn(fmt.Sprintf("%d/%d images could not be pushed: %s",
+			len(failed), len(seen), strings.Join(failed, ", ")))
+	}
+
 	success("Images pushed to registry")
+	return nil
+}
+
+// findDockerImage searches the local Docker daemon for the most recent
+// image matching a service name. It tries both the stripped name and the
+// prefixed name (since `kindling load` tags images as "<prefix><service>").
+func findDockerImage(serviceName, userPrefix string) string {
+	candidates := []string{serviceName}
+	if userPrefix != "" {
+		// prefix includes trailing dash, e.g. "jeff-vincent-"
+		candidates = append(candidates, strings.TrimSuffix(userPrefix, "-")+"-"+serviceName)
+	}
+
+	for _, name := range candidates {
+		// docker images --format with filter by reference
+		out, err := runSilent("docker", "images", "--format", "{{.Repository}}:{{.Tag}}", "--filter", "reference="+name)
+		if err != nil || out == "" {
+			continue
+		}
+		// Return the first (most recent) match
+		lines := strings.Split(out, "\n")
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line != "" && !strings.HasSuffix(line, ":<none>") {
+				return line
+			}
+		}
+	}
+	return ""
+}
+
+// dockerTagAndPush tags a local Docker image as dst and pushes it.
+func dockerTagAndPush(localImage, dst string) error {
+	if _, err := runSilent("docker", "tag", localImage, dst); err != nil {
+		return fmt.Errorf("docker tag failed: %w", err)
+	}
+	if _, err := runSilent("docker", "push", dst); err != nil {
+		return fmt.Errorf("docker push failed: %w", err)
+	}
 	return nil
 }

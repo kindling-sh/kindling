@@ -85,12 +85,12 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	header("Ingress Controller")
 
 	ingOut, err := runCapture("kubectl", "get", "pods",
-		"-n", "ingress-nginx",
-		"-l", "app.kubernetes.io/component=controller",
+		"-n", "traefik",
+		"-l", "app.kubernetes.io/name=traefik",
 		"-o", "custom-columns=NAME:.metadata.name,STATUS:.status.phase,RESTARTS:.status.containerStatuses[0].restartCount",
 		"--no-headers")
 	if err != nil || ingOut == "" {
-		warn("ingress-nginx controller not found")
+		warn("Traefik ingress controller not found")
 	} else {
 		for _, line := range strings.Split(ingOut, "\n") {
 			fmt.Printf("    %s\n", strings.TrimSpace(line))

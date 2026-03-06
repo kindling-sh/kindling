@@ -45,7 +45,7 @@ spec:
   ingress:
     enabled: true
     host: inventory.localhost
-    ingressClassName: nginx
+    ingressClassName: traefik
 
   # ── Dependencies ────────────────────────────────────────────────
   dependencies:

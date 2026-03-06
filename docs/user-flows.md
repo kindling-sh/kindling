@@ -20,7 +20,7 @@ a local dev environment with Postgres.
    ├─ Creates Kind cluster "dev" from kind-config.yaml
    ├─ Deploys registry (registry:5000)
    ├─ Configures containerd mirror
-   ├─ Deploys ingress-nginx
+   ├─ Deploys Traefik ingress controller
    ├─ Deploys kindling operator to kindling-system
    └─ Waits for all components to be ready
        └─ Output: ✅ Cluster ready

@@ -68,11 +68,14 @@ func BuildAndLoad(cfg LoadConfig) ([]string, error) {
 	imageTag := LoadImageTag(cfg.Service)
 	var outputs []string
 
-	// 1. Docker build
-	dockerArgs := []string{"build", "-t", imageTag, "-f", dockerfile}
-	if cfg.Platform != "" {
-		dockerArgs = append(dockerArgs, "--platform", cfg.Platform)
+	// 1. Docker build — default to linux/amd64 for production compatibility.
+	// ARM Macs can run amd64 images via Rosetta.
+	platform := cfg.Platform
+	if platform == "" {
+		platform = "linux/amd64"
 	}
+	dockerArgs := []string{"build", "-t", imageTag, "-f", dockerfile,
+		"--platform", platform}
 	dockerArgs = append(dockerArgs, ctx)
 
 	buildOut, err := RunCapture("docker", dockerArgs...)

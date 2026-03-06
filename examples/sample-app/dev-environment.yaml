@@ -39,12 +39,12 @@ spec:
     type: ClusterIP
 
   # ── Ingress ────────────────────────────────────────────────────
-  # Works out of the box with ingress-nginx on Kind.
+  # Works out of the box with Traefik on Kind.
   # Access via: http://sample-app.localhost
   ingress:
     enabled: true
     host: sample-app.localhost
-    ingressClassName: nginx
+    ingressClassName: traefik
 
   # ── Dependencies ────────────────────────────────────────────────
   # The operator auto-provisions each backing service and injects

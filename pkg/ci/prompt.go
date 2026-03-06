@@ -34,7 +34,7 @@ const PromptDeployInputs = `kindling-deploy inputs:
   env — Extra env vars as YAML block (Kubernetes []EnvVar list format)
   dependencies — Dependencies as YAML block
   ingress-host — Ingress hostname
-  ingress-class — Ingress class name (default: nginx)
+  ingress-class — Ingress class name (default: traefik)
   health-check-path — HTTP health check path (default: /healthz)
   health-check-type — http (default), grpc, or none
   replicas — Number of replicas (default: 1)

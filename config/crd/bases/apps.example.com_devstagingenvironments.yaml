@@ -596,7 +596,7 @@ spec:
                     type: string
                   ingressClassName:
                     description: IngressClassName is the name of the IngressClass
-                      to use (e.g. "nginx").
+                      to use (e.g. "traefik").
                     type: string
                   path:
                     default: /

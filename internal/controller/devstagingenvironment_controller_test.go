@@ -335,7 +335,7 @@ var _ = Describe("buildIngress", func() {
 
 	It("builds an Ingress with the specified host", func() {
 		cr := newTestDSE("test-app")
-		ingressClassName := "nginx"
+		ingressClassName := "traefik"
 		cr.Spec.Ingress = &appsv1alpha1.IngressSpec{
 			Enabled:          true,
 			Host:             "test-app.localhost",
@@ -346,7 +346,7 @@ var _ = Describe("buildIngress", func() {
 		Expect(ing.Name).To(Equal("test-app"))
 		Expect(ing.Spec.Rules).To(HaveLen(1))
 		Expect(ing.Spec.Rules[0].Host).To(Equal("test-app.localhost"))
-		Expect(*ing.Spec.IngressClassName).To(Equal("nginx"))
+		Expect(*ing.Spec.IngressClassName).To(Equal("traefik"))
 	})
 
 	It("defaults path to /", func() {
@@ -441,7 +441,7 @@ var _ = Describe("DevStagingEnvironment Reconciler", func() {
 
 		BeforeEach(func() {
 			cr = newTestDSE("reconcile-ingress")
-			ingressClassName := "nginx"
+			ingressClassName := "traefik"
 			cr.Spec.Ingress = &appsv1alpha1.IngressSpec{
 				Enabled:          true,
 				Host:             "test.localhost",

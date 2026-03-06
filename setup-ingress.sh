@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────
-# setup-ingress.sh — Install ingress-nginx and the in-cluster
-# image registry on a Kind cluster.
+# setup-ingress.sh — Install Traefik ingress controller and the
+# in-cluster image registry on a Kind cluster.
 #
 # This script:
-#   1. Deploys the ingress-nginx controller with Kind-specific
-#      patches so it binds to host ports 80/443.
+#   1. Deploys Traefik as a DaemonSet with hostNetwork so it binds
+#      to the node's ports 80/443 (same model as the old
+#      ingress-nginx Kind deployment).
 #   2. Deploys a registry:2 pod with hostNetwork so containerd
 #      (via the mirror in kind-config.yaml) and Kaniko pods can
 #      both reach it.
@@ -39,20 +40,152 @@ echo "⏳ Waiting for registry to be ready..."
 kubectl wait --for=condition=available deployment/registry --timeout=60s
 echo "✅ Registry is ready at registry:5000 (in-cluster)"
 
-# ── Ingress controller ────────────────────────────────────────────
+# ── Ingress controller (Traefik) ──────────────────────────────────
 echo ""
-echo "📦 Installing ingress-nginx for Kind..."
+echo "📦 Installing Traefik ingress controller for Kind..."
 
-kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/kind/deploy.yaml
+# Create the traefik namespace
+kubectl create namespace traefik --dry-run=client -o yaml | kubectl apply -f -
 
-echo "⏳ Waiting for ingress-nginx controller to be ready..."
+# Deploy Traefik as a DaemonSet with hostNetwork on nodes labeled
+# ingress-ready=true (set by kind-config.yaml). This binds Traefik
+# directly to the host's port 80/443 — the same model ingress-nginx
+# used for Kind.
+kubectl apply -f - <<'MANIFEST'
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: traefik
+  namespace: traefik
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: traefik
+rules:
+  - apiGroups: [""]
+    resources: ["services", "endpoints", "secrets", "namespaces"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["extensions", "networking.k8s.io"]
+    resources: ["ingresses", "ingressclasses"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["extensions", "networking.k8s.io"]
+    resources: ["ingresses/status"]
+    verbs: ["update"]
+  - apiGroups: ["traefik.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: traefik
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: traefik
+subjects:
+  - kind: ServiceAccount
+    name: traefik
+    namespace: traefik
+---
+apiVersion: networking.k8s.io/v1
+kind: IngressClass
+metadata:
+  name: traefik
+  annotations:
+    ingressclass.kubernetes.io/is-default-class: "true"
+spec:
+  controller: traefik.io/ingress-controller
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: traefik
+  namespace: traefik
+  labels:
+    app.kubernetes.io/name: traefik
+    app.kubernetes.io/component: controller
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: traefik
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: traefik
+        app.kubernetes.io/component: controller
+    spec:
+      serviceAccountName: traefik
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      nodeSelector:
+        ingress-ready: "true"
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+        - key: node-role.kubernetes.io/master
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: traefik
+          image: traefik:v3.6
+          args:
+            - --entrypoints.web.address=:80
+            - --entrypoints.websecure.address=:443
+            - --providers.kubernetesingress
+            - --providers.kubernetesingress.ingressclass=traefik
+            - --providers.kubernetesingress.allowemptyservices=true
+            - --ping=true
+            - --log.level=INFO
+          ports:
+            - name: web
+              containerPort: 80
+              hostPort: 80
+              protocol: TCP
+            - name: websecure
+              containerPort: 443
+              hostPort: 443
+              protocol: TCP
+          securityContext:
+            capabilities:
+              add: [NET_BIND_SERVICE]
+              drop: [ALL]
+          readinessProbe:
+            httpGet:
+              path: /ping
+              port: 8080
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /ping
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+MANIFEST
 
-kubectl wait --namespace ingress-nginx \
+echo "⏳ Waiting for Traefik controller to be ready..."
+
+# Wait for the DaemonSet to schedule at least one pod before checking readiness
+echo "   Waiting for Traefik pod to be scheduled..."
+for i in $(seq 1 30); do
+  if kubectl get pods -n traefik -l app.kubernetes.io/name=traefik --no-headers 2>/dev/null | grep -q .; then
+    break
+  fi
+  sleep 2
+done
+
+kubectl wait --namespace traefik \
   --for=condition=ready pod \
-  --selector=app.kubernetes.io/component=controller \
+  --selector=app.kubernetes.io/name=traefik \
   --timeout=120s
 
-echo "✅ ingress-nginx is ready!"
+echo "✅ Traefik ingress controller is ready!"
 echo ""
 echo "Your Kind cluster now routes:"
 echo "  http://<host>.localhost  →  Ingress → Service → Pod"

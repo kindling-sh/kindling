@@ -35,8 +35,8 @@
           <mxGeometry x="30" y="50" width="150" height="55" as="geometry"/>
         </mxCell>
 
-        <!-- ingress-nginx -->
-        <mxCell id="ingress" value="🔶 ingress-nginx&lt;br&gt;controller" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;strokeWidth=2;fontSize=13;fontFamily=Architects Daughter;sketch=1;jiggle=2;" vertex="1" parent="cluster">
+        <!-- Traefik -->
+        <mxCell id="ingress" value="🔶 Traefik&lt;br&gt;controller" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;strokeWidth=2;fontSize=13;fontFamily=Architects Daughter;sketch=1;jiggle=2;" vertex="1" parent="cluster">
           <mxGeometry x="280" y="50" width="170" height="55" as="geometry"/>
         </mxCell>
 

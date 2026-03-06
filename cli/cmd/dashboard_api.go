@@ -169,8 +169,8 @@ func handleRegistry(w http.ResponseWriter, r *http.Request) {
 // ── /api/ingress-controller ─────────────────────────────────────
 
 func handleIngressController(w http.ResponseWriter, r *http.Request) {
-	out, err := kubectlJSON("get", "pods", "-n", "ingress-nginx",
-		"-l", "app.kubernetes.io/component=controller", "-o", "json")
+	out, err := kubectlJSON("get", "pods", "-n", "traefik",
+		"-l", "app.kubernetes.io/name=traefik", "-o", "json")
 	if err != nil {
 		jsonError(w, "ingress controller not found", 404)
 		return

@@ -27,4 +27,4 @@ spec:
   ingress:
     enabled: true
     host: ui.localhost
-    ingressClassName: nginx
+    ingressClassName: traefik
