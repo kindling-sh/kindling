@@ -430,13 +430,17 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 			"--namespace", snapshotNamespace,
 			"--create-namespace",
 			"-f", filepath.Join(outDir, "values-live.yaml"),
-			"--wait",
-			"--timeout", "5m",
+			"--timeout", "10m",
 		}
-		// Disable ingress for services the user didn't select
+		// Disable ingress for services the user didn't select;
+		// clear the dev-cluster hostname for selected services so the
+		// ingress catches all traffic on the LoadBalancer IP.
 		for _, svc := range ingressServices {
+			vk := helmValuesKey(svc)
 			if !selectedSet[svc] {
-				helmArgs = append(helmArgs, "--set", fmt.Sprintf("%s.ingress.enabled=false", helmValuesKey(svc)))
+				helmArgs = append(helmArgs, "--set", fmt.Sprintf("%s.ingress.enabled=false", vk))
+			} else {
+				helmArgs = append(helmArgs, "--set", fmt.Sprintf("%s.ingress.host=", vk))
 			}
 		}
 		if err := run("helm", helmArgs...); err != nil {
