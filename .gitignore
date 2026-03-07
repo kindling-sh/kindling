@@ -21,3 +21,4 @@ docs-site/.docusaurus/
 install.sh
 example-apps/
 .github/workflows/fuzz.yml
+kindling-snapshot/

@@ -495,6 +495,7 @@ while true; do
          --cache-repo=registry:5000/cache \
          --push-retry=3 \
          --skip-push-permission-check \
+         --custom-platform=linux/amd64 \
          ${DOCKERFILE_FLAG} \
       > "${BUILDS_DIR}/${SERVICE}.log" 2>&1
     EXIT_CODE=$?

@@ -1492,19 +1492,13 @@ func craneCopyImages(dses []snapshotDSE, registry, tag, userPrefix string) error
 			}
 		}
 
-		// Fallback: pull from in-cluster registry, rebuild for
-		// linux/amd64, then push. CI-built images on ARM Macs are
-		// arm64 which won't run on typical amd64 production nodes.
+		// Fallback: crane copy from in-cluster registry.
+		// Images are built with --custom-platform=linux/amd64 by
+		// the Kaniko build-agent, so crane copy is safe.
 		if !pushed && isClusterRegistryImage(dses[i].Image) {
 			src := registryPullRef(dses[i].Image, localPort)
-			if err := dockerPullRebuildPush(src, dst); err != nil {
-				warn(fmt.Sprintf("Docker amd64 rebuild failed for %s: %v — trying crane copy", dses[i].Name, err))
-				// Last resort: crane copy (will be host arch)
-				args := []string{"copy", "--insecure", src, dst}
-				if _, err := runSilent("crane", args...); err == nil {
-					pushed = true
-				}
-			} else {
+			args := []string{"copy", "--insecure", src, dst}
+			if _, err := runSilent("crane", args...); err == nil {
 				pushed = true
 			}
 		}
@@ -1562,41 +1556,6 @@ func findDockerImage(serviceName, userPrefix string) string {
 func dockerTagAndPush(localImage, dst string) error {
 	if _, err := runSilent("docker", "tag", localImage, dst); err != nil {
 		return fmt.Errorf("docker tag failed: %w", err)
-	}
-	if _, err := runSilent("docker", "push", dst); err != nil {
-		return fmt.Errorf("docker push failed: %w", err)
-	}
-	return nil
-}
-
-// dockerPullRebuildPush pulls an image from a (possibly insecure)
-// registry, rebuilds it for linux/amd64 using a trivial FROM-only
-// Dockerfile, then pushes the result. This fixes the arch mismatch
-// when CI builds on ARM Macs produce arm64 images that need to run
-// on amd64 production nodes.
-func dockerPullRebuildPush(src, dst string) error {
-	// Pull from the in-cluster registry (HTTP, so needs --tls-verify=false via crane)
-	if _, err := runSilent("crane", "pull", "--insecure", src, "/tmp/kindling-img.tar"); err != nil {
-		return fmt.Errorf("crane pull failed: %w", err)
-	}
-	if _, err := runSilent("docker", "load", "-i", "/tmp/kindling-img.tar"); err != nil {
-		return fmt.Errorf("docker load failed: %w", err)
-	}
-
-	// Write a trivial Dockerfile that just re-bases the pulled image
-	tmpDir, err := os.MkdirTemp("", "kindling-rebuild-*")
-	if err != nil {
-		return fmt.Errorf("cannot create temp dir: %w", err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	df := filepath.Join(tmpDir, "Dockerfile")
-	if err := os.WriteFile(df, []byte("FROM "+src+"\n"), 0644); err != nil {
-		return fmt.Errorf("cannot write Dockerfile: %w", err)
-	}
-
-	if _, err := runSilent("docker", "build", "--platform", "linux/amd64", "-t", dst, tmpDir); err != nil {
-		return fmt.Errorf("docker build --platform linux/amd64 failed: %w", err)
 	}
 	if _, err := runSilent("docker", "push", dst); err != nil {
 		return fmt.Errorf("docker push failed: %w", err)
