@@ -29,21 +29,21 @@ memory than Prometheus. The kindling dashboard auto-detects it — all charts,
 sparklines, and the PromQL console work out of the box.
 
 What gets installed:
-  • VictoriaMetrics single-node  (~60MB RAM, 2h default retention)
+  • VictoriaMetrics single-node  (~60MB RAM, 1d default retention)
   • kube-state-metrics           (~30MB RAM, cluster object metrics)
   • ServiceAccount + RBAC for kube-state-metrics
   • Scrape configs for kubelet, kube-state-metrics, and pod annotations
 
 Examples:
   kindling production metrics --context my-prod
-  kindling production metrics --context my-prod --retention 24h --scrape 30s
+  kindling production metrics --context my-prod --retention 7d --scrape 30s
   kindling production metrics --context my-prod --uninstall`,
 	RunE: runProductionMetrics,
 }
 
 func init() {
 	productionMetricsCmd.Flags().StringVar(&prodMetricsContext, "context", "", "Kubeconfig context for the production cluster (required)")
-	productionMetricsCmd.Flags().StringVar(&prodMetricsRetention, "retention", "2h", "How long to retain metrics data (e.g. 2h, 24h, 7d)")
+	productionMetricsCmd.Flags().StringVar(&prodMetricsRetention, "retention", "1d", "How long to retain metrics data (e.g. 1d, 7d, 30d)")
 	productionMetricsCmd.Flags().StringVar(&prodMetricsScrape, "scrape", "30s", "Scrape interval (e.g. 15s, 30s, 60s)")
 	productionMetricsCmd.Flags().BoolVar(&prodMetricsUninstall, "uninstall", false, "Remove metrics stack instead of installing")
 	_ = productionMetricsCmd.MarkFlagRequired("context")
@@ -55,6 +55,11 @@ func runProductionMetrics(cmd *cobra.Command, args []string) error {
 
 	if strings.HasPrefix(ctx, "kind-") {
 		return fmt.Errorf("context %q looks like a Kind cluster — production metrics are for external clusters", ctx)
+	}
+
+	// VictoriaMetrics requires retention >= 1 day
+	if err := validateRetention(prodMetricsRetention); err != nil {
+		return err
 	}
 
 	if prodMetricsUninstall {
@@ -482,4 +487,25 @@ func uninstallMetrics(ctx string) error {
 	success("Metrics stack removed")
 	fmt.Println()
 	return nil
+}
+
+// validateRetention checks that the retention string is at least 1 day.
+// VictoriaMetrics v1.106+ rejects -retentionPeriod smaller than 1d.
+func validateRetention(r string) error {
+	r = strings.TrimSpace(r)
+	if r == "" {
+		return fmt.Errorf("retention must not be empty")
+	}
+	suffix := r[len(r)-1]
+	switch suffix {
+	case 'd':
+		return nil // any day-based value is fine
+	case 'h':
+		return fmt.Errorf("VictoriaMetrics requires retention >= 1d; got %q (use e.g. 1d, 7d, 30d)", r)
+	case 's', 'm':
+		return fmt.Errorf("VictoriaMetrics requires retention >= 1d; got %q (use e.g. 1d, 7d, 30d)", r)
+	default:
+		// bare number: VictoriaMetrics treats as months, which is fine
+		return nil
+	}
 }

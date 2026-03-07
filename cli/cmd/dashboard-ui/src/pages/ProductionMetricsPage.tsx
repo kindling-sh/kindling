@@ -87,7 +87,7 @@ export function ProductionMetricsPage() {
   const [installLogs, setInstallLogs] = useState<{ type: string; message: string }[]>([]);
   const [installing, setInstalling] = useState(false);
   const [showInstall, setShowInstall] = useState(false);
-  const [installRetention, setInstallRetention] = useState('2h');
+  const [installRetention, setInstallRetention] = useState('1d');
   const [installScrape, setInstallScrape] = useState('30s');
 
   useEffect(() => {
@@ -198,8 +198,8 @@ export function ProductionMetricsPage() {
               <div style={{ display: 'flex', gap: 16, alignItems: 'flex-end' }}>
                 <div className="form-group" style={{ flex: 1 }}>
                   <label className="form-label">Retention</label>
-                  <input className="form-input" value={installRetention} onChange={e => setInstallRetention(e.target.value)} placeholder="2h" />
-                  <span className="form-hint">e.g. 2h, 24h, 7d</span>
+                  <input className="form-input" value={installRetention} onChange={e => setInstallRetention(e.target.value)} placeholder="1d" />
+                  <span className="form-hint">e.g. 1d, 7d, 30d (minimum 1d)</span>
                 </div>
                 <div className="form-group" style={{ flex: 1 }}>
                   <label className="form-label">Scrape Interval</label>

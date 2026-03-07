@@ -480,6 +480,12 @@ func handleProdMetricsInstall(w http.ResponseWriter, r *http.Request) {
 	prodMetricsRetention = body.Retention
 	prodMetricsScrape = body.Scrape
 
+	// Validate retention before starting the install
+	if err := validateRetention(prodMetricsRetention); err != nil {
+		send("error", err.Error())
+		return
+	}
+
 	// Create namespace
 	send("step", "Creating monitoring namespace")
 	nsYAML := `apiVersion: v1
