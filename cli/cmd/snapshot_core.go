@@ -131,7 +131,38 @@ func ensureIngressController(context string, progress func(string)) error {
 	return nil
 }
 
-// ── 5. Deploy to cluster ────────────────────────────────────────
+// ── 5. Detect IngressClass ───────────────────────────────────────
+
+// detectIngressClass returns the name of the IngressClass to use on
+// the target cluster. It prefers the default class; if there is exactly
+// one class it returns that; if there are multiple non-default classes
+// it returns the first one found. Returns "" only if no classes exist.
+func detectIngressClass(kubeCtx string) string {
+	// Try to get the default IngressClass first
+	out, err := runSilent("kubectl", "--context", kubeCtx,
+		"get", "ingressclass",
+		"-o", `jsonpath={range .items[?(@.metadata.annotations.ingressclass\.kubernetes\.io/is-default-class=="true")]}{.metadata.name}{end}`)
+	if err == nil && strings.TrimSpace(out) != "" {
+		return strings.TrimSpace(out)
+	}
+
+	// No default — list all classes
+	out, err = runSilent("kubectl", "--context", kubeCtx,
+		"get", "ingressclass",
+		"-o", "jsonpath={.items[*].metadata.name}")
+	if err != nil || strings.TrimSpace(out) == "" {
+		return ""
+	}
+
+	classes := strings.Fields(strings.TrimSpace(out))
+	if len(classes) == 1 {
+		return classes[0]
+	}
+	// Multiple non-default classes — return the first
+	return classes[0]
+}
+
+// ── 6. Deploy to cluster ────────────────────────────────────────
 
 // DeployOpts carries the parameters for deploying a snapshot chart to
 // a production cluster.
@@ -143,6 +174,7 @@ type DeployOpts struct {
 	ChartName       string          // Helm release name
 	DSEs            []snapshotDSE   // for ingress flag generation
 	SelectedIngress map[string]bool // services to enable ingress for
+	IngressClass    string          // IngressClass name for the target cluster
 }
 
 // deploySnapshot runs helm upgrade --install or kubectl apply -k
@@ -171,6 +203,9 @@ func deploySnapshot(opts DeployOpts) (string, error) {
 			if opts.SelectedIngress[dse.Name] {
 				helmArgs = append(helmArgs, "--set", fmt.Sprintf("%s.ingress.enabled=true", vk))
 				helmArgs = append(helmArgs, "--set", fmt.Sprintf("%s.ingress.host=", vk))
+				if opts.IngressClass != "" {
+					helmArgs = append(helmArgs, "--set", fmt.Sprintf("%s.ingress.ingressClassName=%s", vk, opts.IngressClass))
+				}
 			} else {
 				helmArgs = append(helmArgs, "--set", fmt.Sprintf("%s.ingress.enabled=false", vk))
 			}

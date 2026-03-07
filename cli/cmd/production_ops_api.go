@@ -169,6 +169,12 @@ func handleProdSnapshotDeploy(w http.ResponseWriter, r *http.Request) {
 		selectedSet[stripped] = true
 	}
 
+	// Auto-detect the IngressClass on the target cluster
+	ingClass := detectIngressClass(prodContext)
+	if ingClass != "" {
+		send("step", fmt.Sprintf("Using IngressClass: %s", ingClass))
+	}
+
 	send("step", fmt.Sprintf("Deploying to %s (namespace: %s)", prodContext, ns))
 	out, err := deploySnapshot(DeployOpts{
 		Context:         prodContext,
@@ -178,6 +184,7 @@ func handleProdSnapshotDeploy(w http.ResponseWriter, r *http.Request) {
 		ChartName:       chartName,
 		DSEs:            dses,
 		SelectedIngress: selectedSet,
+		IngressClass:    ingClass,
 	})
 	if err != nil {
 		send("error", fmt.Sprintf("Deploy failed: %s", out))

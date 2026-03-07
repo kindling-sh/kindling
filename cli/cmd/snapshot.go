@@ -401,6 +401,12 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 		step("🌐", "No services selected for public ingress")
 	}
 
+	// Detect the IngressClass on the target cluster
+	ingClass := detectIngressClass(snapshotContext)
+	if ingClass != "" {
+		step("🌐", fmt.Sprintf("Using IngressClass: %s", ingClass))
+	}
+
 	switch snapshotFormat {
 	case "helm":
 		if !commandExists("helm") {
@@ -421,6 +427,9 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 			if selectedSet[dse.Name] {
 				helmArgs = append(helmArgs, "--set", fmt.Sprintf("%s.ingress.enabled=true", vk))
 				helmArgs = append(helmArgs, "--set", fmt.Sprintf("%s.ingress.host=", vk))
+				if ingClass != "" {
+					helmArgs = append(helmArgs, "--set", fmt.Sprintf("%s.ingress.ingressClassName=%s", vk, ingClass))
+				}
 			} else {
 				helmArgs = append(helmArgs, "--set", fmt.Sprintf("%s.ingress.enabled=false", vk))
 			}
