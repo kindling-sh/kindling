@@ -165,6 +165,12 @@ func commandExists(name string) bool {
 	return err == nil
 }
 
+// fileExists returns true if path exists and is not a directory.
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
+}
+
 // resolveProjectDir returns the project directory.
 //
 // Resolution order:

@@ -299,24 +299,9 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 	success(fmt.Sprintf("Found %d service(s)", len(dses)))
 
 	// Strip GitHub actor prefix (e.g. "jeff-vincent-gateway" → "gateway")
-	var userPrefix string
-	if prefix := detectUserPrefix(dses); prefix != "" {
-		userPrefix = prefix
-		step("✂️", fmt.Sprintf("Stripping user prefix %q from service names", strings.TrimSuffix(prefix, "-")))
-		for i := range dses {
-			if stripped := strings.TrimPrefix(dses[i].Name, prefix); stripped != "" {
-				dses[i].Name = stripped
-			}
-			// Also strip prefix from ingress host
-			if dses[i].Ingress != nil && dses[i].Ingress.Host != "" {
-				dses[i].Ingress.Host = strings.TrimPrefix(dses[i].Ingress.Host, prefix)
-			}
-			// Strip prefix from env var values (e.g. service URLs like
-			// "http://jeff-vincent-orders:5000" → "http://orders:5000")
-			for j := range dses[i].Env {
-				dses[i].Env[j].Value = strings.ReplaceAll(dses[i].Env[j].Value, prefix, "")
-			}
-		}
+	userPrefix := stripDSEPrefix(dses)
+	if userPrefix != "" {
+		step("✂️", fmt.Sprintf("Stripping user prefix %q from service names", strings.TrimSuffix(userPrefix, "-")))
 	}
 
 	chartName := snapshotName
@@ -348,17 +333,8 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	var exportErr error
-	switch snapshotFormat {
-	case "helm":
-		exportErr = exportHelm(outDir, chartName, dses)
-	case "kustomize":
-		exportErr = exportKustomize(outDir, chartName, dses)
-	default:
-		return fmt.Errorf("unknown format %q — use 'helm' or 'kustomize'", snapshotFormat)
-	}
-	if exportErr != nil {
-		return exportErr
+	if err := exportSnapshot(snapshotFormat, outDir, chartName, dses); err != nil {
+		return err
 	}
 
 	// ── Deploy to production cluster ───────────────────────────

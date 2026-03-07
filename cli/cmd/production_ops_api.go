@@ -126,113 +126,48 @@ func handleProdSnapshotDeploy(w http.ResponseWriter, r *http.Request) {
 	}
 	send("step", fmt.Sprintf("Found %d service(s)", len(dses)))
 
-	// Strip user prefix
-	if prefix := detectUserPrefix(dses); prefix != "" {
-		send("step", fmt.Sprintf("Stripping user prefix %q", strings.TrimSuffix(prefix, "-")))
-		for i := range dses {
-			if stripped := strings.TrimPrefix(dses[i].Name, prefix); stripped != "" {
-				dses[i].Name = stripped
-			}
-			if dses[i].Ingress != nil && dses[i].Ingress.Host != "" {
-				dses[i].Ingress.Host = strings.TrimPrefix(dses[i].Ingress.Host, prefix)
-			}
-			for j := range dses[i].Env {
-				dses[i].Env[j].Value = strings.ReplaceAll(dses[i].Env[j].Value, prefix, "")
-			}
-		}
+	// ── Strip user prefix (shared pipeline) ────────────────────
+	userPrefix := stripDSEPrefix(dses)
+	if userPrefix != "" {
+		send("step", fmt.Sprintf("Stripped user prefix %q", strings.TrimSuffix(userPrefix, "-")))
 	}
 
-	// Push images
-	send("step", fmt.Sprintf("Pushing images to %s", body.Registry))
-	for i := range dses {
-		dst := registryImage(dses[i].Name, body.Registry, tag)
-		send("step", fmt.Sprintf("  %s → %s", dses[i].Name, dst))
-		dses[i].Image = dst
-	}
+	// ── Push images (shared pipeline) ──────────────────────────
+	pushSnapshotImages(dses, body.Registry, tag, userPrefix, func(msg string) {
+		send("step", msg)
+	})
 
-	// Try crane copy for real pushes
-	if commandExists("crane") {
-		needsPF := false
-		for _, dse := range dses {
-			if isClusterRegistryImage(dse.Image) {
-				needsPF = true
-				break
-			}
-		}
-		if needsPF {
-			send("step", "Port-forwarding to in-cluster registry")
-		}
-		// Best-effort push — images already rewritten above
-		_ = craneCopyImages(dses, body.Registry, tag, detectUserPrefix(dses))
-	}
-
-	// Generate chart
+	// ── Generate chart (shared pipeline) ────────────────────────
 	chartName := "kindling-snapshot"
 	outDir := "/tmp/kindling-snapshot-" + fmt.Sprintf("%d", time.Now().UnixMilli())
 
-	switch format {
-	case "helm":
-		send("step", "Generating Helm chart")
-		if err := exportHelm(outDir, chartName, dses); err != nil {
-			send("error", "Chart generation failed: "+err.Error())
-			return
-		}
-	case "kustomize":
-		send("step", "Generating Kustomize overlay")
-		if err := exportKustomize(outDir, chartName, dses); err != nil {
-			send("error", "Kustomize generation failed: "+err.Error())
-			return
-		}
+	send("step", fmt.Sprintf("Generating %s chart", format))
+	if err := exportSnapshot(format, outDir, chartName, dses); err != nil {
+		send("error", "Chart generation failed: "+err.Error())
+		return
 	}
 
-	// Build ingress selection set
+	// ── Deploy (shared pipeline) ────────────────────────────────
 	selectedSet := make(map[string]bool)
 	for _, svc := range body.Ingress {
 		selectedSet[svc] = true
 	}
 
-	// Deploy
 	send("step", fmt.Sprintf("Deploying to %s (namespace: %s)", prodContext, ns))
-
-	switch format {
-	case "helm":
-		if !commandExists("helm") {
-			send("error", "helm not found on PATH")
-			return
-		}
-		helmArgs := []string{
-			"upgrade", "--install", chartName, outDir,
-			"--kube-context", prodContext,
-			"--namespace", ns,
-			"--create-namespace",
-			"--timeout", "10m",
-		}
-		// Ingress selection
-		for _, dse := range dses {
-			if dse.Ingress != nil && dse.Ingress.Enabled {
-				vk := helmValuesKey(dse.Name)
-				if !selectedSet[dse.Name] {
-					helmArgs = append(helmArgs, "--set", fmt.Sprintf("%s.ingress.enabled=false", vk))
-				} else {
-					helmArgs = append(helmArgs, "--set", fmt.Sprintf("%s.ingress.host=", vk))
-				}
-			}
-		}
-		out, err := runSilent("helm", helmArgs...)
-		if err != nil {
-			send("error", "Helm deploy failed: "+out)
-			return
-		}
-		send("step", "Helm deploy complete")
-	case "kustomize":
-		out, err := runSilent("kubectl", "--context", prodContext, "apply",
-			"-k", outDir, "-n", ns)
-		if err != nil {
-			send("error", "Kustomize deploy failed: "+out)
-			return
-		}
-		send("step", "Kustomize deploy complete")
+	out, err := deploySnapshot(DeployOpts{
+		Context:         prodContext,
+		Namespace:       ns,
+		Format:          format,
+		OutDir:          outDir,
+		ChartName:       chartName,
+		DSEs:            dses,
+		SelectedIngress: selectedSet,
+	})
+	if err != nil {
+		send("error", fmt.Sprintf("Deploy failed: %s", out))
+		return
 	}
+	send("step", "Deploy complete")
 
 	send("done", "Deployed to production cluster")
 }
