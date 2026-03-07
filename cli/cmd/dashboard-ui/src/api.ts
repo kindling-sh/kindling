@@ -447,7 +447,7 @@ export async function fetchSnapshotStatus(): Promise<SnapshotStatus> {
 }
 
 export function streamSnapshotDeploy(
-  body: { registry: string; tag: string; format: string; namespace: string; ingress: string[] },
+  body: { registry: string; registry_user: string; registry_pass: string; tag: string; format: string; namespace: string; ingress: string[] },
   onMessage: (msg: { type: string; message: string }) => void,
 ): () => void {
   const controller = new AbortController();

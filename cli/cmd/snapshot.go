@@ -316,6 +316,7 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 	outDir, _ = filepath.Abs(outDir)
 
 	// ── Registry: re-tag and push images ────────────────────────
+	var regUser, regPass string
 	if snapshotRegistry != "" {
 		tag := snapshotTag
 		if tag == "" {
@@ -323,7 +324,25 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 		}
 		step("🏷", fmt.Sprintf("Re-tagging images → %s (tag: %s)", snapshotRegistry, tag))
 
-		if err := craneCopyImages(dses, snapshotRegistry, tag, userPrefix); err != nil {
+		// Prompt for registry credentials
+		regHost := registryHost(snapshotRegistry)
+		step("🔑", fmt.Sprintf("Registry credentials for %s", regHost))
+		form := huh.NewForm(
+			huh.NewGroup(
+				huh.NewInput().
+					Title("Username").
+					Value(&regUser),
+				huh.NewInput().
+					Title("Password / Token").
+					EchoMode(huh.EchoModePassword).
+					Value(&regPass),
+			),
+		)
+		if err := form.Run(); err != nil {
+			return fmt.Errorf("registry credentials cancelled: %w", err)
+		}
+
+		if err := craneCopyImages(dses, snapshotRegistry, tag, userPrefix, regUser, regPass); err != nil {
 			warn(fmt.Sprintf("Could not push images: %v", err))
 			warn("Falling back to image references only (no push)")
 			// Still rewrite image refs so the chart targets the right registry
@@ -1410,6 +1429,18 @@ func isClusterRegistryImage(image string) bool {
 	return false
 }
 
+// registryHost extracts the hostname (with port) from a registry string.
+// e.g. "ghcr.io/myorg" → "ghcr.io", "jeffvincent" → "index.docker.io"
+func registryHost(registry string) string {
+	parts := strings.SplitN(registry, "/", 2)
+	host := parts[0]
+	if !strings.Contains(host, ".") {
+		// Bare name like "jeffvincent" → Docker Hub
+		return "index.docker.io"
+	}
+	return host
+}
+
 // startRegistryPortForward opens a kubectl port-forward to the in-cluster
 // registry service and returns the local port and a cleanup function.
 func startRegistryPortForward() (int, func(), error) {
@@ -1474,10 +1505,47 @@ func startRegistryPortForward() (int, func(), error) {
 // stripped from DSE names. It's needed to find images in the Docker daemon
 // because `kindling load` tags them with the original prefixed name
 // (e.g. "jeff-vincent-gateway:12345").
-func craneCopyImages(dses []snapshotDSE, registry, tag, userPrefix string) error {
+func craneCopyImages(dses []snapshotDSE, registry, tag, userPrefix, regUser, regPass string) error {
 	// Check crane is installed
 	if _, err := exec.LookPath("crane"); err != nil {
 		return fmt.Errorf("crane is required for --registry (brew install crane)")
+	}
+
+	// Build a temporary Docker config dir so crane bypasses
+	// Docker Desktop's "credsStore":"desktop" credential helper,
+	// which crane can't resolve properly.
+	var craneEnv []string
+	if regUser != "" && regPass != "" {
+		tmpDir, err := os.MkdirTemp("", "kindling-crane-*")
+		if err != nil {
+			return fmt.Errorf("cannot create temp docker config: %w", err)
+		}
+		defer os.RemoveAll(tmpDir)
+
+		// Write a minimal config with no credsStore
+		if err := os.WriteFile(filepath.Join(tmpDir, "config.json"), []byte(`{"auths":{}}`), 0600); err != nil {
+			return fmt.Errorf("cannot write temp docker config: %w", err)
+		}
+
+		craneEnv = []string{"DOCKER_CONFIG=" + tmpDir}
+
+		regHost := registryHost(registry)
+		loginCmd := exec.Command("crane", "auth", "login", regHost, "-u", regUser, "-p", regPass)
+		loginCmd.Env = append(os.Environ(), craneEnv...)
+		if out, err := loginCmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("crane auth login failed for %s: %w (output: %s)", regHost, err, string(out))
+		}
+		step("🔑", fmt.Sprintf("Authenticated to %s", regHost))
+	}
+
+	// runCrane executes crane with the isolated Docker config.
+	runCrane := func(args ...string) (string, error) {
+		cmd := exec.Command("crane", args...)
+		if len(craneEnv) > 0 {
+			cmd.Env = append(os.Environ(), craneEnv...)
+		}
+		out, err := cmd.CombinedOutput()
+		return strings.TrimSpace(string(out)), err
 	}
 
 	// Check if any images need the in-cluster registry
@@ -1533,9 +1601,10 @@ func craneCopyImages(dses []snapshotDSE, registry, tag, userPrefix string) error
 		// the Kaniko build-agent, so crane copy is safe.
 		if !pushed && isClusterRegistryImage(dses[i].Image) {
 			src := registryPullRef(dses[i].Image, localPort)
-			args := []string{"copy", "--insecure", src, dst}
-			if _, err := runSilent("crane", args...); err == nil {
+			if out, err := runCrane("copy", "--insecure", src, dst); err == nil {
 				pushed = true
+			} else {
+				warn(fmt.Sprintf("crane copy failed for %s: %v (src=%s, output=%s)", dses[i].Name, err, src, out))
 			}
 		}
 

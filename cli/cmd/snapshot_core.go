@@ -46,14 +46,14 @@ func stripDSEPrefix(dses []snapshotDSE) string {
 // rewritten so the generated chart references the correct registry.
 //
 // progress is an optional callback for streaming status messages.
-func pushSnapshotImages(dses []snapshotDSE, registry, tag, userPrefix string, progress func(string)) {
+func pushSnapshotImages(dses []snapshotDSE, registry, tag, userPrefix, regUser, regPass string, progress func(string)) {
 	if progress == nil {
 		progress = func(string) {}
 	}
 
 	progress(fmt.Sprintf("Pushing images to %s (tag: %s)", registry, tag))
 
-	err := craneCopyImages(dses, registry, tag, userPrefix)
+	err := craneCopyImages(dses, registry, tag, userPrefix, regUser, regPass)
 	if err != nil {
 		progress(fmt.Sprintf("Image push encountered errors: %v — falling back to ref-only rewrite", err))
 		// Fallback: rewrite image refs so the chart targets the right

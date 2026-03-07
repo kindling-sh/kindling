@@ -66,11 +66,13 @@ func handleProdSnapshotDeploy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var body struct {
-		Registry  string   `json:"registry"`
-		Tag       string   `json:"tag"`
-		Format    string   `json:"format"`
-		Namespace string   `json:"namespace"`
-		Ingress   []string `json:"ingress"` // services to enable ingress for
+		Registry     string   `json:"registry"`
+		RegistryUser string   `json:"registry_user"`
+		RegistryPass string   `json:"registry_pass"`
+		Tag          string   `json:"tag"`
+		Format       string   `json:"format"`
+		Namespace    string   `json:"namespace"`
+		Ingress      []string `json:"ingress"` // services to enable ingress for
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonError(w, "invalid request body", 400)
@@ -133,7 +135,7 @@ func handleProdSnapshotDeploy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// ── Push images (shared pipeline) ──────────────────────────
-	pushSnapshotImages(dses, body.Registry, tag, userPrefix, func(msg string) {
+	pushSnapshotImages(dses, body.Registry, tag, userPrefix, body.RegistryUser, body.RegistryPass, func(msg string) {
 		send("step", msg)
 	})
 

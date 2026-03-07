@@ -11,6 +11,8 @@ export function ProductionDeployPage() {
 
   // Form state
   const [registry, setRegistry] = useState('');
+  const [registryUser, setRegistryUser] = useState('');
+  const [registryPass, setRegistryPass] = useState('');
   const [tag, setTag] = useState('latest');
   const [format, setFormat] = useState<'helm' | 'kustomize'>('helm');
   const [namespace, setNamespace] = useState('default');
@@ -57,7 +59,7 @@ export function ProductionDeployPage() {
     setLogs([]);
 
     const cancel = streamSnapshotDeploy(
-      { registry, tag, format, namespace, ingress: Array.from(selectedIngress) },
+      { registry, registry_user: registryUser, registry_pass: registryPass, tag, format, namespace, ingress: Array.from(selectedIngress) },
       (msg) => {
         setLogs(prev => [...prev, msg]);
         if (msg.type === 'done' || msg.type === 'error') {
@@ -180,6 +182,25 @@ export function ProductionDeployPage() {
                         onChange={e => setRegistry(e.target.value)}
                       />
                       <span className="form-hint">Images will be pushed as registry/service:tag</span>
+                    </div>
+                    <div className="form-group" style={{ marginTop: 12 }}>
+                      <label className="form-label">Username</label>
+                      <input
+                        className="form-input"
+                        placeholder="Registry username"
+                        value={registryUser}
+                        onChange={e => setRegistryUser(e.target.value)}
+                      />
+                    </div>
+                    <div className="form-group" style={{ marginTop: 12 }}>
+                      <label className="form-label">Password / Token</label>
+                      <input
+                        className="form-input"
+                        type="password"
+                        placeholder="Registry password or access token"
+                        value={registryPass}
+                        onChange={e => setRegistryPass(e.target.value)}
+                      />
                     </div>
                     <div className="form-group" style={{ marginTop: 12 }}>
                       <label className="form-label">Tag</label>
