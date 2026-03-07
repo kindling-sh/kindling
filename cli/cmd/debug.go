@@ -128,8 +128,16 @@ type debugState struct {
 }
 
 // debugStateFile returns the path to the debug state file for a deployment.
+// Uses ~/.kindling/ so state is always findable regardless of which directory
+// the user runs from (unlike kindlingDir() which depends on git rev-parse).
 func debugStateFile(deployment string) string {
-	return filepath.Join(kindlingDir(), fmt.Sprintf("debug-%s.json", deployment))
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return filepath.Join(kindlingDir(), fmt.Sprintf("debug-%s.json", deployment))
+	}
+	dir := filepath.Join(home, ".kindling")
+	os.MkdirAll(dir, 0755)
+	return filepath.Join(dir, fmt.Sprintf("debug-%s.json", deployment))
 }
 
 func saveDebugState(state debugState) error {
@@ -679,18 +687,18 @@ func buildDebugCommand(prof *debugProfile, runtimeKey, origCmd string) string {
 			// The command starts with a Python tool (uvicorn, gunicorn, etc.)
 			// Normalize multi-worker flags, then wrap with debugpy.
 			normalized := normalizePythonForDebug(fields)
-			return fmt.Sprintf("pip install debugpy -q 2>/dev/null; python -m debugpy --listen 0.0.0.0:%d -m %s",
+			return fmt.Sprintf("pip install debugpy -q 2>/dev/null; python -m debugpy --listen 0.0.0.0:%d --wait-for-client -m %s",
 				prof.Port, strings.Join(normalized, " "))
 		}
 		restFields := fields[runtimeIdx+1:]
 		// Handle "python -m uvicorn ..." pattern — normalize tool args.
 		if len(restFields) >= 2 && restFields[0] == "-m" {
 			toolArgs := normalizePythonForDebug(restFields[1:])
-			return fmt.Sprintf("pip install debugpy -q 2>/dev/null; python -m debugpy --listen 0.0.0.0:%d -m %s",
+			return fmt.Sprintf("pip install debugpy -q 2>/dev/null; python -m debugpy --listen 0.0.0.0:%d --wait-for-client -m %s",
 				prof.Port, strings.Join(toolArgs, " "))
 		}
 		rest := strings.Join(restFields, " ")
-		return fmt.Sprintf("pip install debugpy -q 2>/dev/null; python -m debugpy --listen 0.0.0.0:%d %s", prof.Port, rest)
+		return fmt.Sprintf("pip install debugpy -q 2>/dev/null; python -m debugpy --listen 0.0.0.0:%d --wait-for-client %s", prof.Port, rest)
 
 	case "ruby":
 		// Find the ruby binary, skipping entrypoint wrappers.
