@@ -148,9 +148,17 @@ func handleProdSnapshotDeploy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// ── Deploy (shared pipeline) ────────────────────────────────
+	// The frontend sends ingress names with the original user prefix
+	// (from /api/prod/snapshot/status), but DSE names have been
+	// stripped above. Strip the same prefix from ingress selections
+	// so the lookup matches the chart's values keys.
 	selectedSet := make(map[string]bool)
 	for _, svc := range body.Ingress {
-		selectedSet[svc] = true
+		stripped := svc
+		if userPrefix != "" {
+			stripped = strings.TrimPrefix(svc, userPrefix)
+		}
+		selectedSet[stripped] = true
 	}
 
 	send("step", fmt.Sprintf("Deploying to %s (namespace: %s)", prodContext, ns))
