@@ -4,44 +4,53 @@ import type { PrometheusStatus, NodeMetric, PodMetric, MetricsStackStatus } from
 
 // ── SVG Sparkline Chart ─────────────────────────────────────────
 
-function Sparkline({ data, width = 280, height = 60, color = 'var(--accent)', label }: {
+function Sparkline({ data, width = 320, height = 72, color = 'var(--accent)' }: {
   data: [number, string][];
   width?: number;
   height?: number;
   color?: string;
-  label?: string;
 }) {
-  if (!data || data.length < 2) return <div className="prod-spark-empty">No data</div>;
+  if (!data || data.length < 2) {
+    return (
+      <div className="spark-empty">
+        <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`}>
+          <line x1="0" y1={height / 2} x2={width} y2={height / 2} stroke="var(--border-subtle)" strokeWidth="1" strokeDasharray="4 4" />
+        </svg>
+        <span className="spark-empty-label">Waiting for data…</span>
+      </div>
+    );
+  }
 
   const values = data.map(d => parseFloat(d[1]) || 0);
   const min = Math.min(...values);
   const max = Math.max(...values);
   const range = max - min || 1;
+  const pad = 2;
 
   const points = values.map((v, i) => {
     const x = (i / (values.length - 1)) * width;
-    const y = height - ((v - min) / range) * (height - 8) - 4;
+    const y = height - pad - ((v - min) / range) * (height - pad * 2);
     return `${x},${y}`;
   }).join(' ');
 
+  const lastY = height - pad - ((values[values.length - 1] - min) / range) * (height - pad * 2);
   const areaPoints = `0,${height} ${points} ${width},${height}`;
-  const latest = values[values.length - 1];
+  const gradId = `sg-${Math.random().toString(36).slice(2, 8)}`;
 
   return (
-    <div className="prod-spark">
-      {label && <div className="prod-spark-label">{label}</div>}
-      <svg width={width} height={height} className="prod-spark-svg">
+    <div className="spark-wrap">
+      <svg width="100%" height={height} viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" className="spark-svg">
         <defs>
-          <linearGradient id={`grad-${label}`} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={color} stopOpacity="0.25" />
-            <stop offset="100%" stopColor={color} stopOpacity="0.02" />
+          <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={color} stopOpacity="0.18" />
+            <stop offset="100%" stopColor={color} stopOpacity="0" />
           </linearGradient>
         </defs>
-        <polygon points={areaPoints} fill={`url(#grad-${label})`} />
+        <polygon points={areaPoints} fill={`url(#${gradId})`} />
         <polyline points={points} fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-        <circle cx={width} cy={height - ((latest - min) / range) * (height - 8) - 4} r="3" fill={color} />
+        <circle cx={width} cy={lastY} r="2.5" fill={color} />
+        <circle cx={width} cy={lastY} r="5" fill={color} fillOpacity="0.2" />
       </svg>
-      <div className="prod-spark-value" style={{ color }}>{latest.toFixed(2)}</div>
     </div>
   );
 }
@@ -254,102 +263,40 @@ export function ProductionMetricsPage() {
       {/* VictoriaMetrics dashboards — grouped by category */}
       {promStatus?.detected && (
         <>
-          {/* Cluster Health */}
-          {(() => {
-            const health = PRESET_QUERIES.filter(p => p.category === 'health');
-            const hasData = health.some(p => rangeData[p.label] || instantData[p.label] !== undefined);
+          {(['health', 'workloads', 'resources'] as const).map(cat => {
+            const presets = PRESET_QUERIES.filter(p => p.category === cat);
+            const hasData = presets.some(p => rangeData[p.label] || instantData[p.label] !== undefined);
             if (!hasData && Object.keys(rangeData).length > 0) return null;
+            const titles: Record<string, string> = { health: 'Cluster Health', workloads: 'Workload Status', resources: 'Resource Usage' };
             return (
-              <div style={{ marginBottom: 20 }}>
-                <h3 className="prod-section-title">Cluster Health</h3>
-                <div className="prod-chart-grid">
-                  {health.map(preset => {
+              <div key={cat} className="metrics-section">
+                <h3 className="metrics-section-title">{titles[cat]}</h3>
+                <div className="metrics-grid">
+                  {presets.map(preset => {
                     const data = rangeData[preset.label];
                     const current = instantData[preset.label];
                     return (
-                      <div key={preset.label} className="prod-chart-card" title={preset.description}>
-                        <div className="prod-chart-header">
-                          <span className="prod-chart-title">{preset.label}</span>
-                          {current !== undefined && (
-                            <span className="prod-chart-current" style={{ color: preset.color }}>
-                              {formatValue(current, preset.format)}
-                            </span>
-                          )}
+                      <div key={preset.label} className="metric-chart-card">
+                        <div className="metric-chart-top">
+                          <div className="metric-chart-label">{preset.label}</div>
+                          <div className="metric-chart-value" style={{ color: preset.color }}>
+                            {current !== undefined ? formatValue(current, preset.format) : '—'}
+                          </div>
                         </div>
-                        <Sparkline data={data || []} color={preset.color} label={preset.label} width={300} height={64} />
+                        <div className="metric-chart-desc">{preset.description}</div>
+                        <div className="metric-chart-graph">
+                          <Sparkline data={data || []} color={preset.color} />
+                        </div>
                       </div>
                     );
                   })}
                 </div>
               </div>
             );
-          })()}
-
-          {/* Workload Status */}
-          {(() => {
-            const workloads = PRESET_QUERIES.filter(p => p.category === 'workloads');
-            const hasData = workloads.some(p => rangeData[p.label] || instantData[p.label] !== undefined);
-            if (!hasData && Object.keys(rangeData).length > 0) return null;
-            return (
-              <div style={{ marginBottom: 20 }}>
-                <h3 className="prod-section-title">Workload Status</h3>
-                <div className="prod-chart-grid">
-                  {workloads.map(preset => {
-                    const data = rangeData[preset.label];
-                    const current = instantData[preset.label];
-                    return (
-                      <div key={preset.label} className="prod-chart-card" title={preset.description}>
-                        <div className="prod-chart-header">
-                          <span className="prod-chart-title">{preset.label}</span>
-                          {current !== undefined && (
-                            <span className="prod-chart-current" style={{ color: preset.color }}>
-                              {formatValue(current, preset.format)}
-                            </span>
-                          )}
-                        </div>
-                        <Sparkline data={data || []} color={preset.color} label={preset.label} width={300} height={64} />
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            );
-          })()}
-
-          {/* Resource Usage */}
-          {(() => {
-            const resources = PRESET_QUERIES.filter(p => p.category === 'resources');
-            const hasData = resources.some(p => rangeData[p.label] || instantData[p.label] !== undefined);
-            if (!hasData && Object.keys(rangeData).length > 0) return null;
-            return (
-              <div style={{ marginBottom: 20 }}>
-                <h3 className="prod-section-title">Resource Usage</h3>
-                <p className="text-dim" style={{ fontSize: 12, marginBottom: 8 }}>Container-level metrics from cAdvisor</p>
-                <div className="prod-chart-grid">
-                  {resources.map(preset => {
-                    const data = rangeData[preset.label];
-                    const current = instantData[preset.label];
-                    return (
-                      <div key={preset.label} className="prod-chart-card" title={preset.description}>
-                        <div className="prod-chart-header">
-                          <span className="prod-chart-title">{preset.label}</span>
-                          {current !== undefined && (
-                            <span className="prod-chart-current" style={{ color: preset.color }}>
-                              {formatValue(current, preset.format)}
-                            </span>
-                          )}
-                        </div>
-                        <Sparkline data={data || []} color={preset.color} label={preset.label} width={300} height={64} />
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            );
-          })()}
+          })}
 
           {/* Custom Query (advanced — collapsed by default) */}
-          <details className="card" style={{ marginTop: 20 }}>
+          <details className="card" style={{ marginTop: 24 }}>
             <summary className="card-header" style={{ cursor: 'pointer', userSelect: 'none' }}>
               <span className="card-icon">⌘</span>
               <h3>Custom Query</h3>
