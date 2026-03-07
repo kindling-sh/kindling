@@ -1,10 +1,13 @@
 import { useState } from 'react';
 import { useApi } from '../api';
-import type { K8sList, K8sEvent } from '../types';
+import type { K8sList, K8sEvent, K8sMetadata } from '../types';
 import { TimeAgo, EmptyState } from './shared';
 
 export function ProductionEventsPage() {
-  const { data, loading } = useApi<K8sList<K8sEvent>>('/api/prod/events');
+  const [namespace, setNamespace] = useState('');
+  const eventsPath = namespace ? `/api/prod/events?namespace=${encodeURIComponent(namespace)}` : '/api/prod/events';
+  const { data, loading } = useApi<K8sList<K8sEvent>>(eventsPath);
+  const { data: nsData } = useApi<K8sList<{ metadata: K8sMetadata }>>('/api/prod/namespaces');
   const [typeFilter, setTypeFilter] = useState<string>('');
   const [search, setSearch] = useState('');
 
@@ -42,12 +45,18 @@ export function ProductionEventsPage() {
         <div className="prod-filter-group">
           <button className={`prod-filter-btn ${typeFilter === '' ? 'active' : ''}`} onClick={() => setTypeFilter('')}>All</button>
           <button className={`prod-filter-btn ${typeFilter === 'Normal' ? 'active' : ''}`} onClick={() => setTypeFilter('Normal')}>Normal</button>
-          <button className={`prod-filter-btn prod-filter-warn ${typeFilter === 'Warning' ? 'active' : ''}`} onClick={() => setTypeFilter('Warning')}>
-            Warning {warnings > 0 && <span className="prod-filter-count">{warnings}</span>}
+          <button className={`prod-filter-btn ${typeFilter === 'Warning' ? 'active' : ''}`} onClick={() => setTypeFilter('Warning')}>
+            Warning {warnings > 0 && <span className="badge">{warnings}</span>}
           </button>
         </div>
         <input className="form-input" style={{ width: 220, fontSize: 12 }} placeholder="Search events…"
           value={search} onChange={e => setSearch(e.target.value)} />
+        <select className="form-input" style={{ width: 160, fontSize: 12 }} value={namespace} onChange={e => setNamespace(e.target.value)}>
+          <option value="">All namespaces</option>
+          {(nsData?.items || []).map(ns => (
+            <option key={ns.metadata.name} value={ns.metadata.name}>{ns.metadata.name}</option>
+          ))}
+        </select>
       </div>
 
       {items.length === 0 ? (
@@ -55,26 +64,24 @@ export function ProductionEventsPage() {
       ) : (
         <div className="prod-event-list">
           {items.map((ev, i) => (
-            <div key={ev.metadata.uid || i} className={`prod-event-item ${ev.type === 'Warning' ? 'prod-event-warn' : ''}`}>
-              <div className="prod-event-left">
-                <span className={`prod-event-type ${ev.type === 'Warning' ? 'warn' : 'normal'}`}>
-                  {ev.type === 'Warning' ? '⚠' : '✓'}
-                </span>
-                <div className="prod-event-body">
-                  <div className="prod-event-reason">
-                    <span className="mono" style={{ fontWeight: 600 }}>{ev.reason}</span>
-                    <span className="prod-event-object">
-                      {ev.involvedObject?.kind}/{ev.involvedObject?.name}
-                    </span>
-                    {ev.involvedObject?.namespace && (
-                      <span className="tag" style={{ fontSize: 10 }}>{ev.involvedObject.namespace}</span>
-                    )}
-                  </div>
-                  <div className="prod-event-message">{ev.message}</div>
+            <div key={ev.metadata.uid || i} className={`prod-event-item ${ev.type === 'Warning' ? 'warning' : ''}`}>
+              <span className="prod-event-icon">
+                {ev.type === 'Warning' ? '⚠' : '✓'}
+              </span>
+              <div className="prod-event-body">
+                <div className="prod-event-header">
+                  <span className="prod-event-reason">{ev.reason}</span>
+                  <span className="prod-event-object">
+                    {ev.involvedObject?.kind}/{ev.involvedObject?.name}
+                  </span>
+                  {ev.involvedObject?.namespace && (
+                    <span className="prod-event-ns">{ev.involvedObject.namespace}</span>
+                  )}
                 </div>
+                <div className="prod-event-message">{ev.message}</div>
               </div>
-              <div className="prod-event-right">
-                {(ev.count ?? 0) > 1 && <span className="prod-event-count">×{ev.count}</span>}
+              <div className="prod-event-meta">
+                {(ev.count ?? 0) > 1 && <span className="badge">×{ev.count}</span>}
                 <TimeAgo timestamp={ev.lastTimestamp || ev.metadata.creationTimestamp} />
               </div>
             </div>

@@ -1,15 +1,20 @@
 import { useState } from 'react';
 import { useApi, prodRestart, prodScale, prodDeletePod, prodRollback, prodExec, fetchProdLogs, fetchProdRolloutHistory } from '../api';
-import type { K8sList, K8sDeployment, K8sPod, RolloutRevision } from '../types';
+import type { K8sList, K8sDeployment, K8sPod, K8sStatefulSet, K8sDaemonSet, RolloutRevision } from '../types';
 import { StatusBadge, TimeAgo, EmptyState } from './shared';
 import { ActionButton, ActionModal, ConfirmDialog, useToast } from './actions';
+
+type WorkloadTab = 'deployments' | 'statefulsets' | 'daemonsets';
 
 export function ProductionWorkloadsPage() {
   const { data: deps, loading, refresh } = useApi<K8sList<K8sDeployment>>('/api/prod/deployments');
   const { data: podsData } = useApi<K8sList<K8sPod>>('/api/prod/pods');
+  const { data: stsData } = useApi<K8sList<K8sStatefulSet>>('/api/prod/statefulsets');
+  const { data: dsData } = useApi<K8sList<K8sDaemonSet>>('/api/prod/daemonsets');
   const { toast } = useToast();
 
   const [selected, setSelected] = useState<K8sDeployment | null>(null);
+  const [tab, setTab] = useState<WorkloadTab>('deployments');
   const [scaleTarget, setScaleTarget] = useState<{ ns: string; name: string; current: number } | null>(null);
   const [scaleCount, setScaleCount] = useState(1);
   const [restartTarget, setRestartTarget] = useState<{ ns: string; name: string } | null>(null);
@@ -94,6 +99,8 @@ export function ProductionWorkloadsPage() {
 
   const items = deps?.items || [];
   const allPods = podsData?.items || [];
+  const stsList = stsData?.items || [];
+  const dsList = dsData?.items || [];
 
   function podsForDep(dep: K8sDeployment) {
     const labels = dep.spec?.selector?.matchLabels;
@@ -109,7 +116,23 @@ export function ProductionWorkloadsPage() {
       <div className="page-header">
         <div className="page-header-left">
           <h1>Production Workloads</h1>
-          <p className="page-subtitle">Manage deployments — restart, scale, rollback, exec</p>
+          <p className="page-subtitle">
+            {items.length} deployments · {stsList.length} statefulsets · {dsList.length} daemonsets
+          </p>
+        </div>
+      </div>
+
+      <div className="prod-filter-bar">
+        <div className="prod-filter-group">
+          <button className={`prod-filter-btn ${tab === 'deployments' ? 'active' : ''}`} onClick={() => { setTab('deployments'); setSelected(null); }}>
+            Deployments {items.length > 0 && <span className="badge">{items.length}</span>}
+          </button>
+          <button className={`prod-filter-btn ${tab === 'statefulsets' ? 'active' : ''}`} onClick={() => { setTab('statefulsets'); setSelected(null); }}>
+            StatefulSets {stsList.length > 0 && <span className="badge">{stsList.length}</span>}
+          </button>
+          <button className={`prod-filter-btn ${tab === 'daemonsets' ? 'active' : ''}`} onClick={() => { setTab('daemonsets'); setSelected(null); }}>
+            DaemonSets {dsList.length > 0 && <span className="badge">{dsList.length}</span>}
+          </button>
         </div>
       </div>
 
@@ -196,6 +219,7 @@ export function ProductionWorkloadsPage() {
       )}
 
       {/* Deployments table */}
+      {tab === 'deployments' && (<>
       {items.length === 0 ? (
         <EmptyState icon="□" message="No deployments found in production cluster." />
       ) : (
@@ -283,6 +307,88 @@ export function ProductionWorkloadsPage() {
             })()}
           </div>
         </div>
+      )}
+      </>)}
+
+      {/* StatefulSets table */}
+      {tab === 'statefulsets' && (
+        stsList.length === 0 ? (
+          <EmptyState icon="◫" message="No StatefulSets found in production cluster." />
+        ) : (
+          <div className="table-wrap">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>StatefulSet</th>
+                  <th>Namespace</th>
+                  <th>Ready</th>
+                  <th>Service</th>
+                  <th>Age</th>
+                  <th style={{ textAlign: 'right' }}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {stsList.map(s => {
+                  const ns = s.metadata.namespace || 'default';
+                  const ready = (s.status?.readyReplicas ?? 0) >= (s.spec?.replicas ?? 1);
+                  return (
+                    <tr key={`${ns}/${s.metadata.name}`}>
+                      <td className="mono" style={{ fontWeight: 550 }}>{s.metadata.name}</td>
+                      <td><span className="tag">{ns}</span></td>
+                      <td><StatusBadge ok={ready} label={`${s.status?.readyReplicas ?? 0}/${s.spec?.replicas ?? 1}`} warn={!ready && (s.status?.readyReplicas ?? 0) > 0} /></td>
+                      <td className="mono" style={{ fontSize: 12 }}>{s.spec?.serviceName || '—'}</td>
+                      <td><TimeAgo timestamp={s.metadata.creationTimestamp} /></td>
+                      <td className="action-cell" style={{ textAlign: 'right' }}>
+                        <ActionButton icon="↻" label="" onClick={() => setRestartTarget({ ns, name: s.metadata.name })} small ghost />
+                        <ActionButton icon="⚖" label="" onClick={() => { setScaleTarget({ ns, name: s.metadata.name, current: s.spec?.replicas ?? 1 }); setScaleCount(s.spec?.replicas ?? 1); }} small ghost />
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )
+      )}
+
+      {/* DaemonSets table */}
+      {tab === 'daemonsets' && (
+        dsList.length === 0 ? (
+          <EmptyState icon="◈" message="No DaemonSets found in production cluster." />
+        ) : (
+          <div className="table-wrap">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>DaemonSet</th>
+                  <th>Namespace</th>
+                  <th>Desired</th>
+                  <th>Ready</th>
+                  <th>Available</th>
+                  <th>Age</th>
+                </tr>
+              </thead>
+              <tbody>
+                {dsList.map(d => {
+                  const ns = d.metadata.namespace || 'default';
+                  const desired = d.status?.desiredNumberScheduled ?? 0;
+                  const ready = d.status?.numberReady ?? 0;
+                  const allReady = ready >= desired && desired > 0;
+                  return (
+                    <tr key={`${ns}/${d.metadata.name}`}>
+                      <td className="mono" style={{ fontWeight: 550 }}>{d.metadata.name}</td>
+                      <td><span className="tag">{ns}</span></td>
+                      <td>{desired}</td>
+                      <td><StatusBadge ok={allReady} label={`${ready}/${desired}`} warn={!allReady && ready > 0} /></td>
+                      <td>{d.status?.numberAvailable ?? 0}</td>
+                      <td><TimeAgo timestamp={d.metadata.creationTimestamp} /></td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )
       )}
     </div>
   );
