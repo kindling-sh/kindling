@@ -210,6 +210,10 @@ func startDebug(deployment, namespace string) error {
 	if state, err := loadDebugState(deployment); err == nil {
 		fmt.Printf("⚠️  Debug session already active for %s (port %d)\n", deployment, state.LocalPort)
 		fmt.Println("   Run 'kindling debug --stop -d " + deployment + "' to stop it first")
+		// Print the "Debugger ready" marker so VS Code's preLaunchTask
+		// problem matcher can complete — otherwise F5 hangs silently
+		// waiting for the pattern that will never come.
+		fmt.Printf("  🔧 Debugger ready on localhost:%d\n", state.LocalPort)
 		return nil
 	}
 
