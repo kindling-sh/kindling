@@ -325,8 +325,35 @@ func startDebug(deployment, namespace string) error {
 	// inject that was never cleaned up), strip the debug wrapper to get the
 	// original application command. Prevents double-wrapping like:
 	//   python -m debugpy --listen ... -m debugpy --listen ... -m uvicorn ...
-	if stripped := stripDebugWrapper(origCmd); stripped != origCmd && stripped != "" {
-		origCmd = stripped
+	if stripped := stripDebugWrapper(origCmd); stripped != origCmd {
+		if stripped != "" {
+			origCmd = stripped
+		} else {
+			// Go's wait-loop wrapper destroys the original command — it can't
+			// be recovered from the string. Rollback to the pre-debug revision,
+			// wait for rollout, then re-read the original command.
+			step("⚠️", "Stale debug wrapper detected — rolling back deployment")
+			_ = run("kubectl", "rollout", "undo", fmt.Sprintf("deployment/%s", deployment),
+				"-n", namespace, "--context", kindContext())
+			_ = run("kubectl", "rollout", "status", fmt.Sprintf("deployment/%s", deployment),
+				"-n", namespace, "--context", kindContext(), "--timeout=60s")
+			time.Sleep(2 * time.Second)
+			clearDebugState(deployment)
+
+			newPod, err := findPodForDeployment(deployment, namespace)
+			if err != nil {
+				return fmt.Errorf("cannot find pod after rollback: %w", err)
+			}
+			origCmd = readContainerCommand(deployment, newPod, namespace, container)
+			if origCmd == "" {
+				return fmt.Errorf("cannot determine container command after rollback")
+			}
+			// Re-check for spec command after rollback
+			specCmd, _ = runCapture("kubectl", "get", fmt.Sprintf("deployment/%s", deployment),
+				"-n", namespace, "--context", kindContext(),
+				"-o", "jsonpath={.spec.template.spec.containers[0].command}")
+			hadCommand = strings.TrimSpace(specCmd) != "" && specCmd != "[]"
+		}
 	}
 
 	step("📝", fmt.Sprintf("Original command: %s", origCmd))
@@ -1135,10 +1162,31 @@ func hasSourceFiles(dir string) bool {
 //	  → "python app.py"
 //	"node --inspect=0.0.0.0:9229 server.js"
 //	  → "node server.js"
+//	"NODE_OPTIONS='--inspect=0.0.0.0:9229' npm start"
+//	  → "npm start"
+//	"echo 'Waiting for debug tools...'; while ...; /tmp/dlv exec ... /tmp/_debug_bin"
+//	  → "" (Go wrapper destroys original — caller must use saved state)
 //	"dlv exec --headless --listen=:2345 --api-version=2 --accept-multiclient --continue ./app"
 //	  → "./app"
 func stripDebugWrapper(cmd string) string {
 	if cmd == "" {
+		return ""
+	}
+
+	// Go wait-loop: "echo 'Waiting for debug tools...'; while [ ! -f /tmp/dlv ] ..."
+	// The original app command is not embedded — it was replaced entirely.
+	// Return empty so the caller falls back to the saved state.
+	if strings.Contains(cmd, "/tmp/dlv") && strings.Contains(cmd, "while") {
+		return ""
+	}
+
+	// NODE_OPTIONS wrapper: "NODE_OPTIONS='--inspect=...' <original command>"
+	if strings.HasPrefix(cmd, "NODE_OPTIONS=") {
+		// Strip the NODE_OPTIONS=... prefix (first field)
+		fields := strings.Fields(cmd)
+		if len(fields) > 1 {
+			return strings.Join(fields[1:], " ")
+		}
 		return ""
 	}
 
@@ -1185,7 +1233,7 @@ func stripDebugWrapper(cmd string) string {
 		}
 		return strings.Join(result, " ")
 
-	case strings.HasPrefix(fields[0], "dlv"):
+	case strings.HasPrefix(fields[0], "dlv") || strings.HasPrefix(fields[0], "/tmp/dlv"):
 		// "dlv exec --headless ... --continue ./app" → "./app"
 		if len(fields) > 0 {
 			return fields[len(fields)-1]
