@@ -60,6 +60,9 @@ func runExpose(cmd *cobra.Command, args []string) error {
 	// ── Check for already-running tunnel ────────────────────────
 	if info, _ := core.ReadTunnelInfo(); info != nil && info.PID > 0 {
 		if core.ProcessAlive(info.PID) {
+			// Re-patch ingresses in case new services were deployed since
+			// the tunnel started (e.g. a fresh kindling deploy).
+			patchIngressesForTunnel(info.URL)
 			success(fmt.Sprintf("Tunnel already running → %s%s%s (pid %d)", colorBold, info.URL, colorReset, info.PID))
 			fmt.Println()
 			fmt.Printf("  Stop with: %skindling expose --stop%s\n", colorCyan, colorReset)
@@ -215,8 +218,9 @@ func patchIngressesForTunnel(publicURL string) {
 
 	patched := 0
 	for _, name := range names {
+		ctx := core.ClusterContext(clusterName)
 		// Read current host
-		currentHost, err := runSilent("kubectl", "get", "ingress", name,
+		currentHost, err := runSilent("kubectl", "--context", ctx, "get", "ingress", name,
 			"-o", "jsonpath={.spec.rules[0].host}")
 		if err != nil || strings.TrimSpace(currentHost) == "" {
 			continue
@@ -238,7 +242,7 @@ func patchIngressesForTunnel(publicURL string) {
 
 		// 3. If the ingress has a TLS block (cert-manager, etc.), save it as
 		//    an annotation and remove it — cloudflared terminates TLS at the edge.
-		tlsJSON, _ := runSilent("kubectl", "get", "ingress", name,
+		tlsJSON, _ := runSilent("kubectl", "--context", ctx, "get", "ingress", name,
 			"-o", "jsonpath={.spec.tls}")
 		tlsJSON = strings.TrimSpace(tlsJSON)
 		if tlsJSON != "" && tlsJSON != "[]" {
@@ -249,7 +253,7 @@ func patchIngressesForTunnel(publicURL string) {
 		}
 
 		patchBytes, _ := json.Marshal(ops)
-		if _, err := runSilent("kubectl", "patch", "ingress", name,
+		if _, err := runSilent("kubectl", "--context", ctx, "patch", "ingress", name,
 			"--type=json", "-p="+string(patchBytes)); err == nil {
 			step("🔀", fmt.Sprintf("Routing tunnel → ingress/%s", name))
 			patched++
@@ -270,7 +274,8 @@ func restoreIngresses() {
 
 	restored := 0
 	for _, name := range names {
-		originalHost, err := runSilent("kubectl", "get", "ingress", name,
+		ctx := core.ClusterContext(clusterName)
+		originalHost, err := runSilent("kubectl", "--context", ctx, "get", "ingress", name,
 			"-o", `go-template={{index .metadata.annotations "kindling.dev/original-host"}}`,
 		)
 		if err != nil {
@@ -290,7 +295,7 @@ func restoreIngresses() {
 		}
 
 		// 3. If a saved TLS block exists, restore it and remove the annotation
-		tlsJSON, _ := runSilent("kubectl", "get", "ingress", name,
+		tlsJSON, _ := runSilent("kubectl", "--context", ctx, "get", "ingress", name,
 			"-o", `go-template={{index .metadata.annotations "kindling.dev/original-tls"}}`,
 		)
 		tlsJSON = strings.TrimSpace(tlsJSON)
@@ -305,7 +310,7 @@ func restoreIngresses() {
 		}
 
 		patchBytes, _ := json.Marshal(ops)
-		if _, err := runSilent("kubectl", "patch", "ingress", name,
+		if _, err := runSilent("kubectl", "--context", ctx, "patch", "ingress", name,
 			"--type=json", "-p="+string(patchBytes)); err == nil {
 			restored++
 		}
@@ -318,7 +323,8 @@ func restoreIngresses() {
 
 // getIngressNames returns the names of all Ingresses in the default namespace.
 func getIngressNames() ([]string, error) {
-	out, err := runSilent("kubectl", "get", "ingress",
+	ctx := core.ClusterContext(clusterName)
+	out, err := runSilent("kubectl", "--context", ctx, "get", "ingress",
 		"-o", "jsonpath={.items[*].metadata.name}")
 	if err != nil {
 		return nil, err

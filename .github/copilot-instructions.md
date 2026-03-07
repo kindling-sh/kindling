@@ -88,7 +88,7 @@ Source tarball → Kaniko (in runner sidecar) → `localhost:5001/<image>` → d
 
 **Languages detected:** Go
 
-**Dockerfiles found:** 8
+**Dockerfiles found:** 10
 
 **CI workflow:** Not yet generated. Run `kindling generate` to create one.
 
