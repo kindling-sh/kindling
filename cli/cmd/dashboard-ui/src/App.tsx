@@ -20,6 +20,7 @@ import { ProductionWorkloadsPage } from './pages/ProductionWorkloadsPage';
 import { ProductionNetworkPage } from './pages/ProductionNetworkPage';
 import { ProductionMetricsPage } from './pages/ProductionMetricsPage';
 import { ProductionEventsPage } from './pages/ProductionEventsPage';
+import { ProductionDeployPage } from './pages/ProductionDeployPage';
 import type { K8sList, K8sIngress } from './types';
 
 type Page =
@@ -39,7 +40,8 @@ type Page =
   | 'prod-workloads'
   | 'prod-network'
   | 'prod-metrics'
-  | 'prod-events';
+  | 'prod-events'
+  | 'prod-deploy';
 
 interface NavGroup {
   label: string;
@@ -92,10 +94,11 @@ const NAV_GROUPS: NavGroup[] = [
   {
     label: 'Production',
     items: [
-      { page: 'prod-overview', icon: '🏭', label: 'Overview' },
+      { page: 'prod-overview', icon: '⬢', label: 'Overview' },
+      { page: 'prod-deploy', icon: '▷', label: 'Deploy' },
       { page: 'prod-workloads', icon: '□', label: 'Workloads' },
       { page: 'prod-network', icon: '◎', label: 'Network & TLS' },
-      { page: 'prod-metrics', icon: '📊', label: 'Metrics' },
+      { page: 'prod-metrics', icon: '◇', label: 'Metrics' },
       { page: 'prod-events', icon: '⚡', label: 'Events' },
     ],
   },
@@ -119,6 +122,7 @@ const PAGES: Record<Page, () => ReactNode> = {
   'prod-network': ProductionNetworkPage,
   'prod-metrics': ProductionMetricsPage,
   'prod-events': ProductionEventsPage,
+  'prod-deploy': ProductionDeployPage,
 };
 
 function App() {

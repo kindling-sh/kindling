@@ -633,3 +633,60 @@ export interface AdvisorResponse {
   advisories: Advisory[];
   checked_at: string;
 }
+
+// ── Snapshot / Deploy ───────────────────────────────────────────
+
+export interface SnapshotService {
+  name: string;
+  image: string;
+  port: number;
+  replicas: number;
+  ingress?: { enabled: boolean; host: string };
+  deps: string[];
+}
+
+export interface SnapshotStatus {
+  services: SnapshotService[];
+  helm: boolean;
+  crane: boolean;
+  docker: boolean;
+  context: string;
+  connected: boolean;
+}
+
+export interface SSEMessage {
+  type: 'step' | 'error' | 'done';
+  message: string;
+}
+
+// ── TLS Management ──────────────────────────────────────────────
+
+export interface TLSIssuer {
+  name: string;
+  server?: string;
+  email?: string;
+  ready: boolean;
+}
+
+export interface TLSCert {
+  name: string;
+  namespace: string;
+  dns_names: string[];
+  issuer: string;
+  not_after: string;
+  ready: boolean;
+}
+
+export interface TLSStatus {
+  cert_manager: boolean;
+  issuers: TLSIssuer[];
+  certificates: TLSCert[];
+}
+
+// ── Metrics Management ──────────────────────────────────────────
+
+export interface MetricsStackStatus {
+  victoria_metrics: boolean;
+  kube_state_metrics: boolean;
+  vm_version: string;
+}

@@ -1,6 +1,6 @@
-import { useApi, fetchProdCertificates, fetchProdClusterIssuers } from '../api';
+import { useApi, fetchProdCertificates, fetchProdClusterIssuers, fetchTLSStatus, streamTLSInstall } from '../api';
 import { useState, useEffect } from 'react';
-import type { K8sList, K8sService, K8sIngress, CertificateItem, ClusterIssuerItem } from '../types';
+import type { K8sList, K8sService, K8sIngress, CertificateItem, ClusterIssuerItem, TLSStatus } from '../types';
 import { StatusBadge, TimeAgo, EmptyState } from './shared';
 
 export function ProductionNetworkPage() {
@@ -9,11 +9,42 @@ export function ProductionNetworkPage() {
 
   const [certs, setCerts] = useState<CertificateItem[]>([]);
   const [issuers, setIssuers] = useState<ClusterIssuerItem[]>([]);
+  const [tlsStatus, setTlsStatus] = useState<TLSStatus | null>(null);
+
+  // TLS install form
+  const [showTLSInstall, setShowTLSInstall] = useState(false);
+  const [tlsEmail, setTlsEmail] = useState('');
+  const [tlsDomain, setTlsDomain] = useState('');
+  const [tlsIssuer, setTlsIssuer] = useState('letsencrypt-prod');
+  const [tlsIngressClass, setTlsIngressClass] = useState('traefik');
+  const [tlsStaging, setTlsStaging] = useState(false);
+  const [tlsInstalling, setTlsInstalling] = useState(false);
+  const [tlsLogs, setTlsLogs] = useState<{ type: string; message: string }[]>([]);
 
   useEffect(() => {
     fetchProdCertificates().then(r => setCerts(r.items || [])).catch(() => {});
     fetchProdClusterIssuers().then(r => setIssuers(r.items || [])).catch(() => {});
+    fetchTLSStatus().then(s => setTlsStatus(s)).catch(() => {});
   }, []);
+
+  function doTLSInstall() {
+    if (!tlsEmail || !tlsDomain) return;
+    setTlsInstalling(true);
+    setTlsLogs([]);
+    streamTLSInstall(
+      { email: tlsEmail, domain: tlsDomain, issuer: tlsIssuer, ingress_class: tlsIngressClass, staging: tlsStaging },
+      (msg) => {
+        setTlsLogs(prev => [...prev, msg]);
+        if (msg.type === 'done' || msg.type === 'error') {
+          setTlsInstalling(false);
+          // Refresh status
+          fetchTLSStatus().then(s => setTlsStatus(s)).catch(() => {});
+          fetchProdClusterIssuers().then(r => setIssuers(r.items || [])).catch(() => {});
+          fetchProdCertificates().then(r => setCerts(r.items || [])).catch(() => {});
+        }
+      },
+    );
+  }
 
   const [tab, setTab] = useState<'services' | 'ingresses' | 'tls'>('ingresses');
 
@@ -108,11 +139,76 @@ export function ProductionNetworkPage() {
 
       {tab === 'tls' && (
         <div>
+          {/* cert-manager status + Install TLS button */}
+          <div className="card" style={{ marginBottom: 16 }}>
+            <div className="card-header">
+              <span className="card-icon">◈</span>
+              <h3>TLS Management</h3>
+              {!showTLSInstall && (
+                <button className="btn btn-primary" style={{ marginLeft: 'auto', fontSize: 12, padding: '4px 12px' }} onClick={() => setShowTLSInstall(true)}>
+                  {tlsStatus?.cert_manager ? 'Add ClusterIssuer' : 'Install cert-manager + TLS'}
+                </button>
+              )}
+            </div>
+            <div className="card-body">
+              <div className="stat-row">
+                <span className="label">cert-manager</span>
+                <StatusBadge ok={!!tlsStatus?.cert_manager} label={tlsStatus?.cert_manager ? 'Installed' : 'Not Installed'} />
+              </div>
+
+              {showTLSInstall && !tlsInstalling && tlsLogs.length === 0 && (
+                <div style={{ marginTop: 16, padding: '16px 0', borderTop: '1px solid var(--border)' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+                    <div className="form-group">
+                      <label className="form-label">Email *</label>
+                      <input className="form-input" value={tlsEmail} onChange={e => setTlsEmail(e.target.value)} placeholder="admin@example.com" />
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">Domain *</label>
+                      <input className="form-input" value={tlsDomain} onChange={e => setTlsDomain(e.target.value)} placeholder="example.com" />
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">Issuer Name</label>
+                      <input className="form-input" value={tlsIssuer} onChange={e => setTlsIssuer(e.target.value)} placeholder="letsencrypt-prod" />
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">Ingress Class</label>
+                      <input className="form-input" value={tlsIngressClass} onChange={e => setTlsIngressClass(e.target.value)} placeholder="traefik" />
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <label className="deploy-ingress-toggle">
+                      <input type="checkbox" checked={tlsStaging} onChange={e => setTlsStaging(e.target.checked)} />
+                      <span style={{ marginLeft: 4, fontSize: 13 }}>Use staging server</span>
+                    </label>
+                    <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+                      <button className="btn btn-secondary" onClick={() => setShowTLSInstall(false)}>Cancel</button>
+                      <button className="btn btn-primary" disabled={!tlsEmail || !tlsDomain} onClick={doTLSInstall}>Install TLS</button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {tlsLogs.length > 0 && (
+                <div className="deploy-log" style={{ maxHeight: 200, marginTop: 12 }}>
+                  {tlsLogs.map((log, i) => (
+                    <div key={i} className={`deploy-log-line deploy-log-${log.type}`}>
+                      <span className="deploy-log-icon">
+                        {log.type === 'step' ? '→' : log.type === 'error' ? '✗' : '✓'}
+                      </span>
+                      <span>{log.message}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
           {/* Cluster Issuers */}
           {issuers.length > 0 && (
             <div className="card" style={{ marginBottom: 16 }}>
               <div className="card-header">
-                <span className="card-icon">🏛</span>
+                <span className="card-icon">⊕</span>
                 <h3>Cluster Issuers</h3>
               </div>
               <div className="card-body">
@@ -132,7 +228,7 @@ export function ProductionNetworkPage() {
 
           {/* Certificates */}
           {certs.length === 0 ? (
-            <EmptyState icon="🔐" message="No TLS certificates found. Install cert-manager and create a ClusterIssuer." />
+            <EmptyState icon="◈" message="No TLS certificates found. Install cert-manager and create a ClusterIssuer." />
           ) : (
             <div className="table-wrap">
               <table className="data-table">

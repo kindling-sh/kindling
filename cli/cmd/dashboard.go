@@ -154,7 +154,20 @@ func runDashboard(cmd *cobra.Command, args []string) error {
 		mux.HandleFunc("/api/prod/apply", handleProdApply)
 		mux.HandleFunc("/api/prod/advisor", handleProdAdvisor)
 
-		// Prometheus
+		// Snapshot / Deploy
+		mux.HandleFunc("/api/prod/snapshot/status", handleProdSnapshotStatus)
+		mux.HandleFunc("/api/prod/snapshot/deploy", handleProdSnapshotDeploy)
+
+		// TLS management
+		mux.HandleFunc("/api/prod/tls/status", handleProdTLSStatus)
+		mux.HandleFunc("/api/prod/tls/install", handleProdTLSInstall)
+
+		// VictoriaMetrics management
+		mux.HandleFunc("/api/prod/metrics/status", handleProdMetricsStatus)
+		mux.HandleFunc("/api/prod/metrics/install", handleProdMetricsInstall)
+		mux.HandleFunc("/api/prod/metrics/uninstall", handleProdMetricsUninstall)
+
+		// Prometheus-compatible query API
 		mux.HandleFunc("/api/prod/prometheus/status", handlePromStatus)
 		mux.HandleFunc("/api/prod/prometheus/query", handlePromQuery)
 		mux.HandleFunc("/api/prod/prometheus/query_range", handlePromQueryRange)

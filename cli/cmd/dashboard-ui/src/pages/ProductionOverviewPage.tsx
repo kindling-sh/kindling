@@ -1,7 +1,7 @@
 import { useApi } from '../api';
-import { fetchProdNodeMetrics, fetchProdAdvisor } from '../api';
+import { fetchProdNodeMetrics, fetchProdAdvisor, fetchMetricsStatus } from '../api';
 import { useState, useEffect } from 'react';
-import type { ProdClusterInfo, K8sList, K8sNode, K8sDeployment, K8sPod, NodeMetric, PrometheusStatus, Advisory } from '../types';
+import type { ProdClusterInfo, K8sList, K8sNode, K8sDeployment, K8sPod, NodeMetric, PrometheusStatus, Advisory, MetricsStackStatus } from '../types';
 import { StatusBadge, TimeAgo } from './shared';
 
 function parsePct(s: string): number {
@@ -16,12 +16,14 @@ export function ProductionOverviewPage() {
   const { data: prom } = useApi<PrometheusStatus>('/api/prod/prometheus/status', 15000);
 
   const [nodeMetrics, setNodeMetrics] = useState<NodeMetric[]>([]);
+  const [metricsStack, setMetricsStack] = useState<MetricsStackStatus | null>(null);
   const [advisories, setAdvisories] = useState<Advisory[]>([]);
   const [advisorLoading, setAdvisorLoading] = useState(true);
   const [advisorChecked, setAdvisorChecked] = useState('');
 
   useEffect(() => {
     fetchProdNodeMetrics().then(r => setNodeMetrics(r.items || [])).catch(() => {});
+    fetchMetricsStatus().then(s => setMetricsStack(s)).catch(() => {});
     const id = setInterval(() => {
       fetchProdNodeMetrics().then(r => setNodeMetrics(r.items || [])).catch(() => {});
     }, 10000);
@@ -158,26 +160,30 @@ export function ProductionOverviewPage() {
       <div className="card-grid card-grid-3">
         <div className="card">
           <div className="card-header">
-            <span className="card-icon">📊</span>
-            <h3>Prometheus</h3>
+            <span className="card-icon">◇</span>
+            <h3>VictoriaMetrics</h3>
           </div>
           <div className="card-body">
             <div className="stat-row">
               <span className="label">Status</span>
-              <StatusBadge ok={!!prom?.detected} label={prom?.detected ? 'Detected' : 'Not Found'} />
+              <StatusBadge ok={!!metricsStack?.victoria_metrics || !!prom?.detected} label={metricsStack?.victoria_metrics ? 'Running' : prom?.detected ? 'Detected' : 'Not Installed'} />
             </div>
-            {prom?.detected && (
-              <>
-                <div className="stat-row">
-                  <span className="label">Service</span>
-                  <span className="value mono">{prom.service}</span>
-                </div>
-                <div className="stat-row">
-                  <span className="label">Namespace</span>
-                  <span className="tag">{prom.namespace}</span>
-                </div>
-              </>
+            {metricsStack?.vm_version && (
+              <div className="stat-row">
+                <span className="label">Version</span>
+                <span className="value mono">{metricsStack.vm_version}</span>
+              </div>
             )}
+            {prom?.detected && (
+              <div className="stat-row">
+                <span className="label">Endpoint</span>
+                <span className="value mono">{prom.service}</span>
+              </div>
+            )}
+            <div className="stat-row">
+              <span className="label">kube-state-metrics</span>
+              <StatusBadge ok={!!metricsStack?.kube_state_metrics} label={metricsStack?.kube_state_metrics ? 'Running' : 'Not Found'} />
+            </div>
           </div>
         </div>
 

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
-import { useApi, promQuery, promQueryRange, fetchProdNodeMetrics, fetchProdPodMetrics } from '../api';
-import type { PrometheusStatus, NodeMetric, PodMetric } from '../types';
+import { useApi, promQuery, promQueryRange, fetchProdNodeMetrics, fetchProdPodMetrics, fetchMetricsStatus, streamMetricsInstall, uninstallMetricsStack } from '../api';
+import type { PrometheusStatus, NodeMetric, PodMetric, MetricsStackStatus } from '../types';
 
 // ── SVG Sparkline Chart ─────────────────────────────────────────
 
@@ -82,6 +82,18 @@ export function ProductionMetricsPage() {
   const [podMetrics, setPodMetrics] = useState<PodMetric[]>([]);
   const [metricNS, setMetricNS] = useState('');
 
+  // Metrics stack management
+  const [stackStatus, setStackStatus] = useState<MetricsStackStatus | null>(null);
+  const [installLogs, setInstallLogs] = useState<{ type: string; message: string }[]>([]);
+  const [installing, setInstalling] = useState(false);
+  const [showInstall, setShowInstall] = useState(false);
+  const [installRetention, setInstallRetention] = useState('2h');
+  const [installScrape, setInstallScrape] = useState('30s');
+
+  useEffect(() => {
+    fetchMetricsStatus().then(s => setStackStatus(s)).catch(() => {});
+  }, []);
+
   const fetchCharts = useCallback(async () => {
     const now = Math.floor(Date.now() / 1000);
     const start = now - 3600; // 1 hour
@@ -133,6 +145,27 @@ export function ProductionMetricsPage() {
     setCustomRunning(false);
   }
 
+  function doInstall() {
+    setInstalling(true);
+    setInstallLogs([]);
+    streamMetricsInstall(
+      { retention: installRetention, scrape: installScrape },
+      (msg) => {
+        setInstallLogs(prev => [...prev, msg]);
+        if (msg.type === 'done' || msg.type === 'error') {
+          setInstalling(false);
+          fetchMetricsStatus().then(s => setStackStatus(s)).catch(() => {});
+        }
+      },
+    );
+  }
+
+  async function doUninstall() {
+    await uninstallMetricsStack();
+    setStackStatus({ victoria_metrics: false, kube_state_metrics: false, vm_version: '' });
+    setShowInstall(false);
+  }
+
   return (
     <div className="page">
       <div className="page-header">
@@ -140,13 +173,60 @@ export function ProductionMetricsPage() {
           <h1>Metrics</h1>
           <p className="page-subtitle">
             {promStatus?.detected
-              ? <>Prometheus: <span className="mono">{promStatus.service}</span> in <span className="tag">{promStatus.namespace}</span></>
-              : 'Prometheus not detected — showing kubectl top metrics'}
+              ? <>VictoriaMetrics: <span className="mono">{promStatus.service}</span> in <span className="tag">{promStatus.namespace}</span>{stackStatus?.vm_version && <span className="tag" style={{ marginLeft: 4 }}>{stackStatus.vm_version}</span>}</>
+              : 'VictoriaMetrics not detected — showing kubectl top metrics'}
           </p>
+        </div>
+        <div className="page-actions">
+          {stackStatus?.victoria_metrics ? (
+            <button className="btn btn-danger-outline" onClick={doUninstall}>Uninstall Metrics</button>
+          ) : (
+            <button className="btn btn-primary" onClick={() => setShowInstall(true)}>Install VictoriaMetrics</button>
+          )}
         </div>
       </div>
 
-      {/* Prometheus sparklines */}
+      {/* Metrics install panel */}
+      {showInstall && !stackStatus?.victoria_metrics && (
+        <div className="card" style={{ marginBottom: 20 }}>
+          <div className="card-header">
+            <span className="card-icon">◇</span>
+            <h3>Install VictoriaMetrics Stack</h3>
+          </div>
+          <div className="card-body">
+            {!installing && installLogs.length === 0 && (
+              <div style={{ display: 'flex', gap: 16, alignItems: 'flex-end' }}>
+                <div className="form-group" style={{ flex: 1 }}>
+                  <label className="form-label">Retention</label>
+                  <input className="form-input" value={installRetention} onChange={e => setInstallRetention(e.target.value)} placeholder="2h" />
+                  <span className="form-hint">e.g. 2h, 24h, 7d</span>
+                </div>
+                <div className="form-group" style={{ flex: 1 }}>
+                  <label className="form-label">Scrape Interval</label>
+                  <input className="form-input" value={installScrape} onChange={e => setInstallScrape(e.target.value)} placeholder="30s" />
+                  <span className="form-hint">e.g. 15s, 30s, 60s</span>
+                </div>
+                <button className="btn btn-primary" onClick={doInstall} style={{ marginBottom: 4 }}>Install</button>
+                <button className="btn btn-secondary" onClick={() => setShowInstall(false)} style={{ marginBottom: 4 }}>Cancel</button>
+              </div>
+            )}
+            {installLogs.length > 0 && (
+              <div className="deploy-log" style={{ maxHeight: 200 }}>
+                {installLogs.map((log, i) => (
+                  <div key={i} className={`deploy-log-line deploy-log-${log.type}`}>
+                    <span className="deploy-log-icon">
+                      {log.type === 'step' ? '→' : log.type === 'error' ? '✗' : '✓'}
+                    </span>
+                    <span>{log.message}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* VictoriaMetrics sparklines */}
       {promStatus?.detected && (
         <>
           <div className="prod-chart-grid">

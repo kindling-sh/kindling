@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import type { RuntimeInfo, SyncStatus, ServiceDir, IntelStatus, TopologyGraph, TopologyStatusMap, TopologyNodeDetail, TopologyLogs, ProdClusterInfo, NodeMetric, PodMetric, RolloutRevision, PrometheusStatus, PromQueryResult, CertificateItem, ClusterIssuerItem, AdvisorResponse } from './types';
+import type { RuntimeInfo, SyncStatus, ServiceDir, IntelStatus, TopologyGraph, TopologyStatusMap, TopologyNodeDetail, TopologyLogs, ProdClusterInfo, NodeMetric, PodMetric, RolloutRevision, PrometheusStatus, PromQueryResult, CertificateItem, ClusterIssuerItem, AdvisorResponse, SnapshotStatus, TLSStatus, MetricsStackStatus } from './types';
 
 const API_BASE = '';
 
@@ -434,4 +434,122 @@ export async function promQueryRange(query: string, start: string, end: string, 
 
 export async function fetchProdAdvisor(): Promise<AdvisorResponse> {
   return apiFetch<AdvisorResponse>('/api/prod/advisor');
+}
+
+// ── Snapshot / Deploy ───────────────────────────────────────────
+
+export async function fetchSnapshotStatus(): Promise<SnapshotStatus> {
+  return apiFetch<SnapshotStatus>('/api/prod/snapshot/status');
+}
+
+export function streamSnapshotDeploy(
+  body: { registry: string; tag: string; format: string; namespace: string; ingress: string[] },
+  onMessage: (msg: { type: string; message: string }) => void,
+): () => void {
+  const controller = new AbortController();
+  fetch(`${API_BASE}/api/prod/snapshot/deploy`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal: controller.signal,
+  }).then(async (res) => {
+    const reader = res.body?.getReader();
+    if (!reader) return;
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          try {
+            const msg = JSON.parse(line.slice(6));
+            onMessage(msg);
+          } catch { /* skip */ }
+        }
+      }
+    }
+  }).catch(() => { /* aborted */ });
+  return () => controller.abort();
+}
+
+// ── TLS Management ──────────────────────────────────────────────
+
+export async function fetchTLSStatus(): Promise<TLSStatus> {
+  return apiFetch<TLSStatus>('/api/prod/tls/status');
+}
+
+export function streamTLSInstall(
+  body: { email: string; domain: string; issuer?: string; ingress_class?: string; staging: boolean },
+  onMessage: (msg: { type: string; message: string }) => void,
+): () => void {
+  const controller = new AbortController();
+  fetch(`${API_BASE}/api/prod/tls/install`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal: controller.signal,
+  }).then(async (res) => {
+    const reader = res.body?.getReader();
+    if (!reader) return;
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          try { onMessage(JSON.parse(line.slice(6))); } catch { /* skip */ }
+        }
+      }
+    }
+  }).catch(() => { /* aborted */ });
+  return () => controller.abort();
+}
+
+// ── Metrics Stack Management ────────────────────────────────────
+
+export async function fetchMetricsStatus(): Promise<MetricsStackStatus> {
+  return apiFetch<MetricsStackStatus>('/api/prod/metrics/status');
+}
+
+export function streamMetricsInstall(
+  body: { retention: string; scrape: string },
+  onMessage: (msg: { type: string; message: string }) => void,
+): () => void {
+  const controller = new AbortController();
+  fetch(`${API_BASE}/api/prod/metrics/install`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal: controller.signal,
+  }).then(async (res) => {
+    const reader = res.body?.getReader();
+    if (!reader) return;
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          try { onMessage(JSON.parse(line.slice(6))); } catch { /* skip */ }
+        }
+      }
+    }
+  }).catch(() => { /* aborted */ });
+  return () => controller.abort();
+}
+
+export async function uninstallMetricsStack(): Promise<ActionResult> {
+  return apiPost('/api/prod/metrics/uninstall');
 }
