@@ -1210,12 +1210,11 @@ func stripDebugWrapper(cmd string) string {
 // The background task uses a VS Code problem matcher to detect when the debugger
 // port-forward is ready, so F5 is all you need.
 func writeLaunchConfig(deployment string, prof *debugProfile, localPort int, remoteRoot, sourceSubdir string) {
-	// Write to --project-dir if set, otherwise CWD.
-	root := "."
-	if projectDir != "" {
-		root = projectDir
-	}
-	vsDir := filepath.Join(root, ".vscode")
+	// Always write to CWD/.vscode/ — that's the VS Code workspace root.
+	// The sourceSubdir already adjusts localRoot in pathMappings
+	// (e.g. ${workspaceFolder}/orders), so there's no need to write
+	// launch.json into the service subdirectory.
+	vsDir := filepath.Join(".", ".vscode")
 	os.MkdirAll(vsDir, 0755)
 
 	// ── tasks.json ───────────────────────────────────────────────
