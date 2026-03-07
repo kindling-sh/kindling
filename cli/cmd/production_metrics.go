@@ -293,6 +293,52 @@ spec:
 func installVictoriaMetrics(ctx string) error {
 	scrapeConfig := buildScrapeConfig()
 
+	// ServiceAccount + RBAC for kubelet/cAdvisor scraping via API server proxy
+	sa := `apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vmsingle
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: vmsingle
+    app.kubernetes.io/managed-by: kindling
+`
+
+	clusterRole := `apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: vmsingle
+  labels:
+    app.kubernetes.io/name: vmsingle
+    app.kubernetes.io/managed-by: kindling
+rules:
+  - apiGroups: [""]
+    resources: ["nodes", "nodes/proxy", "nodes/metrics"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods", "services", "endpoints", "namespaces"]
+    verbs: ["get", "list", "watch"]
+  - nonResourceURLs: ["/metrics", "/metrics/cadvisor"]
+    verbs: ["get"]
+`
+
+	crb := `apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: vmsingle
+  labels:
+    app.kubernetes.io/name: vmsingle
+    app.kubernetes.io/managed-by: kindling
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: vmsingle
+subjects:
+  - kind: ServiceAccount
+    name: vmsingle
+    namespace: monitoring
+`
+
 	configMap := fmt.Sprintf(`apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -327,6 +373,7 @@ spec:
         app: vmsingle
         app.kubernetes.io/name: vmsingle
     spec:
+      serviceAccountName: vmsingle
       containers:
       - name: vmsingle
         image: victoriametrics/victoria-metrics:v1.106.1
@@ -388,7 +435,7 @@ spec:
     app: vmsingle
 `
 
-	manifests := []string{configMap, deploy, svc}
+	manifests := []string{sa, clusterRole, crb, configMap, deploy, svc}
 	combined := strings.Join(manifests, "---\n")
 	return runStdin(combined, "kubectl", "--context", ctx, "apply", "-f", "-")
 }
@@ -476,6 +523,9 @@ func uninstallMetrics(ctx string) error {
 	_ = run("kubectl", "--context", ctx, "-n", "monitoring", "delete", "deployment", "vmsingle", "--ignore-not-found")
 	_ = run("kubectl", "--context", ctx, "-n", "monitoring", "delete", "service", "vmsingle", "--ignore-not-found")
 	_ = run("kubectl", "--context", ctx, "-n", "monitoring", "delete", "configmap", "vmsingle-config", "--ignore-not-found")
+	_ = run("kubectl", "--context", ctx, "-n", "monitoring", "delete", "serviceaccount", "vmsingle", "--ignore-not-found")
+	_ = run("kubectl", "--context", ctx, "delete", "clusterrole", "vmsingle", "--ignore-not-found")
+	_ = run("kubectl", "--context", ctx, "delete", "clusterrolebinding", "vmsingle", "--ignore-not-found")
 
 	step("🗑", "Removing kube-state-metrics")
 	_ = run("kubectl", "--context", ctx, "-n", "monitoring", "delete", "deployment", "kube-state-metrics", "--ignore-not-found")

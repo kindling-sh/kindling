@@ -47,25 +47,50 @@ function Sparkline({ data, width = 280, height = 60, color = 'var(--accent)', la
 }
 
 // ── Preset Queries ──────────────────────────────────────────────
+// These match the metrics our VictoriaMetrics scrape config collects:
+//   • kube_* from kube-state-metrics (always available)
+//   • container_* from kubelet cAdvisor (available when RBAC is configured)
+// Users don't need to know PromQL — these are pre-built dashboards.
 
-const PRESET_QUERIES = [
-  { label: 'CPU Usage (cluster)', query: '1 - avg(rate(node_cpu_seconds_total{mode="idle"}[5m]))', color: 'var(--accent)', format: 'pct' },
-  { label: 'Memory Usage (cluster)', query: '1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)', color: 'var(--green)', format: 'pct' },
-  { label: 'Pod Restarts (15m)', query: 'sum(increase(kube_pod_container_status_restarts_total[15m]))', color: 'var(--red)', format: 'num' },
-  { label: 'Network Rx (bytes/s)', query: 'sum(rate(node_network_receive_bytes_total[5m]))', color: 'var(--cyan)', format: 'bytes' },
-  { label: 'Disk Usage', query: '1 - (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"})', color: 'var(--orange)', format: 'pct' },
-  { label: 'HTTP Request Rate', query: 'sum(rate(http_requests_total[5m]))', color: 'var(--purple)', format: 'num' },
+interface MetricPreset {
+  label: string;
+  query: string;
+  color: string;
+  format: string;
+  category: 'health' | 'workloads' | 'resources';
+  description: string;
+}
+
+const PRESET_QUERIES: MetricPreset[] = [
+  // Cluster health (kube-state-metrics)
+  { label: 'Nodes Ready', query: 'sum(kube_node_status_condition{condition="Ready",status="true"})', color: 'var(--green)', format: 'num', category: 'health', description: 'Nodes in Ready state' },
+  { label: 'Pod Restarts', query: 'sum(increase(kube_pod_container_status_restarts_total[1h]))', color: 'var(--red)', format: 'num', category: 'health', description: 'Container restarts in the last hour' },
+  { label: 'Pods Running', query: 'sum(kube_pod_status_phase{phase="Running"})', color: 'var(--accent)', format: 'num', category: 'health', description: 'Pods currently in Running phase' },
+  { label: 'Pods Pending', query: 'sum(kube_pod_status_phase{phase="Pending"}) or vector(0)', color: 'var(--orange)', format: 'num', category: 'health', description: 'Pods stuck in Pending state' },
+
+  // Workload status (kube-state-metrics)
+  { label: 'Deployment Replicas', query: 'sum(kube_deployment_status_replicas)', color: 'var(--cyan)', format: 'num', category: 'workloads', description: 'Total running deployment replicas' },
+  { label: 'Desired Replicas', query: 'sum(kube_deployment_spec_replicas)', color: 'var(--text-secondary)', format: 'num', category: 'workloads', description: 'Total desired deployment replicas' },
+
+  // Resource usage (cAdvisor via kubelet)
+  { label: 'CPU Usage', query: 'sum(rate(container_cpu_usage_seconds_total{container!=""}[5m]))', color: 'var(--accent)', format: 'cores', category: 'resources', description: 'Total CPU usage across all containers' },
+  { label: 'Memory Usage', query: 'sum(container_memory_working_set_bytes{container!=""}) / 1024 / 1024 / 1024', color: 'var(--purple)', format: 'gb', category: 'resources', description: 'Total working set memory across all containers' },
+  { label: 'Network In', query: 'sum(rate(container_network_receive_bytes_total[5m]))', color: 'var(--cyan)', format: 'bytes', category: 'resources', description: 'Network receive rate across all containers' },
+  { label: 'Network Out', query: 'sum(rate(container_network_transmit_bytes_total[5m]))', color: 'var(--orange)', format: 'bytes', category: 'resources', description: 'Network transmit rate across all containers' },
 ];
 
 function formatValue(v: number, fmt: string): string {
   if (fmt === 'pct') return (v * 100).toFixed(1) + '%';
+  if (fmt === 'cores') return v.toFixed(2) + ' cores';
+  if (fmt === 'gb') return v.toFixed(2) + ' GB';
   if (fmt === 'bytes') {
     if (v > 1e9) return (v / 1e9).toFixed(1) + ' GB/s';
     if (v > 1e6) return (v / 1e6).toFixed(1) + ' MB/s';
     if (v > 1e3) return (v / 1e3).toFixed(1) + ' KB/s';
     return v.toFixed(0) + ' B/s';
   }
-  return v.toFixed(2);
+  if (fmt === 'num' && v >= 1000) return (v / 1000).toFixed(1) + 'k';
+  return v % 1 === 0 ? v.toFixed(0) : v.toFixed(2);
 }
 
 export function ProductionMetricsPage() {
@@ -226,39 +251,114 @@ export function ProductionMetricsPage() {
         </div>
       )}
 
-      {/* VictoriaMetrics sparklines */}
+      {/* VictoriaMetrics dashboards — grouped by category */}
       {promStatus?.detected && (
         <>
-          <div className="prod-chart-grid">
-            {PRESET_QUERIES.map(preset => {
-              const data = rangeData[preset.label];
-              const current = instantData[preset.label];
-              return (
-                <div key={preset.label} className="prod-chart-card">
-                  <div className="prod-chart-header">
-                    <span className="prod-chart-title">{preset.label}</span>
-                    {current !== undefined && (
-                      <span className="prod-chart-current" style={{ color: preset.color }}>
-                        {formatValue(current, preset.format)}
-                      </span>
-                    )}
-                  </div>
-                  <Sparkline data={data || []} color={preset.color} label={preset.label} width={300} height={64} />
+          {/* Cluster Health */}
+          {(() => {
+            const health = PRESET_QUERIES.filter(p => p.category === 'health');
+            const hasData = health.some(p => rangeData[p.label] || instantData[p.label] !== undefined);
+            if (!hasData && Object.keys(rangeData).length > 0) return null;
+            return (
+              <div style={{ marginBottom: 20 }}>
+                <h3 className="prod-section-title">Cluster Health</h3>
+                <div className="prod-chart-grid">
+                  {health.map(preset => {
+                    const data = rangeData[preset.label];
+                    const current = instantData[preset.label];
+                    return (
+                      <div key={preset.label} className="prod-chart-card" title={preset.description}>
+                        <div className="prod-chart-header">
+                          <span className="prod-chart-title">{preset.label}</span>
+                          {current !== undefined && (
+                            <span className="prod-chart-current" style={{ color: preset.color }}>
+                              {formatValue(current, preset.format)}
+                            </span>
+                          )}
+                        </div>
+                        <Sparkline data={data || []} color={preset.color} label={preset.label} width={300} height={64} />
+                      </div>
+                    );
+                  })}
                 </div>
-              );
-            })}
-          </div>
+              </div>
+            );
+          })()}
 
-          {/* Custom PromQL */}
-          <div className="card" style={{ marginTop: 20 }}>
-            <div className="card-header">
+          {/* Workload Status */}
+          {(() => {
+            const workloads = PRESET_QUERIES.filter(p => p.category === 'workloads');
+            const hasData = workloads.some(p => rangeData[p.label] || instantData[p.label] !== undefined);
+            if (!hasData && Object.keys(rangeData).length > 0) return null;
+            return (
+              <div style={{ marginBottom: 20 }}>
+                <h3 className="prod-section-title">Workload Status</h3>
+                <div className="prod-chart-grid">
+                  {workloads.map(preset => {
+                    const data = rangeData[preset.label];
+                    const current = instantData[preset.label];
+                    return (
+                      <div key={preset.label} className="prod-chart-card" title={preset.description}>
+                        <div className="prod-chart-header">
+                          <span className="prod-chart-title">{preset.label}</span>
+                          {current !== undefined && (
+                            <span className="prod-chart-current" style={{ color: preset.color }}>
+                              {formatValue(current, preset.format)}
+                            </span>
+                          )}
+                        </div>
+                        <Sparkline data={data || []} color={preset.color} label={preset.label} width={300} height={64} />
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* Resource Usage */}
+          {(() => {
+            const resources = PRESET_QUERIES.filter(p => p.category === 'resources');
+            const hasData = resources.some(p => rangeData[p.label] || instantData[p.label] !== undefined);
+            if (!hasData && Object.keys(rangeData).length > 0) return null;
+            return (
+              <div style={{ marginBottom: 20 }}>
+                <h3 className="prod-section-title">Resource Usage</h3>
+                <p className="text-dim" style={{ fontSize: 12, marginBottom: 8 }}>Container-level metrics from cAdvisor</p>
+                <div className="prod-chart-grid">
+                  {resources.map(preset => {
+                    const data = rangeData[preset.label];
+                    const current = instantData[preset.label];
+                    return (
+                      <div key={preset.label} className="prod-chart-card" title={preset.description}>
+                        <div className="prod-chart-header">
+                          <span className="prod-chart-title">{preset.label}</span>
+                          {current !== undefined && (
+                            <span className="prod-chart-current" style={{ color: preset.color }}>
+                              {formatValue(current, preset.format)}
+                            </span>
+                          )}
+                        </div>
+                        <Sparkline data={data || []} color={preset.color} label={preset.label} width={300} height={64} />
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* Custom Query (advanced — collapsed by default) */}
+          <details className="card" style={{ marginTop: 20 }}>
+            <summary className="card-header" style={{ cursor: 'pointer', userSelect: 'none' }}>
               <span className="card-icon">⌘</span>
-              <h3>PromQL Console</h3>
-            </div>
+              <h3>Custom Query</h3>
+              <span className="text-dim" style={{ marginLeft: 8, fontSize: 11 }}>Advanced — run any PromQL query against VictoriaMetrics</span>
+            </summary>
             <div className="card-body">
               <div style={{ display: 'flex', gap: 8 }}>
                 <input className="form-input" style={{ flex: 1, fontFamily: 'var(--font-mono)', fontSize: 13 }}
-                  placeholder='up{job="prometheus"}' value={customQuery} onChange={e => setCustomQuery(e.target.value)}
+                  placeholder='e.g. sum(kube_pod_status_phase{phase="Running"}) by (namespace)' value={customQuery} onChange={e => setCustomQuery(e.target.value)}
                   onKeyDown={e => { if (e.key === 'Enter') runCustomQuery(); }}
                 />
                 <button className="btn btn-primary" disabled={customRunning || !customQuery} onClick={runCustomQuery}>
@@ -269,7 +369,7 @@ export function ProductionMetricsPage() {
                 <pre className="log-output" style={{ marginTop: 12, maxHeight: 300, overflow: 'auto', fontSize: 12 }}>{customResult}</pre>
               )}
             </div>
-          </div>
+          </details>
         </>
       )}
 

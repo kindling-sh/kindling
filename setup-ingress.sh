@@ -140,6 +140,7 @@ spec:
             - --providers.kubernetesingress
             - --providers.kubernetesingress.ingressclass=traefik
             - --providers.kubernetesingress.allowemptyservices=true
+            - --providers.kubernetesingress.ingressendpoint.hostname=localhost
             - --ping=true
             - --log.level=INFO
           ports:

@@ -3970,6 +3970,14 @@ details[open] summary {
 }
 
 /* Chart grid */
+.prod-section-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin: 0 0 8px 0;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
 .prod-chart-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));

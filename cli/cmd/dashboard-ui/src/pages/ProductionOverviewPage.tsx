@@ -184,6 +184,13 @@ export function ProductionOverviewPage() {
               <span className="label">kube-state-metrics</span>
               <StatusBadge ok={!!metricsStack?.kube_state_metrics} label={metricsStack?.kube_state_metrics ? 'Running' : 'Not Found'} />
             </div>
+            {(metricsStack?.victoria_metrics || prom?.detected) && (
+              <div style={{ marginTop: 8 }}>
+                <button className="btn btn-sm btn-primary" onClick={() => window.dispatchEvent(new CustomEvent('navigate', { detail: 'prod-metrics' }))}>
+                  View Metrics →
+                </button>
+              </div>
+            )}
           </div>
         </div>
 
