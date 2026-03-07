@@ -131,6 +131,7 @@ func runDashboard(cmd *cobra.Command, args []string) error {
 		mux.HandleFunc("/api/prod/pods", handleProdPods)
 		mux.HandleFunc("/api/prod/services", handleProdServices)
 		mux.HandleFunc("/api/prod/ingresses", handleProdIngresses)
+		mux.HandleFunc("/api/prod/ingress-controller", handleProdIngressController)
 		mux.HandleFunc("/api/prod/events", handleProdEvents)
 		mux.HandleFunc("/api/prod/secrets", handleProdSecrets)
 		mux.HandleFunc("/api/prod/statefulsets", handleProdStatefulSets)

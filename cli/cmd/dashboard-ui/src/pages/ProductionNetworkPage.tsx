@@ -1,6 +1,6 @@
-import { useApi, fetchProdCertificates, fetchProdClusterIssuers, fetchTLSStatus, streamTLSInstall } from '../api';
+import { useApi, fetchProdCertificates, fetchProdClusterIssuers, fetchTLSStatus, streamTLSInstall, fetchProdIngressController } from '../api';
 import { useState, useEffect } from 'react';
-import type { K8sList, K8sService, K8sIngress, CertificateItem, ClusterIssuerItem, TLSStatus } from '../types';
+import type { K8sList, K8sService, K8sIngress, CertificateItem, ClusterIssuerItem, TLSStatus, IngressControllerInfo } from '../types';
 import { StatusBadge, TimeAgo, EmptyState } from './shared';
 
 export function ProductionNetworkPage() {
@@ -10,6 +10,7 @@ export function ProductionNetworkPage() {
   const [certs, setCerts] = useState<CertificateItem[]>([]);
   const [issuers, setIssuers] = useState<ClusterIssuerItem[]>([]);
   const [tlsStatus, setTlsStatus] = useState<TLSStatus | null>(null);
+  const [ic, setIc] = useState<IngressControllerInfo | null>(null);
 
   // TLS install form
   const [showTLSInstall, setShowTLSInstall] = useState(false);
@@ -25,6 +26,7 @@ export function ProductionNetworkPage() {
     fetchProdCertificates().then(r => setCerts(r.items || [])).catch(() => {});
     fetchProdClusterIssuers().then(r => setIssuers(r.items || [])).catch(() => {});
     fetchTLSStatus().then(s => setTlsStatus(s)).catch(() => {});
+    fetchProdIngressController().then(setIc).catch(() => {});
   }, []);
 
   function doTLSInstall() {
@@ -59,6 +61,47 @@ export function ProductionNetworkPage() {
           <p className="page-subtitle">Services, ingress routing, and TLS certificates</p>
         </div>
       </div>
+
+      {/* Ingress Controller */}
+      {ic && ic.found && (() => {
+        const addr = ic.external_ip || ic.hostname;
+        return (
+          <div className="card" style={{ marginBottom: 16 }}>
+            <div className="card-header">
+              <span className="card-icon">⊕</span>
+              <h3>Ingress Controller</h3>
+              <span className="tag tag-green" style={{ marginLeft: 8, textTransform: 'capitalize' }}>{ic.class}</span>
+              <span className="tag" style={{ marginLeft: 4 }}>{ic.type}</span>
+            </div>
+            <div className="card-body">
+              <div className="stat-row">
+                <span className="label">Service</span>
+                <span className="mono">{ic.namespace}/{ic.name}</span>
+              </div>
+              <div className="stat-row">
+                <span className="label">Public Address</span>
+                {addr ? (
+                  <span className="mono" style={{ fontWeight: 600, color: 'var(--accent)' }}>{addr}</span>
+                ) : (
+                  <span className="text-dim">Pending — no external IP assigned yet</span>
+                )}
+              </div>
+              {ic.ports.length > 0 && (
+                <div className="stat-row">
+                  <span className="label">Ports</span>
+                  <span className="mono">
+                    {ic.ports.map(p => `${p.name ? p.name + ':' : ''}${p.port}${p.nodePort ? '→' + p.nodePort : ''}`).join(', ')}
+                  </span>
+                </div>
+              )}
+              <div className="stat-row">
+                <span className="label">Cluster IP</span>
+                <span className="mono text-dim">{ic.cluster_ip}</span>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       <div className="prod-tabs">
         <button className={`prod-tab ${tab === 'ingresses' ? 'active' : ''}`} onClick={() => setTab('ingresses')}>

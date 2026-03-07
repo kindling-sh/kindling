@@ -690,3 +690,17 @@ export interface MetricsStackStatus {
   kube_state_metrics: boolean;
   vm_version: string;
 }
+
+// ── Ingress Controller ──────────────────────────────────────────
+
+export interface IngressControllerInfo {
+  found: boolean;
+  name: string;
+  namespace: string;
+  type: string;
+  class: string;
+  external_ip: string;
+  hostname: string;
+  cluster_ip: string;
+  ports: { port: number; nodePort?: number; protocol: string; name?: string }[];
+}

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import type { RuntimeInfo, SyncStatus, ServiceDir, IntelStatus, TopologyGraph, TopologyStatusMap, TopologyNodeDetail, TopologyLogs, ProdClusterInfo, NodeMetric, PodMetric, RolloutRevision, PrometheusStatus, PromQueryResult, CertificateItem, ClusterIssuerItem, AdvisorResponse, SnapshotStatus, TLSStatus, MetricsStackStatus } from './types';
+import type { RuntimeInfo, SyncStatus, ServiceDir, IntelStatus, TopologyGraph, TopologyStatusMap, TopologyNodeDetail, TopologyLogs, ProdClusterInfo, NodeMetric, PodMetric, RolloutRevision, PrometheusStatus, PromQueryResult, CertificateItem, ClusterIssuerItem, AdvisorResponse, SnapshotStatus, TLSStatus, MetricsStackStatus, IngressControllerInfo } from './types';
 
 const API_BASE = '';
 
@@ -417,6 +417,10 @@ export async function fetchProdCertificates(): Promise<{ items: CertificateItem[
 
 export async function fetchProdClusterIssuers(): Promise<{ items: ClusterIssuerItem[] }> {
   return apiFetch('/api/prod/clusterissuers');
+}
+
+export async function fetchProdIngressController(): Promise<IngressControllerInfo> {
+  return apiFetch<IngressControllerInfo>('/api/prod/ingress-controller');
 }
 
 export async function fetchPromStatus(): Promise<PrometheusStatus> {

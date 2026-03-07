@@ -81,6 +81,105 @@ var (
 	handleProdClusterRoleBindings = prodResourceHandler("clusterrolebindings", resourceOpts{emptyOnError: true})
 )
 
+// ── /api/prod/ingress-controller — detect ingress controller + external IP ──
+
+func handleProdIngressController(w http.ResponseWriter, r *http.Request) {
+	type icPort struct {
+		Port     int    `json:"port"`
+		NodePort int    `json:"nodePort,omitempty"`
+		Protocol string `json:"protocol"`
+		Name     string `json:"name,omitempty"`
+	}
+	type icInfo struct {
+		Found     bool     `json:"found"`
+		Name      string   `json:"name"`
+		Namespace string   `json:"namespace"`
+		Type      string   `json:"type"`
+		Class     string   `json:"class"` // traefik, nginx, etc.
+		ExternalIP string  `json:"external_ip"`
+		Hostname   string  `json:"hostname"`
+		ClusterIP  string  `json:"cluster_ip"`
+		Ports      []icPort `json:"ports"`
+	}
+
+	info := icInfo{}
+
+	// Search common ingress controller namespaces and labels
+	searches := []struct {
+		ns    string
+		label string
+		class string
+	}{
+		{"traefik", "app.kubernetes.io/name=traefik", "traefik"},
+		{"traefik-system", "app.kubernetes.io/name=traefik", "traefik"},
+		{"ingress-nginx", "app.kubernetes.io/name=ingress-nginx", "nginx"},
+		{"nginx-ingress", "app.kubernetes.io/name=ingress-nginx", "nginx"},
+		{"kube-system", "app.kubernetes.io/name=traefik", "traefik"},
+		{"kube-system", "app.kubernetes.io/name=ingress-nginx", "nginx"},
+	}
+
+	for _, s := range searches {
+		out, err := prodKubectlJSON("get", "svc", "-n", s.ns, "-l", s.label, "-o", "json")
+		if err != nil {
+			continue
+		}
+		var list struct {
+			Items []struct {
+				Metadata struct {
+					Name      string `json:"name"`
+					Namespace string `json:"namespace"`
+				} `json:"metadata"`
+				Spec struct {
+					Type      string `json:"type"`
+					ClusterIP string `json:"clusterIP"`
+					Ports     []struct {
+						Port     int    `json:"port"`
+						NodePort int    `json:"nodePort"`
+						Protocol string `json:"protocol"`
+						Name     string `json:"name"`
+					} `json:"ports"`
+				} `json:"spec"`
+				Status struct {
+					LoadBalancer struct {
+						Ingress []struct {
+							IP       string `json:"ip"`
+							Hostname string `json:"hostname"`
+						} `json:"ingress"`
+					} `json:"loadBalancer"`
+				} `json:"status"`
+			} `json:"items"`
+		}
+		if json.Unmarshal([]byte(out), &list) != nil || len(list.Items) == 0 {
+			continue
+		}
+		// Pick the first service that isn't headless
+		for _, svc := range list.Items {
+			if svc.Spec.ClusterIP == "None" {
+				continue
+			}
+			info.Found = true
+			info.Name = svc.Metadata.Name
+			info.Namespace = svc.Metadata.Namespace
+			info.Type = svc.Spec.Type
+			info.Class = s.class
+			info.ClusterIP = svc.Spec.ClusterIP
+			for _, p := range svc.Spec.Ports {
+				info.Ports = append(info.Ports, icPort{Port: p.Port, NodePort: p.NodePort, Protocol: p.Protocol, Name: p.Name})
+			}
+			if len(svc.Status.LoadBalancer.Ingress) > 0 {
+				info.ExternalIP = svc.Status.LoadBalancer.Ingress[0].IP
+				info.Hostname = svc.Status.LoadBalancer.Ingress[0].Hostname
+			}
+			break
+		}
+		if info.Found {
+			break
+		}
+	}
+
+	jsonResponse(w, info)
+}
+
 // ── /api/prod/cluster — production cluster overview ─────────────
 
 func handleProdCluster(w http.ResponseWriter, r *http.Request) {
