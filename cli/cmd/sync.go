@@ -979,6 +979,12 @@ func patchDeploymentWrapper(deployment, pod, namespace, container string) (strin
 	if origCmd == "" {
 		return pod, fmt.Errorf("cannot determine container command for deployment/%s", deployment)
 	}
+
+	// If the command is "sh -c <something>", unwrap to just <something>
+	// so we don't end up with a double-nested sh -c inside the wrapper
+	// (which breaks commands containing ; or &&).
+	origCmd = stripShellWrapper(origCmd)
+
 	step("📝", fmt.Sprintf("Original command: %s", origCmd))
 
 	wrapperScript := fmt.Sprintf(
@@ -1225,6 +1231,11 @@ func isDistroless(pod, namespace, container string) bool {
 // don't have sh in their default PATH.
 func patchDistrolessWithWrapper(deployment, namespace, container, origCmd string) (string, error) {
 	cName := containerNameForDeployment(deployment, namespace, container)
+
+	// If the command is "sh -c <something>", unwrap to just <something>
+	// so we don't end up with a double-nested sh -c inside the wrapper
+	// (which breaks commands containing ; or &&).
+	origCmd = stripShellWrapper(origCmd)
 
 	step("📝", fmt.Sprintf("Original command: %s", origCmd))
 
@@ -1620,6 +1631,12 @@ func parseJSONStringArray(s string) string {
 	if s == "" || s == "[]" {
 		return ""
 	}
+	// Use proper JSON parsing to handle values containing commas or quotes.
+	var arr []string
+	if err := json.Unmarshal([]byte(s), &arr); err == nil {
+		return strings.Join(arr, " ")
+	}
+	// Fallback for non-JSON bracket-wrapped strings.
 	s = strings.TrimPrefix(s, "[")
 	s = strings.TrimSuffix(s, "]")
 	parts := strings.Split(s, ",")
@@ -1632,6 +1649,22 @@ func parseJSONStringArray(s string) string {
 		}
 	}
 	return strings.Join(result, " ")
+}
+
+// stripShellWrapper removes a leading "sh -c " from a command string so that
+// embedding it in another "sh -c ..." wrapper doesn't create double-nesting.
+// When readContainerCommand returns ["sh","-c","pip install ...; python ..."]
+// as a single string "sh -c pip install ...; python ...", the sync wrapper
+// would otherwise produce:  while true; do sh -c pip install ...; python ... &
+// which breaks because sh -c only takes one argument.
+func stripShellWrapper(cmd string) string {
+	if strings.HasPrefix(cmd, "sh -c ") {
+		return strings.TrimPrefix(cmd, "sh -c ")
+	}
+	if strings.HasPrefix(cmd, "/bin/sh -c ") {
+		return strings.TrimPrefix(cmd, "/bin/sh -c ")
+	}
+	return cmd
 }
 
 // ════════════════════════════════════════════════════════════════════
