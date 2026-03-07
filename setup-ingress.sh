@@ -64,7 +64,7 @@ metadata:
   name: traefik
 rules:
   - apiGroups: [""]
-    resources: ["services", "endpoints", "secrets", "namespaces"]
+    resources: ["services", "endpoints", "secrets", "namespaces", "nodes"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["extensions", "networking.k8s.io"]
     resources: ["ingresses", "ingressclasses"]
