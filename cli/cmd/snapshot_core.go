@@ -80,7 +80,58 @@ func exportSnapshot(format, outDir, chartName string, dses []snapshotDSE) error 
 	}
 }
 
-// ── 4. Deploy to cluster ────────────────────────────────────────
+// ── 4. Ensure ingress controller ────────────────────────────────
+
+// ensureIngressController checks whether the target production cluster
+// has an ingress controller running. If not, it installs Traefik via
+// Helm. progress is an optional callback for streaming status messages.
+func ensureIngressController(context string, progress func(string)) error {
+	if progress == nil {
+		progress = func(string) {}
+	}
+
+	// Check for existing ingress controller by looking for IngressClass resources
+	out, err := runSilent("kubectl", "--context", context, "get", "ingressclass", "-o", "jsonpath={.items[*].metadata.name}")
+	if err == nil && strings.TrimSpace(out) != "" {
+		progress(fmt.Sprintf("Ingress controller found: %s", strings.TrimSpace(out)))
+		return nil
+	}
+
+	progress("No ingress controller detected — installing Traefik")
+
+	if !commandExists("helm") {
+		return fmt.Errorf("helm is required to install an ingress controller")
+	}
+
+	// Add Traefik repo
+	if _, err := runSilent("helm", "repo", "add", "traefik", "https://traefik.github.io/charts"); err != nil {
+		// Ignore "already exists" errors
+		progress("Traefik Helm repo already configured")
+	}
+	if _, err := runSilent("helm", "repo", "update", "traefik"); err != nil {
+		progress("Warning: could not update Traefik repo")
+	}
+
+	// Install Traefik
+	_, err = runSilent("helm",
+		"--kube-context", context,
+		"install", "traefik", "traefik/traefik",
+		"--namespace", "traefik",
+		"--create-namespace",
+		"--set", "ingressClass.enabled=true",
+		"--set", "ingressClass.isDefaultClass=true",
+		"--wait",
+		"--timeout", "2m",
+	)
+	if err != nil {
+		return fmt.Errorf("failed to install Traefik: %w", err)
+	}
+
+	progress("Traefik ingress controller installed")
+	return nil
+}
+
+// ── 5. Deploy to cluster ────────────────────────────────────────
 
 // DeployOpts carries the parameters for deploying a snapshot chart to
 // a production cluster.

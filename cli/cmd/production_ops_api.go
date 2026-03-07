@@ -147,6 +147,14 @@ func handleProdSnapshotDeploy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// ── Ensure ingress controller (shared pipeline) ─────────────
+	if err := ensureIngressController(prodContext, func(msg string) {
+		send("step", msg)
+	}); err != nil {
+		send("error", "Ingress controller setup failed: "+err.Error())
+		return
+	}
+
 	// ── Deploy (shared pipeline) ────────────────────────────────
 	// The frontend sends ingress names with the original user prefix
 	// (from /api/prod/snapshot/status), but DSE names have been

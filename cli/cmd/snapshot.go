@@ -351,6 +351,13 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("cannot reach cluster via context %q: %w", snapshotContext, err)
 	}
 
+	// ── Ensure ingress controller ──────────────────────────────
+	if err := ensureIngressController(snapshotContext, func(msg string) {
+		step("🌐", msg)
+	}); err != nil {
+		warn(fmt.Sprintf("Could not ensure ingress controller: %v", err))
+	}
+
 	// ── Ingress selector ──────────────────────────────────────
 	// Collect services that have ingress defined
 	var ingressServices []string
