@@ -165,15 +165,14 @@ func deploySnapshot(opts DeployOpts) (string, error) {
 		if fileExists(valuesLive) {
 			helmArgs = append(helmArgs, "-f", valuesLive)
 		}
-		// Ingress selection: disable unselected, clear hosts for selected
+		// Ingress selection: enable/disable for all services based on user selection
 		for _, dse := range opts.DSEs {
-			if dse.Ingress != nil && dse.Ingress.Enabled {
-				vk := helmValuesKey(dse.Name)
-				if !opts.SelectedIngress[dse.Name] {
-					helmArgs = append(helmArgs, "--set", fmt.Sprintf("%s.ingress.enabled=false", vk))
-				} else {
-					helmArgs = append(helmArgs, "--set", fmt.Sprintf("%s.ingress.host=", vk))
-				}
+			vk := helmValuesKey(dse.Name)
+			if opts.SelectedIngress[dse.Name] {
+				helmArgs = append(helmArgs, "--set", fmt.Sprintf("%s.ingress.enabled=true", vk))
+				helmArgs = append(helmArgs, "--set", fmt.Sprintf("%s.ingress.host=", vk))
+			} else {
+				helmArgs = append(helmArgs, "--set", fmt.Sprintf("%s.ingress.enabled=false", vk))
 			}
 		}
 		return runSilent("helm", helmArgs...)

@@ -144,16 +144,16 @@ export function ProductionDeployPage() {
                               )) : <span className="text-dim">—</span>}
                             </td>
                             <td>
-                              {svc.ingress?.enabled ? (
-                                <label className="deploy-ingress-toggle">
-                                  <input
-                                    type="checkbox"
-                                    checked={selectedIngress.has(svc.name)}
-                                    onChange={() => toggleIngress(svc.name)}
-                                  />
-                                  <span className="mono" style={{ fontSize: 12, marginLeft: 4 }}>{svc.ingress.host || 'yes'}</span>
-                                </label>
-                              ) : <span className="text-dim">—</span>}
+                              <label className="deploy-ingress-toggle">
+                                <input
+                                  type="checkbox"
+                                  checked={selectedIngress.has(svc.name)}
+                                  onChange={() => toggleIngress(svc.name)}
+                                />
+                                <span className="mono" style={{ fontSize: 12, marginLeft: 4 }}>
+                                  {svc.ingress?.enabled ? (svc.ingress.host || 'enabled in dev') : 'expose'}
+                                </span>
+                              </label>
                             </td>
                           </tr>
                         ))}

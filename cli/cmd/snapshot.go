@@ -359,21 +359,21 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 	}
 
 	// ── Ingress selector ──────────────────────────────────────
-	// Collect services that have ingress defined
-	var ingressServices []string
-	for _, dse := range dses {
-		if dse.Ingress != nil && dse.Ingress.Enabled {
-			ingressServices = append(ingressServices, dse.Name)
-		}
-	}
-
+	// Offer ALL services for ingress selection, pre-selecting ones
+	// that already had ingress enabled in dev.
 	var selectedIngress []string
-	if len(ingressServices) > 0 {
-		// Build multi-select options
-		options := make([]huh.Option[string], len(ingressServices))
-		for i, svc := range ingressServices {
-			options[i] = huh.NewOption(svc, svc)
+	if len(dses) > 0 {
+		options := make([]huh.Option[string], len(dses))
+		var preSelected []string
+		for i, dse := range dses {
+			label := dse.Name
+			if dse.Ingress != nil && dse.Ingress.Enabled {
+				label += " (ingress in dev)"
+				preSelected = append(preSelected, dse.Name)
+			}
+			options[i] = huh.NewOption(label, dse.Name)
 		}
+		selectedIngress = preSelected
 
 		form := huh.NewForm(
 			huh.NewGroup(
@@ -397,7 +397,7 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 	}
 	if len(selectedIngress) > 0 {
 		step("🌐", fmt.Sprintf("Ingress enabled for: %s", strings.Join(selectedIngress, ", ")))
-	} else if len(ingressServices) > 0 {
+	} else {
 		step("🌐", "No services selected for public ingress")
 	}
 
@@ -415,15 +415,14 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 			"-f", filepath.Join(outDir, "values-live.yaml"),
 			"--timeout", "10m",
 		}
-		// Disable ingress for services the user didn't select;
-		// clear the dev-cluster hostname for selected services so the
-		// ingress catches all traffic on the LoadBalancer IP.
-		for _, svc := range ingressServices {
-			vk := helmValuesKey(svc)
-			if !selectedSet[svc] {
-				helmArgs = append(helmArgs, "--set", fmt.Sprintf("%s.ingress.enabled=false", vk))
-			} else {
+		// Enable/disable ingress for all services based on user selection.
+		for _, dse := range dses {
+			vk := helmValuesKey(dse.Name)
+			if selectedSet[dse.Name] {
+				helmArgs = append(helmArgs, "--set", fmt.Sprintf("%s.ingress.enabled=true", vk))
 				helmArgs = append(helmArgs, "--set", fmt.Sprintf("%s.ingress.host=", vk))
+			} else {
+				helmArgs = append(helmArgs, "--set", fmt.Sprintf("%s.ingress.enabled=false", vk))
 			}
 		}
 		if err := run("helm", helmArgs...); err != nil {
@@ -508,9 +507,16 @@ tmp
 		safe := helmSafe(dse.Name)
 		writeSnapshotFile(templatesDir, safe+"-deployment.yaml", helmDeploymentTemplate(dse, chartName, dses))
 		writeSnapshotFile(templatesDir, safe+"-service.yaml", helmServiceTemplate(dse, chartName))
-		if dse.Ingress != nil && dse.Ingress.Enabled {
-			writeSnapshotFile(templatesDir, safe+"-ingress.yaml", helmIngressTemplate(dse, chartName))
+		// Generate ingress template for every service so users can
+		// enable ingress at deploy time even if it wasn't in dev.
+		if dse.Ingress == nil {
+			dse.Ingress = &snapshotIngress{
+				Enabled:  false,
+				Path:     "/",
+				PathType: "Prefix",
+			}
 		}
+		writeSnapshotFile(templatesDir, safe+"-ingress.yaml", helmIngressTemplate(dse, chartName))
 	}
 
 	// ── Templates: dependency deployments ───────────────────────
@@ -608,17 +614,25 @@ func buildValuesYAML(chartName string, dses []snapshotDSE, depsSeen map[string]b
 			}
 		}
 
-		// Ingress config
+		// Ingress config — always generate so users can enable at deploy time
+		buf.WriteString("  ingress:\n")
 		if dse.Ingress != nil && dse.Ingress.Enabled {
-			buf.WriteString("  ingress:\n")
 			buf.WriteString("    enabled: true\n")
 			if live {
 				buf.WriteString(fmt.Sprintf("    host: \"%s\"\n", dse.Ingress.Host))
 			} else {
 				buf.WriteString(fmt.Sprintf("    host: \"\"  # TODO: set your production hostname (dev: %s)\n", dse.Ingress.Host))
 			}
-			buf.WriteString(fmt.Sprintf("    path: \"%s\"\n", dse.Ingress.Path))
-			buf.WriteString(fmt.Sprintf("    pathType: \"%s\"\n", dse.Ingress.PathType))
+			path := dse.Ingress.Path
+			pathType := dse.Ingress.PathType
+			if path == "" {
+				path = "/"
+			}
+			if pathType == "" {
+				pathType = "Prefix"
+			}
+			buf.WriteString(fmt.Sprintf("    path: \"%s\"\n", path))
+			buf.WriteString(fmt.Sprintf("    pathType: \"%s\"\n", pathType))
 			if dse.Ingress.IngressClassName != "" {
 				buf.WriteString(fmt.Sprintf("    ingressClassName: \"%s\"\n", dse.Ingress.IngressClassName))
 			}
@@ -626,6 +640,12 @@ func buildValuesYAML(chartName string, dses []snapshotDSE, depsSeen map[string]b
 				buf.WriteString("    tls:\n")
 				buf.WriteString(fmt.Sprintf("      secretName: \"%s\"\n", dse.Ingress.TLSSecretName))
 			}
+			buf.WriteString("    annotations: {}\n")
+		} else {
+			buf.WriteString("    enabled: false\n")
+			buf.WriteString("    host: \"\"\n")
+			buf.WriteString("    path: \"/\"\n")
+			buf.WriteString("    pathType: \"Prefix\"\n")
 			buf.WriteString("    annotations: {}\n")
 		}
 
