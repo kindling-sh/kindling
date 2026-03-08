@@ -239,7 +239,7 @@ kind load docker-image "$IMG" --name "$CLUSTER_NAME"
 pass "Operator image loaded into Kind"
 
 # Load the kube-rbac-proxy sidecar image (gcr.io may be unreachable from inside the cluster)
-RBAC_PROXY_IMG="gcr.io/kubebuilder/kube-rbac-proxy:v0.14.1"
+RBAC_PROXY_IMG="registry.k8s.io/kubebuilder/kube-rbac-proxy:v0.14.1"
 if ! docker image inspect "$RBAC_PROXY_IMG" >/dev/null 2>&1; then
   docker pull "$RBAC_PROXY_IMG"
 fi
