@@ -289,17 +289,17 @@ function DSECard({ dse, onDelete }: { dse: DSE; onDelete: (ns: string, name: str
         <TimeAgo timestamp={dse.metadata.creationTimestamp} />
         <div className="card-footer-actions">
           <ActionButton
-            icon={showLogs ? '✕' : '📋'}
+            icon={showLogs ? '✕' : '≡'}
             label={showLogs ? 'Hide Logs' : 'Logs'}
             onClick={() => setShowLogs(!showLogs)}
             small
           />
           {runtime?.sync_supported && !isSyncRunning && (
-            <ActionButton icon="⚡" label="Sync" onClick={() => setShowSync(true)} small />
+            <ActionButton icon="▶" label="Sync" onClick={() => setShowSync(true)} small />
           )}
           {isSyncRunning && (
             <ActionButton
-              icon={isSyncStopping ? '⏳' : '■'}
+              icon={isSyncStopping ? '◔' : '■'}
               label={isSyncStopping ? 'Stopping…' : 'Stop Sync'}
               onClick={handleStopSync}
               disabled={!!isSyncStopping}
@@ -307,7 +307,7 @@ function DSECard({ dse, onDelete }: { dse: DSE; onDelete: (ns: string, name: str
               small
             />
           )}
-          <ActionButton icon="📦" label="Load" onClick={() => setShowLoad(true)} small />
+          <ActionButton icon="▣" label="Load" onClick={() => setShowLoad(true)} small />
           <ActionButton icon="✕" label="Delete" onClick={() => onDelete(ns, name)} danger small />
         </div>
       </div>
@@ -541,7 +541,7 @@ function SyncModal({
       onClose={onClose}
     >
       <div className="sync-modal-strategy">
-        <span className="tag tag-purple">⚡ {runtime?.mode || 'auto'}</span>
+        <span className="tag tag-purple">▶ {runtime?.mode || 'auto'}</span>
         <span className="text-muted">{strategyLabel}</span>
       </div>
 
@@ -555,7 +555,7 @@ function SyncModal({
           <option value="">Select a service directory…</option>
           {serviceDirs.map(d => (
             <option key={d.path} value={d.path}>
-              {d.name} {d.language ? `(${d.language})` : ''} {d.has_dockerfile ? '🐳' : ''}
+              {d.name} {d.language ? `(${d.language})` : ''} {d.has_dockerfile ? '▣' : ''}
             </option>
           ))}
           <option value="__custom__">Custom path…</option>
@@ -700,7 +700,7 @@ function LoadModal({
           <option value="">Select a service directory…</option>
           {serviceDirs.map(d => (
             <option key={d.path} value={d.path}>
-              {d.name} {d.has_dockerfile ? '🐳' : '(no Dockerfile)'} {d.language ? `· ${d.language}` : ''}
+              {d.name} {d.has_dockerfile ? '▣' : '(no Dockerfile)'} {d.language ? `· ${d.language}` : ''}
             </option>
           ))}
           <option value="__custom__">Custom path…</option>
@@ -732,7 +732,7 @@ function LoadModal({
           fontSize: '0.85em', lineHeight: 1.4,
           border: '1px solid var(--color-warning-border, #ffc107)',
         }}>
-          ⚠️ {warning}
+          ⚠ {warning}
         </div>
       )}
 

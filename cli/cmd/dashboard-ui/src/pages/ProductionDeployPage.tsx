@@ -301,7 +301,7 @@ export function ProductionDeployPage() {
               {showCredentials && devCreds.length > 0 && (
                 <div className="card" style={{ marginBottom: 16 }}>
                   <div className="card-header">
-                    <span className="card-icon">🔑</span>
+                    <span className="card-icon">◈</span>
                     <h3>Production Credentials</h3>
                     {cachedAt && (
                       <span className="tag" style={{ marginLeft: 'auto', fontSize: 11 }}>
@@ -354,7 +354,7 @@ export function ProductionDeployPage() {
       {(step === 'deploying' || step === 'done') && (
         <div className="card">
           <div className="card-header">
-            <span className="card-icon">{step === 'deploying' ? '⏳' : logs.some(l => l.type === 'error') ? '✗' : '✓'}</span>
+            <span className="card-icon">{step === 'deploying' ? '◔' : logs.some(l => l.type === 'error') ? '✗' : '✓'}</span>
             <h3>{step === 'deploying' ? 'Deploying…' : logs.some(l => l.type === 'error') ? 'Deploy Failed' : 'Deploy Complete'}</h3>
           </div>
           <div className="card-body" style={{ padding: 0 }}>

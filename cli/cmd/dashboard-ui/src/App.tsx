@@ -47,16 +47,16 @@ interface NavGroup {
 const NAV_GROUPS: NavGroup[] = [
   {
     label: 'Setup',
-    icon: '🚀',
+    icon: '△',
     items: [
       { page: 'topology', icon: '◇', label: 'App Designer' },
-      { page: 'analyze', icon: '🔍', label: 'Analyze & Generate' },
+      { page: 'analyze', icon: '◇', label: 'Analyze & Generate' },
       { page: 'runners', icon: '▶', label: 'Runners' },
     ],
   },
   {
     label: 'Develop',
-    icon: '🔧',
+    icon: '⬡',
     items: [
       { page: 'dses', icon: '◆', label: 'Environments' },
       { page: 'api-explorer', icon: '⇆', label: 'API Explorer' },
@@ -65,7 +65,7 @@ const NAV_GROUPS: NavGroup[] = [
   },
   {
     label: 'Production',
-    icon: '🌐',
+    icon: '◎',
     items: [
       { page: 'prod-overview', icon: '⬢', label: 'Overview' },
       { page: 'prod-deploy', icon: '▷', label: 'Deploy' },
@@ -142,7 +142,7 @@ function CommandMenu({ onClose, onAction }: {
         <div className="cmd-menu-group">
           <div className="cmd-menu-group-label">Setup</div>
           <button className="cmd-item" onClick={() => onAction('init')}>
-            <span className="cmd-item-icon i-green">⚡</span>
+            <span className="cmd-item-icon i-green">▶</span>
             <span className="cmd-item-text">
               <div className="cmd-item-label">Init Cluster</div>
               <div className="cmd-item-desc">Bootstrap Kind + operator</div>
@@ -487,7 +487,7 @@ function AppSidebar({ activePage, setActivePage }: { activePage: Page; setActive
   return (
     <aside className="sidebar">
       <div className="sidebar-brand">
-        <span className="brand-icon">🔥</span>
+        <span className="brand-icon">◆</span>
         <span className="brand-text">kindling</span>
       </div>
 

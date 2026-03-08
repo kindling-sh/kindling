@@ -134,7 +134,7 @@ export function PathAutocomplete({
               onMouseEnter={() => setActiveIdx(i)}
               onMouseDown={(e) => { e.preventDefault(); selectSuggestion(s); }}
             >
-              <span className="path-autocomplete-icon">📁</span>
+              <span className="path-autocomplete-icon">▷</span>
               <span className="path-autocomplete-full">{displayPath(s)}</span>
               {s !== displayPath(s) && (
                 <span className="path-autocomplete-hint" title={s}>{s}</span>

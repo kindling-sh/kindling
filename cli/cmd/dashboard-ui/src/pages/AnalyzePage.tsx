@@ -143,7 +143,7 @@ export function AnalyzePage() {
             style={{ flex: 1 }}
           />
           <ActionButton
-            icon={analyzing ? '⏳' : '🔍'}
+            icon={analyzing ? '◔' : '◇'}
             label={analyzing ? 'Analyzing…' : 'Analyze'}
             onClick={handleAnalyze}
             disabled={analyzing}
@@ -157,30 +157,30 @@ export function AnalyzePage() {
         <div className="analyze-results">
           {!analyzeResult.ok ? (
             <div className="analyze-error">
-              <span>❌</span> {analyzeResult.error}
+              <span>✕</span> {analyzeResult.error}
             </div>
           ) : (
             <>
               {/* Summary bar */}
               <div className="analyze-summary-bar">
                 <div className="analyze-summary-pills">
-                  {(summary?.pass ?? 0) > 0 && <span className="analyze-pill analyze-pill-pass">✅ {summary!.pass} passed</span>}
-                  {(summary?.warn ?? 0) > 0 && <span className="analyze-pill analyze-pill-warn">⚠️ {summary!.warn} warnings</span>}
-                  {(summary?.fail ?? 0) > 0 && <span className="analyze-pill analyze-pill-fail">❌ {summary!.fail} blockers</span>}
+                  {(summary?.pass ?? 0) > 0 && <span className="analyze-pill analyze-pill-pass">✓ {summary!.pass} passed</span>}
+                  {(summary?.warn ?? 0) > 0 && <span className="analyze-pill analyze-pill-warn">⚠ {summary!.warn} warnings</span>}
+                  {(summary?.fail ?? 0) > 0 && <span className="analyze-pill analyze-pill-fail">✕ {summary!.fail} blockers</span>}
                 </div>
                 <div className="analyze-summary-verdict">
                   {ready ? (
-                    <span className="analyze-verdict-ready">✅ Ready for CI generation</span>
+                    <span className="analyze-verdict-ready">✓ Ready for CI generation</span>
                   ) : (
-                    <span className="analyze-verdict-blocked">❌ Fix blockers before generating</span>
+                    <span className="analyze-verdict-blocked">✕ Fix blockers before generating</span>
                   )}
                 </div>
               </div>
 
               {/* Info strip */}
               <div className="analyze-meta">
-                {analyzeResult.repoPath && <span className="tag">📂 {analyzeResult.repoPath}</span>}
-                {analyzeResult.language && <span className="tag tag-purple">🔤 {analyzeResult.language}</span>}
+                {analyzeResult.repoPath && <span className="tag">▷ {analyzeResult.repoPath}</span>}
+                {analyzeResult.language && <span className="tag tag-purple">⊞ {analyzeResult.language}</span>}
               </div>
 
               {/* Category cards */}
@@ -194,7 +194,7 @@ export function AnalyzePage() {
               {analyzeResult.existingWorkflow && (
                 <details className="analyze-workflow-viewer">
                   <summary>
-                    <span>📄</span> View existing workflow — <code>{analyzeResult.existingWorkflowPath}</code>
+                    <span>▤</span> View existing workflow — <code>{analyzeResult.existingWorkflowPath}</code>
                   </summary>
                   <pre className="log-output" style={{ marginTop: 8, maxHeight: 400, overflow: 'auto', fontSize: 11 }}>
                     {analyzeResult.existingWorkflow}
@@ -225,7 +225,7 @@ export function AnalyzePage() {
 
           {!showGenerate && !generateResult && (
             <ActionButton
-              icon="⚙️"
+              icon="⊞"
               label="Configure Generation"
               onClick={() => setShowGenerate(true)}
               disabled={!ready}
@@ -296,7 +296,7 @@ export function AnalyzePage() {
 
               <div className="form-actions">
                 <ActionButton
-                  icon="⚡"
+                  icon="✦"
                   label="Generate"
                   onClick={handleGenerate}
                   disabled={!generateForm.apiKey}
@@ -322,7 +322,7 @@ export function AnalyzePage() {
               )}
               {generateResult && (
                 <div className={`analyze-generate-result ${generateResult.ok ? 'success' : 'error'}`}>
-                  <span>{generateResult.ok ? '✅' : '❌'}</span>
+                  <span>{generateResult.ok ? '✓' : '✕'}</span>
                   <span>{generateResult.output || generateResult.error}</span>
                 </div>
               )}
@@ -373,12 +373,12 @@ export function AnalyzePage() {
                 </div>
               </div>
               <div className="analyze-push-file-preview">
-                <span className="analyze-push-file-icon">📄</span>
+                <span className="analyze-push-file-icon">▤</span>
                 <code>{generateResult.path}</code>
               </div>
               <div className="form-actions">
                 <ActionButton
-                  icon="🚀"
+                  icon="△"
                   label="Commit & Push"
                   onClick={handlePush}
                   primary
@@ -402,7 +402,7 @@ export function AnalyzePage() {
               )}
               {pushResult && (
                 <div className={`analyze-generate-result ${pushResult.ok ? 'success' : 'error'}`}>
-                  <span>{pushResult.ok ? '✅' : '❌'}</span>
+                  <span>{pushResult.ok ? '✓' : '✕'}</span>
                   <span>{pushResult.output || pushResult.error}</span>
                 </div>
               )}
@@ -422,18 +422,18 @@ export function AnalyzePage() {
 /* ── Category card ─────────────────────────────────────────── */
 
 const CATEGORY_ICONS: Record<string, string> = {
-  Git: '🔀',
-  'CI Workflow': '⚙️',
-  Dockerfiles: '🐳',
-  Dependencies: '📦',
-  'Project Structure': '🏗️',
-  Architecture: '🤖',
-  Secrets: '🔑',
-  Cluster: '☸️',
+  Git: '⇆',
+  'CI Workflow': '⊞',
+  Dockerfiles: '▣',
+  Dependencies: '◈',
+  'Project Structure': '⬢',
+  Architecture: '◇',
+  Secrets: '◈',
+  Cluster: '◎',
 };
 
 function AnalyzeCategoryCard({ category }: { category: AnalyzeCategory }) {
-  const icon = CATEGORY_ICONS[category.category] || '📋';
+  const icon = CATEGORY_ICONS[category.category] || '≡';
   const passCount = category.checks.filter(c => c.status === 'pass').length;
   const failCount = category.checks.filter(c => c.status === 'fail').length;
   const warnCount = category.checks.filter(c => c.status === 'warn').length;
@@ -452,7 +452,7 @@ function AnalyzeCategoryCard({ category }: { category: AnalyzeCategory }) {
         {category.checks.map((check, i) => (
           <div key={i} className={`analyze-check analyze-check-${check.status}`}>
             <span className="analyze-check-icon">
-              {check.status === 'pass' ? '✅' : check.status === 'fail' ? '❌' : check.status === 'warn' ? '⚠️' : 'ℹ️'}
+              {check.status === 'pass' ? '✓' : check.status === 'fail' ? '✕' : check.status === 'warn' ? '⚠' : '○'}
             </span>
             <div className="analyze-check-content">
               <span className="analyze-check-msg">{check.message}</span>

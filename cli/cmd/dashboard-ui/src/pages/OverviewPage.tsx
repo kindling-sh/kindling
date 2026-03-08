@@ -20,7 +20,7 @@ interface PathTile {
 const PATHS: PathTile[] = [
   {
     id: 'setup',
-    icon: '🚀',
+    icon: '△',
     title: 'Setup',
     desc: 'Get your local cluster running, design your app, and register CI runners — everything to go from zero to deploying.',
     color: '#f97316',
@@ -29,7 +29,7 @@ const PATHS: PathTile[] = [
   },
   {
     id: 'develop',
-    icon: '🔧',
+    icon: '⬡',
     title: 'Develop',
     desc: 'Build, sync, debug, and test your services. Everything you need for your inner dev loop.',
     color: '#3b82f6',
@@ -38,7 +38,7 @@ const PATHS: PathTile[] = [
   },
   {
     id: 'cicd',
-    icon: '⚙️',
+    icon: '⊞',
     title: 'CI / CD',
     desc: 'Generate CI workflows with AI. Push code and watch your runners build, test, and deploy automatically.',
     color: '#8b5cf6',
@@ -47,7 +47,7 @@ const PATHS: PathTile[] = [
   },
   {
     id: 'production',
-    icon: '🌐',
+    icon: '◎',
     title: 'Production',
     desc: 'Snapshot your dev environment and deploy to a real cluster. Monitor, scale, and manage TLS.',
     color: '#10b981',
@@ -124,7 +124,7 @@ export function OverviewPage() {
       {/* ── Header ─────────────────────────── */}
       <div className="home-header">
         <div className="home-header-text">
-          <h1 className="home-title">🔥 kindling</h1>
+          <h1 className="home-title">◆ kindling</h1>
           <p className="home-subtitle">Your laptop is your staging environment. Where would you like to go?</p>
         </div>
         {!cluster.exists && (
@@ -236,7 +236,7 @@ export function OverviewPage() {
         {intel && (
           <div className="card" style={{ marginBottom: 20 }}>
             <div className="card-header">
-              <span className="card-icon">⚡</span>
+              <span className="card-icon">◇</span>
               <h3>Agent Intel</h3>
             </div>
             <div className="card-body">

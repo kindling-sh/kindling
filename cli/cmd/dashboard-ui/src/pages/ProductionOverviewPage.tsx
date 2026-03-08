@@ -132,7 +132,7 @@ export function ProductionOverviewPage() {
         return (
           <div className="card advisor-card" style={{ marginBottom: 20 }}>
             <div className="card-header">
-              <span className="card-icon">{visible.some(a => a.severity === 'critical') ? '🔴' : visible.some(a => a.severity === 'warning') ? '🟡' : '🟢'}</span>
+              <span className="card-icon">{visible.some(a => a.severity === 'critical') ? '●' : visible.some(a => a.severity === 'warning') ? '▲' : '○'}</span>
               <h3>Cluster Advisor</h3>
               {advisorChecked && (
                 <span className="text-dim" style={{ marginLeft: 'auto', fontSize: 11 }}>
@@ -220,7 +220,7 @@ export function ProductionOverviewPage() {
 
         <div className="card">
           <div className="card-header">
-            <span className="card-icon">🔐</span>
+            <span className="card-icon">◈</span>
             <h3>Cert-Manager</h3>
           </div>
           <div className="card-body">

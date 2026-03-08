@@ -293,7 +293,7 @@ export function ProductionWorkloadsPage() {
                             <td className="mono" style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{p.spec?.nodeName || '—'}</td>
                             <td><TimeAgo timestamp={p.metadata.creationTimestamp} /></td>
                             <td className="action-cell" style={{ textAlign: 'right' }}>
-                              <ActionButton icon="📋" label="" onClick={() => openLogs(ns, p.metadata.name)} small ghost />
+                              <ActionButton icon="≡" label="" onClick={() => openLogs(ns, p.metadata.name)} small ghost />
                               <ActionButton icon="▸" label="" onClick={() => setExecTarget({ ns, pod: p.metadata.name })} small ghost />
                               <ActionButton icon="✕" label="" onClick={() => setDeleteTarget({ ns, pod: p.metadata.name })} small ghost />
                             </td>

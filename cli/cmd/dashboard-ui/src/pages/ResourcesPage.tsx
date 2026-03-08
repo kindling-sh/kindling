@@ -21,7 +21,7 @@ const TABS: { key: ResourceTab; icon: string; label: string }[] = [
   { key: 'services', icon: '◎', label: 'Services' },
   { key: 'ingresses', icon: '⊕', label: 'Ingresses' },
   { key: 'secrets', icon: '◈', label: 'Secrets' },
-  { key: 'events', icon: '⚡', label: 'Events' },
+  { key: 'events', icon: '◇', label: 'Events' },
   { key: 'rbac', icon: '⊘', label: 'RBAC' },
 ];
 

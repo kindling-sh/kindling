@@ -256,7 +256,7 @@ function ContainerCard({
         <span>{open ? '▾' : '▸'}</span>
         <span className="container-card-name">{spec.name}</span>
         <StatusBadge ok={state.ok} label={state.label} />
-        <button className="btn btn-sm btn-ghost" onClick={(e) => { e.stopPropagation(); onShowLogs(); }}>📋 Logs</button>
+        <button className="btn btn-sm btn-ghost" onClick={(e) => { e.stopPropagation(); onShowLogs(); }}>≡ Logs</button>
       </div>
       {open && (
         <div className="container-card-body">

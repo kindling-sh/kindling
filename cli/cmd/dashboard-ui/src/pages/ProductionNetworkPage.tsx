@@ -101,7 +101,7 @@ export function ProductionNetworkPage() {
                       <td className="mono">{path?.backend?.service?.name || '—'}:{path?.backend?.service?.port?.number || '—'}</td>
                       <td>
                         {hasTLS ? (
-                          <span className="prod-tls-badge prod-tls-ok">🔒 TLS</span>
+                          <span className="prod-tls-badge prod-tls-ok">◈ TLS</span>
                         ) : (
                           <span className="prod-tls-badge prod-tls-none">—</span>
                         )}

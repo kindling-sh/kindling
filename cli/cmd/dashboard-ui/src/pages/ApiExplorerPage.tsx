@@ -315,7 +315,7 @@ export function ApiExplorerCore({ compact }: { compact?: boolean } = {}) {
             className={`btn btn-sm ${showEndpoints ? 'btn-primary' : 'btn-ghost'}`}
             onClick={() => setShowEndpoints(!showEndpoints)}
           >
-            ⚡ Endpoints {apiSpec ? `(${apiSpec.endpoints.length})` : ''}
+            ◇ Endpoints {apiSpec ? `(${apiSpec.endpoints.length})` : ''}
           </button>
           <button
             className={`btn btn-sm ${showHistory ? 'btn-primary' : 'btn-ghost'}`}
@@ -453,7 +453,7 @@ export function ApiExplorerCore({ compact }: { compact?: boolean } = {}) {
               onClick={handleSend}
               disabled={sending || !selectedService}
             >
-              {sending ? '⏳' : '▶'} Send
+              {sending ? '◔' : '▶'} Send
             </button>
           </div>
 

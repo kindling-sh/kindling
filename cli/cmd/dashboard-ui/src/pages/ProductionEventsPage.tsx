@@ -60,7 +60,7 @@ export function ProductionEventsPage() {
       </div>
 
       {items.length === 0 ? (
-        <EmptyState icon="⚡" message={search || typeFilter ? 'No matching events.' : 'No events in the cluster.'} />
+        <EmptyState icon="◇" message={search || typeFilter ? 'No matching events.' : 'No events in the cluster.'} />
       ) : (
         <div className="prod-event-list">
           {items.map((ev, i) => (

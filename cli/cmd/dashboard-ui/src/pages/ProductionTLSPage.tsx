@@ -122,7 +122,7 @@ export function ProductionTLSPage() {
       {publicAddr && (hasCertManager || certs.length > 0) && !showForm && !installing && (
         <div className="card" style={{ marginBottom: 16, borderLeft: pendingCerts.length > 0 ? '3px solid var(--info, #3b82f6)' : '3px solid var(--success, #22c55e)' }}>
           <div className="card-header" style={{ borderBottom: '1px solid var(--border)' }}>
-            <span className="card-icon">{pendingCerts.length > 0 ? '🌐' : '✅'}</span>
+            <span className="card-icon">{pendingCerts.length > 0 ? '◎' : '✓'}</span>
             <h3>{pendingCerts.length > 0 ? 'DNS Configuration Required' : 'DNS Configuration'}</h3>
             {pendingCerts.length > 0 && (
               <span className="tag tag-yellow" style={{ marginLeft: 'auto', fontSize: 11 }}>
@@ -196,7 +196,7 @@ export function ProductionTLSPage() {
                               {isReady ? (
                                 <span style={{ color: 'var(--success, #22c55e)', fontWeight: 600, fontSize: 12 }}>✓ Verified</span>
                               ) : isPending ? (
-                                <span style={{ color: 'var(--warning, #f59e0b)', fontWeight: 600, fontSize: 12 }}>⏳ Pending</span>
+                                <span style={{ color: 'var(--warning, #f59e0b)', fontWeight: 600, fontSize: 12 }}>◔ Pending</span>
                               ) : (
                                 <span className="text-dim" style={{ fontSize: 12 }}>—</span>
                               )}
@@ -222,7 +222,7 @@ export function ProductionTLSPage() {
 
             {/* Provider-specific hint */}
             <div style={{ marginTop: 14, display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 12, color: 'var(--text-dim)', lineHeight: 1.5 }}>
-              <span style={{ flexShrink: 0, marginTop: 1 }}>💡</span>
+              <span style={{ flexShrink: 0, marginTop: 1 }}>◇</span>
               <span>
                 Go to your DNS provider (Cloudflare, Namecheap, Route 53, etc.) and create
                 {publicIP ? ' an A record' : ' a CNAME record'} for each domain above pointing
@@ -243,7 +243,7 @@ export function ProductionTLSPage() {
       {untlsIngresses.length > 0 && !installing && !showForm && logs.length === 0 && (
         <div className="card" style={{ marginBottom: 16, borderLeft: '3px solid var(--warning, #f59e0b)' }}>
           <div className="card-body" style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px' }}>
-            <span style={{ fontSize: 18 }}>⚠️</span>
+            <span style={{ fontSize: 18 }}>⚠</span>
             <div style={{ flex: 1 }}>
               <span style={{ fontWeight: 600, fontSize: 13 }}>{untlsIngresses.length} ingress{untlsIngresses.length > 1 ? 'es' : ''} without TLS</span>
               <span className="text-dim" style={{ marginLeft: 8, fontSize: 12 }}>
@@ -378,7 +378,7 @@ export function ProductionTLSPage() {
       ) : certs.length > 0 ? (
         <div className="card">
           <div className="card-header">
-            <span className="card-icon">🔒</span>
+            <span className="card-icon">◈</span>
             <h3>Certificates</h3>
           </div>
           <div className="table-wrap">
@@ -441,7 +441,7 @@ export function ProductionTLSPage() {
                       <td className="mono">{host || '—'}</td>
                       <td>
                         {hasTLS ? (
-                          <span className="prod-tls-badge prod-tls-ok">🔒 {secret || 'TLS'}</span>
+                          <span className="prod-tls-badge prod-tls-ok">◈ {secret || 'TLS'}</span>
                         ) : (
                           <span className="prod-tls-badge prod-tls-none">No TLS</span>
                         )}

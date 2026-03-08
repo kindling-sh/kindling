@@ -30,7 +30,7 @@ const TABS: { key: PrimitivesTab; icon: string; label: string }[] = [
   { key: 'services', icon: '◎', label: 'Services' },
   { key: 'ingresses', icon: '⊕', label: 'Ingresses' },
   { key: 'secrets', icon: '◈', label: 'Secrets' },
-  { key: 'events', icon: '⚡', label: 'Events' },
+  { key: 'events', icon: '◇', label: 'Events' },
   { key: 'rbac', icon: '⊘', label: 'RBAC' },
 ];
 
@@ -100,7 +100,7 @@ function ContainerCard({
         <span>{open ? '▾' : '▸'}</span>
         <span className="container-card-name">{spec.name}</span>
         <StatusBadge ok={state.ok} label={state.label} />
-        <button className="btn btn-sm btn-ghost" onClick={(e) => { e.stopPropagation(); onShowLogs(); }}>📋 Logs</button>
+        <button className="btn btn-sm btn-ghost" onClick={(e) => { e.stopPropagation(); onShowLogs(); }}>≡ Logs</button>
       </div>
       {open && (
         <div className="container-card-body">
@@ -471,7 +471,7 @@ function DeploymentDetail({
         {containers.map((c) => (
           <div key={c.name} className="container-card">
             <div className="container-card-header">
-              <span>📦</span>
+              <span>▣</span>
               <span className="container-card-name">{c.name}</span>
             </div>
             <div className="container-card-body">
@@ -505,7 +505,7 @@ function DeploymentDetail({
             const isActive = desired > 0;
             return (
               <div key={rs.metadata.name} className="k8s-item" onClick={() => onSelectRS(rs)}>
-                <span className="k8s-item-icon">{isActive ? '🟢' : '⚫'}</span>
+                <span className="k8s-item-icon">{isActive ? '●' : '○'}</span>
                 <div className="k8s-item-info">
                   <div className="k8s-item-name">{rs.metadata.name}</div>
                   <div className="k8s-item-detail">
