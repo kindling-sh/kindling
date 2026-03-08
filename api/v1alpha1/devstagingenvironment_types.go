@@ -60,6 +60,13 @@ type DeploymentSpec struct {
 	// HealthCheck configures liveness and readiness probes.
 	//+optional
 	HealthCheck *HealthCheckSpec `json:"healthCheck,omitempty"`
+
+	// Compute tags this service for special compute scheduling (e.g. "gpu",
+	// "high-memory", "arm64"). When set, the snapshot Helm chart adds a
+	// nodeSelector (kindling.dev/compute=<value>) and a matching toleration
+	// so the pod lands on appropriately labelled nodes.
+	//+optional
+	Compute string `json:"compute,omitempty"`
 }
 
 // ResourceRequirements defines compute resource requests and limits.

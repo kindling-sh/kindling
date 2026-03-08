@@ -340,6 +340,7 @@ export interface RuntimeInfo {
 
 export interface SyncStatus {
   running: boolean;
+  stopping?: boolean;
   deployment?: string;
   namespace?: string;
   src?: string;
@@ -643,6 +644,7 @@ export interface SnapshotService {
   replicas: number;
   ingress?: { enabled: boolean; host: string };
   deps: string[];
+  compute?: string; // e.g. "gpu", "high-memory", "arm64"
 }
 
 export interface SnapshotStatus {

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
-import { fetchSnapshotStatus, streamSnapshotDeploy } from '../api';
+import { fetchSnapshotStatus, fetchSnapshotCredentials, streamSnapshotDeploy } from '../api';
 import type { SnapshotStatus, SnapshotService } from '../types';
+import type { SnapshotCredential } from '../api';
 import { StatusBadge, EmptyState } from './shared';
 
 type DeployStep = 'configure' | 'deploying' | 'done';
@@ -18,6 +19,12 @@ export function ProductionDeployPage() {
   const [namespace, setNamespace] = useState('default');
   const [selectedIngress, setSelectedIngress] = useState<Set<string>>(new Set());
 
+  // Credential state
+  const [devCreds, setDevCreds] = useState<SnapshotCredential[]>([]);
+  const [credValues, setCredValues] = useState<Record<string, string>>({});
+  const [cachedAt, setCachedAt] = useState('');
+  const [showCredentials, setShowCredentials] = useState(false);
+
   // Deploy state
   const [step, setStep] = useState<DeployStep>('configure');
   const [logs, setLogs] = useState<{ type: string; message: string }[]>([]);
@@ -25,16 +32,31 @@ export function ProductionDeployPage() {
   const cancelRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
-    fetchSnapshotStatus()
-      .then(s => {
-        setStatus(s);
-        // Pre-select all services with ingress enabled
-        const ing = new Set<string>();
-        for (const svc of s.services) {
-          if (svc.ingress?.enabled) ing.add(svc.name);
+    Promise.all([
+      fetchSnapshotStatus(),
+      fetchSnapshotCredentials().catch(() => ({ credentials: [], cached_at: '' })),
+    ]).then(([s, creds]) => {
+      setStatus(s);
+      // Pre-select all services with ingress enabled
+      const ing = new Set<string>();
+      for (const svc of s.services) {
+        if (svc.ingress?.enabled) ing.add(svc.name);
+      }
+      setSelectedIngress(ing);
+
+      // Set up credential state
+      if (creds.credentials?.length) {
+        setDevCreds(creds.credentials);
+        setCachedAt(creds.cached_at || '');
+        setShowCredentials(true);
+        // Pre-fill from cache
+        const initial: Record<string, string> = {};
+        for (const c of creds.credentials) {
+          initial[c.env_var] = c.cached || '';
         }
-        setSelectedIngress(ing);
-      })
+        setCredValues(initial);
+      }
+    })
       .catch(() => {})
       .finally(() => setLoading(false));
   }, []);
@@ -58,8 +80,18 @@ export function ProductionDeployPage() {
     setStep('deploying');
     setLogs([]);
 
+    // Build credentials map — only include non-empty values
+    const credentials: Record<string, string> = {};
+    for (const [k, v] of Object.entries(credValues)) {
+      if (v.trim()) credentials[k] = v.trim();
+    }
+
     const cancel = streamSnapshotDeploy(
-      { registry, registry_user: registryUser, registry_pass: registryPass, tag, format, namespace, ingress: Array.from(selectedIngress) },
+      {
+        registry, registry_user: registryUser, registry_pass: registryPass,
+        tag, format, namespace, ingress: Array.from(selectedIngress),
+        ...(Object.keys(credentials).length > 0 ? { credentials } : {}),
+      },
       (msg) => {
         setLogs(prev => [...prev, msg]);
         if (msg.type === 'done' || msg.type === 'error') {
@@ -131,7 +163,7 @@ export function ProductionDeployPage() {
                   <div className="table-wrap">
                     <table className="data-table">
                       <thead>
-                        <tr><th>Service</th><th>Image</th><th>Port</th><th>Replicas</th><th>Dependencies</th><th>Ingress</th></tr>
+                        <tr><th>Service</th><th>Image</th><th>Port</th><th>Replicas</th><th>Dependencies</th><th>Compute</th><th>Ingress</th></tr>
                       </thead>
                       <tbody>
                         {services.map(svc => (
@@ -146,13 +178,19 @@ export function ProductionDeployPage() {
                               )) : <span className="text-dim">—</span>}
                             </td>
                             <td>
+                              {svc.compute ? (
+                                <span className="tag tag-compute">{svc.compute}</span>
+                              ) : <span className="text-dim">—</span>}
+                            </td>
+                            <td>
                               <label className="deploy-ingress-toggle">
                                 <input
                                   type="checkbox"
                                   checked={selectedIngress.has(svc.name)}
                                   onChange={() => toggleIngress(svc.name)}
                                 />
-                                <span className="mono" style={{ fontSize: 12, marginLeft: 4 }}>
+                                <span className="toggle-track" />
+                                <span className="mono" style={{ fontSize: 12 }}>
                                   {svc.ingress?.enabled ? (svc.ingress.host || 'enabled in dev') : 'expose'}
                                 </span>
                               </label>
@@ -258,6 +296,45 @@ export function ProductionDeployPage() {
                   </div>
                 </div>
               </div>
+
+              {/* Production credentials */}
+              {showCredentials && devCreds.length > 0 && (
+                <div className="card" style={{ marginBottom: 16 }}>
+                  <div className="card-header">
+                    <span className="card-icon">🔑</span>
+                    <h3>Production Credentials</h3>
+                    {cachedAt && (
+                      <span className="tag" style={{ marginLeft: 'auto', fontSize: 11 }}>
+                        Cached {new Date(cachedAt).toLocaleDateString()}
+                      </span>
+                    )}
+                  </div>
+                  <div className="card-body">
+                    <div style={{ marginBottom: 12, padding: '8px 12px', background: 'var(--bg-elevated)', borderRadius: 6, border: '1px solid var(--warning-border, #a8860044)', fontSize: 13 }}>
+                      <strong>⚠ Dev credentials detected.</strong> Your dependencies use default dev values (e.g. <code>devuser/devpass</code>).
+                      Enter production credentials below or they'll be deployed with dev defaults.
+                    </div>
+                    {devCreds.map(cred => (
+                      <div key={cred.env_var} className="form-group" style={{ marginTop: 12 }}>
+                        <label className="form-label">
+                          <span className="mono" style={{ fontWeight: 600 }}>{cred.env_var}</span>
+                          <span className="text-dim" style={{ marginLeft: 8, fontSize: 12 }}>({cred.dep_type})</span>
+                        </label>
+                        <input
+                          className="form-input"
+                          type="password"
+                          placeholder={cred.dev_value}
+                          value={credValues[cred.env_var] || ''}
+                          onChange={e => setCredValues(prev => ({ ...prev, [cred.env_var]: e.target.value }))}
+                        />
+                        <span className="form-hint">
+                          Used by: {cred.services.join(', ')}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
                 <button

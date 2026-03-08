@@ -35,6 +35,10 @@ const METHODS: HttpMethod[] = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'];
 // ── Main Component ──────────────────────────────────────────────
 
 export function ApiExplorerPage() {
+  return <ApiExplorerCore />;
+}
+
+export function ApiExplorerCore({ compact }: { compact?: boolean } = {}) {
   // Services
   const [services, setServices] = useState<ProxyService[]>([]);
   const [loadingServices, setLoadingServices] = useState(true);
@@ -298,8 +302,9 @@ export function ApiExplorerPage() {
   }, [selectedService, selectedPort, buildStubBody, savedBodies, saveBody]);
 
   return (
-    <div className="api-explorer">
+    <div className={`api-explorer${compact ? ' api-explorer-compact' : ''}`}>
       {/* Header */}
+      {!compact && (
       <div className="api-explorer-header">
         <div className="api-explorer-title">
           <h2>API Explorer</h2>
@@ -320,6 +325,7 @@ export function ApiExplorerPage() {
           </button>
         </div>
       </div>
+      )}
 
       {/* Service Picker */}
       <div className="api-service-picker">

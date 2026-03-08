@@ -71,7 +71,7 @@ var debugProfiles = map[string]debugProfile{
 	},
 	"python": {
 		Name: "Python (debugpy)", Port: 5678,
-		WrapFmt:    `python -m debugpy --listen 0.0.0.0:5678 --wait-for-client %s`,
+		WrapFmt:    `python -m debugpy --listen 0.0.0.0:5678 %s`,
 		LaunchType: "debugpy", Request: "attach",
 		InstallCmd: "pip install debugpy",
 		Extra: map[string]interface{}{
@@ -444,6 +444,30 @@ func startDebug(deployment, namespace string) error {
 	}
 	step("✅", "Debug pod ready: "+newPod)
 
+	// Wait for the debug port to be listening inside the pod.
+	// debugpy may still be installing or binding when the pod reports Ready
+	// (probes are disabled). Without this check the port-forward connects
+	// too early and gets "connection refused".
+	if runtimeKey != "go" { // Go inject has its own wait
+		step("⏳", "Waiting for debug port to be ready...")
+		portReady := false
+		for i := 0; i < 30; i++ { // up to 30s
+			out, err := runSilent("kubectl", "exec", newPod,
+				"-n", namespace, "--context", kindContext(),
+				"-c", container,
+				"--", "sh", "-c",
+				fmt.Sprintf("cat /proc/net/tcp /proc/net/tcp6 2>/dev/null | grep ':%04X' || exit 1", debugProf.Port))
+			if err == nil && strings.TrimSpace(out) != "" {
+				portReady = true
+				break
+			}
+			time.Sleep(1 * time.Second)
+		}
+		if !portReady {
+			warn("Debug port not detected after 30s — port-forward may fail")
+		}
+	}
+
 	// For Go: inject locally-built debug binary + Delve into the container.
 	// The patched command is waiting for /tmp/dlv to appear.
 	if runtimeKey == "go" {
@@ -718,18 +742,28 @@ func buildDebugCommand(prof *debugProfile, runtimeKey, origCmd string) string {
 			// The command starts with a Python tool (uvicorn, gunicorn, etc.)
 			// Normalize multi-worker flags, then wrap with debugpy.
 			normalized := normalizePythonForDebug(fields)
-			return fmt.Sprintf("pip install debugpy -q 2>/dev/null; python -m debugpy --listen 0.0.0.0:%d --wait-for-client -m %s",
+			return fmt.Sprintf("pip install debugpy -q 2>/dev/null; python -m debugpy --listen 0.0.0.0:%d -m %s",
 				prof.Port, strings.Join(normalized, " "))
 		}
 		restFields := fields[runtimeIdx+1:]
 		// Handle "python -m uvicorn ..." pattern — normalize tool args.
 		if len(restFields) >= 2 && restFields[0] == "-m" {
 			toolArgs := normalizePythonForDebug(restFields[1:])
-			return fmt.Sprintf("pip install debugpy -q 2>/dev/null; python -m debugpy --listen 0.0.0.0:%d --wait-for-client -m %s",
+			return fmt.Sprintf("pip install debugpy -q 2>/dev/null; python -m debugpy --listen 0.0.0.0:%d -m %s",
 				prof.Port, strings.Join(toolArgs, " "))
 		}
+		// Handle "python3.12 /usr/local/bin/uvicorn ..." — the OCI runtime
+		// resolves shebangs so we get full paths. Detect known Python tools
+		// and convert to -m <tool> so debugpy runs them as modules.
+		if len(restFields) >= 1 && isPythonTool(restFields[0]) {
+			toolName := filepath.Base(restFields[0])
+			toolArgs := append([]string{toolName}, restFields[1:]...)
+			normalized := normalizePythonForDebug(toolArgs)
+			return fmt.Sprintf("pip install debugpy -q 2>/dev/null; python -m debugpy --listen 0.0.0.0:%d -m %s",
+				prof.Port, strings.Join(normalized, " "))
+		}
 		rest := strings.Join(restFields, " ")
-		return fmt.Sprintf("pip install debugpy -q 2>/dev/null; python -m debugpy --listen 0.0.0.0:%d --wait-for-client %s", prof.Port, rest)
+		return fmt.Sprintf("pip install debugpy -q 2>/dev/null; python -m debugpy --listen 0.0.0.0:%d %s", prof.Port, rest)
 
 	case "ruby":
 		// Find the ruby binary, skipping entrypoint wrappers.
@@ -777,6 +811,24 @@ func findRuntimeBinary(fields []string, runtimeKey string) int {
 func isPythonBinary(name string) bool {
 	base := filepath.Base(name)
 	return strings.HasPrefix(base, "python")
+}
+
+// isPythonTool checks if a path or name refers to a known Python server/tool
+// that should be invoked via `python -m <tool>` rather than as a file path.
+// Handles both bare names ("uvicorn") and full paths ("/usr/local/bin/uvicorn").
+func isPythonTool(name string) bool {
+	base := filepath.Base(name)
+	tools := []string{
+		"uvicorn", "gunicorn", "daphne", "hypercorn",
+		"waitress-serve", "sanic", "flask", "celery",
+		"django-admin",
+	}
+	for _, t := range tools {
+		if base == t {
+			return true
+		}
+	}
+	return false
 }
 
 // normalizePythonForDebug adjusts Python server flags for single-process debugging.

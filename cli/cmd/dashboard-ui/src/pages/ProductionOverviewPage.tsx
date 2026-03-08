@@ -20,6 +20,7 @@ export function ProductionOverviewPage() {
   const [advisories, setAdvisories] = useState<Advisory[]>([]);
   const [advisorLoading, setAdvisorLoading] = useState(true);
   const [advisorChecked, setAdvisorChecked] = useState('');
+  const [dismissed, setDismissed] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     fetchProdNodeMetrics().then(r => setNodeMetrics(r.items || [])).catch(() => {});
@@ -125,36 +126,59 @@ export function ProductionOverviewPage() {
       </div>
 
       {/* Cluster advisor */}
-      {!advisorLoading && advisories.length > 0 && (
-        <div className="card advisor-card" style={{ marginBottom: 20 }}>
-          <div className="card-header">
-            <span className="card-icon">{advisories.some(a => a.severity === 'critical') ? '🔴' : advisories.some(a => a.severity === 'warning') ? '🟡' : '🟢'}</span>
-            <h3>Cluster Advisor</h3>
-            {advisorChecked && (
-              <span className="text-dim" style={{ marginLeft: 'auto', fontSize: 11 }}>
-                checked <TimeAgo timestamp={advisorChecked} />
-              </span>
-            )}
-          </div>
-          <div className="card-body" style={{ padding: 0 }}>
-            <div className="advisor-list">
-              {advisories.map((a, i) => (
-                <div key={i} className={`advisor-item advisor-${a.severity}`}>
-                  <div className="advisor-severity">
-                    {a.severity === 'critical' ? '●' : a.severity === 'warning' ? '▲' : '✓'}
-                  </div>
-                  <div className="advisor-content">
-                    <div className="advisor-title">{a.title}</div>
-                    <div className="advisor-detail">{a.detail}</div>
-                    {a.action && <div className="advisor-action">→ {a.action}</div>}
-                    {a.resource && <span className="advisor-resource">{a.resource}</span>}
-                  </div>
-                </div>
-              ))}
+      {!advisorLoading && advisories.length > 0 && (() => {
+        const visible = advisories.filter((_, i) => !dismissed.has(`${i}`));
+        if (!visible.length) return null;
+        return (
+          <div className="card advisor-card" style={{ marginBottom: 20 }}>
+            <div className="card-header">
+              <span className="card-icon">{visible.some(a => a.severity === 'critical') ? '🔴' : visible.some(a => a.severity === 'warning') ? '🟡' : '🟢'}</span>
+              <h3>Cluster Advisor</h3>
+              {advisorChecked && (
+                <span className="text-dim" style={{ marginLeft: 'auto', fontSize: 11 }}>
+                  checked <TimeAgo timestamp={advisorChecked} />
+                </span>
+              )}
+              {dismissed.size > 0 && (
+                <button
+                  className="btn btn-ghost"
+                  style={{ marginLeft: advisorChecked ? 12 : 'auto', fontSize: 11, padding: '2px 8px' }}
+                  onClick={() => setDismissed(new Set())}
+                >
+                  Show {dismissed.size} dismissed
+                </button>
+              )}
+            </div>
+            <div className="card-body" style={{ padding: 0 }}>
+              <div className="advisor-list">
+                {advisories.map((a, i) => {
+                  if (dismissed.has(`${i}`)) return null;
+                  return (
+                    <div key={i} className={`advisor-item advisor-${a.severity}`}>
+                      <div className="advisor-severity">
+                        {a.severity === 'critical' ? '●' : a.severity === 'warning' ? '▲' : '✓'}
+                      </div>
+                      <div className="advisor-content">
+                        <div className="advisor-title">{a.title}</div>
+                        <div className="advisor-detail">{a.detail}</div>
+                        {a.action && <div className="advisor-action">→ {a.action}</div>}
+                        {a.resource && <span className="advisor-resource">{a.resource}</span>}
+                      </div>
+                      <button
+                        className="advisor-dismiss"
+                        title="Dismiss"
+                        onClick={() => setDismissed(prev => new Set(prev).add(`${i}`))}
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Infrastructure status */}
       <div className="card-grid card-grid-3">

@@ -6,6 +6,7 @@ import { DEP_ICONS } from '../icons';
 import { StatusBadge, ConditionsTable, EmptyState, TimeAgo } from './shared';
 import { ActionButton, ActionModal, ConfirmDialog, useToast, ResultOutput } from './actions';
 import type { ActionResult } from '../api';
+import { ApiExplorerCore } from './ApiExplorerPage';
 
 export function DSEPage() {
   const { data, loading, refresh } = useApi<K8sList<DSE>>('/api/dses');
@@ -14,6 +15,7 @@ export function DSEPage() {
   const [yaml, setYaml] = useState('');
   const [deploying, setDeploying] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<{ ns: string; name: string } | null>(null);
+  const [showApiPane, setShowApiPane] = useState(false);
 
   async function handleDeploy() {
     setDeploying(true);
@@ -46,16 +48,25 @@ export function DSEPage() {
   const dses = data?.items || [];
 
   return (
-    <div className="page">
-      <div className="page-header">
-        <div className="page-header-left">
-          <h1>Dev Staging Environments</h1>
-          <p className="page-subtitle">Managed by the kindling operator</p>
-        </div>
-        <div className="page-actions">
-          <ActionButton icon="+" label="Deploy" onClick={() => setShowDeploy(true)} primary />
-        </div>
-      </div>
+    <div className={`dse-split-layout${showApiPane ? ' api-open' : ''}`}>
+      <div className="dse-main-pane">
+        <div className="page">
+          <div className="page-header">
+            <div className="page-header-left">
+              <h1>Dev Staging Environments</h1>
+              <p className="page-subtitle">Managed by the kindling operator</p>
+            </div>
+            <div className="page-actions">
+              <button
+                className={`btn btn-sm ${showApiPane ? 'btn-primary' : 'btn-ghost'}`}
+                onClick={() => setShowApiPane(!showApiPane)}
+                title="Toggle API Explorer"
+              >
+                ⇆ API
+              </button>
+              <ActionButton icon="+" label="Deploy" onClick={() => setShowDeploy(true)} primary />
+            </div>
+          </div>
 
       {showDeploy && (
         <ActionModal
@@ -90,10 +101,25 @@ export function DSEPage() {
       {dses.length === 0 ? (
         <EmptyState icon="◆" message="No DevStagingEnvironments found. Deploy one with: kindling deploy -f <file.yaml>" />
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {dses.map((dse) => (
             <DSECard key={dse.metadata.name} dse={dse} onDelete={(ns, name) => setDeleteTarget({ ns, name })} />
           ))}
+        </div>
+      )}
+    </div>
+      </div>
+
+      {/* API Explorer side pane */}
+      {showApiPane && (
+        <div className="dse-api-pane">
+          <div className="dse-api-pane-header">
+            <span className="dse-api-pane-title">⇆ API Explorer</span>
+            <button className="btn btn-xs btn-ghost" onClick={() => setShowApiPane(false)}>✕</button>
+          </div>
+          <div className="dse-api-pane-body">
+            <ApiExplorerCore compact />
+          </div>
         </div>
       )}
     </div>
@@ -140,15 +166,18 @@ function DSECard({ dse, onDelete }: { dse: DSE; onDelete: (ns: string, name: str
   }, []);
 
   const isSyncRunning = syncStatus?.running && syncStatus?.deployment === name && syncStatus?.namespace === ns;
+  const isSyncStopping = isSyncRunning && syncStatus?.stopping;
 
   async function handleStopSync() {
+    // Optimistically show stopping state immediately
+    setSyncStatus(prev => prev ? { ...prev, stopping: true } : prev);
     const result = await apiDelete('/api/sync');
-    if (result.ok) {
-      toast('Sync stopped', 'success');
-      setSyncStatus(null);
-    } else {
+    if (!result.ok) {
       toast(result.error || 'Failed to stop sync', 'error');
+      // Revert optimistic update
+      setSyncStatus(prev => prev ? { ...prev, stopping: false } : prev);
     }
+    // Don't clear syncStatus — let the poll detect when cleanup is done
   }
 
   return (
@@ -223,15 +252,23 @@ function DSECard({ dse, onDelete }: { dse: DSE; onDelete: (ns: string, name: str
         {isSyncRunning && (
           <div className="sync-status-bar">
             <span className="sync-pulse" />
-            <span>Sync active — {syncStatus!.sync_count} {syncStatus!.sync_count === 1 ? 'sync' : 'syncs'} • watching for changes</span>
-            <button className="btn btn-sm btn-danger" onClick={handleStopSync}>Stop</button>
+            {isSyncStopping ? (
+              <>
+                <span>Stopping sync — restoring deployment…</span>
+              </>
+            ) : (
+              <>
+                <span>Sync active — {syncStatus!.sync_count} {syncStatus!.sync_count === 1 ? 'sync' : 'syncs'} • watching for changes</span>
+                <button className="btn btn-sm btn-danger" onClick={handleStopSync}>Stop</button>
+              </>
+            )}
           </div>
         )}
 
         {dse.spec.deployment.env && dse.spec.deployment.env.length > 0 && (
-          <details style={{ marginTop: 16 }}>
+          <details style={{ marginTop: 8 }}>
             <summary>Environment Variables ({dse.spec.deployment.env.length})</summary>
-            <table className="env-table" style={{ marginTop: 8 }}>
+            <table className="env-table" style={{ marginTop: 4 }}>
               <tbody>
                 {dse.spec.deployment.env.map((e, i) => (
                   <tr key={i}><td>{e.name}</td><td>{e.value || '(from secret)'}</td></tr>
@@ -261,7 +298,14 @@ function DSECard({ dse, onDelete }: { dse: DSE; onDelete: (ns: string, name: str
             <ActionButton icon="⚡" label="Sync" onClick={() => setShowSync(true)} small />
           )}
           {isSyncRunning && (
-            <ActionButton icon="■" label="Stop Sync" onClick={handleStopSync} danger small />
+            <ActionButton
+              icon={isSyncStopping ? '⏳' : '■'}
+              label={isSyncStopping ? 'Stopping…' : 'Stop Sync'}
+              onClick={handleStopSync}
+              disabled={!!isSyncStopping}
+              danger
+              small
+            />
           )}
           <ActionButton icon="📦" label="Load" onClick={() => setShowLoad(true)} small />
           <ActionButton icon="✕" label="Delete" onClick={() => onDelete(ns, name)} danger small />

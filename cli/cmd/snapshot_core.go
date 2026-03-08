@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 )
@@ -175,6 +176,7 @@ type DeployOpts struct {
 	DSEs            []snapshotDSE   // for ingress flag generation
 	SelectedIngress map[string]bool // services to enable ingress for
 	IngressClass    string          // IngressClass name for the target cluster
+	CredOverrides   map[string]map[string]string // valuesKey → envVar → prodValue
 }
 
 // deploySnapshot runs helm upgrade --install or kubectl apply -k
@@ -196,6 +198,15 @@ func deploySnapshot(opts DeployOpts) (string, error) {
 		valuesLive := filepath.Join(opts.OutDir, "values-live.yaml")
 		if fileExists(valuesLive) {
 			helmArgs = append(helmArgs, "-f", valuesLive)
+		}
+		// Apply production credential overrides (takes precedence over values-live.yaml)
+		if len(opts.CredOverrides) > 0 {
+			credsFile, err := writeCredsOverrideFile(opts.CredOverrides)
+			if err != nil {
+				return "", fmt.Errorf("cannot write credential overrides: %w", err)
+			}
+			defer func() { os.Remove(credsFile) }()
+			helmArgs = append(helmArgs, "-f", credsFile)
 		}
 		// Ingress selection: enable/disable for all services based on user selection
 		for _, dse := range opts.DSEs {

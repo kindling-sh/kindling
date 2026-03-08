@@ -37,6 +37,7 @@ func handleProdSnapshotStatus(w http.ResponseWriter, r *http.Request) {
 				"image":    dse.Image,
 				"port":     dse.Port,
 				"replicas": dse.Replicas,
+				"compute":  dse.Compute,
 			}
 			if dse.Ingress != nil {
 				svc["ingress"] = map[string]interface{}{
@@ -59,6 +60,66 @@ func handleProdSnapshotStatus(w http.ResponseWriter, r *http.Request) {
 
 // ── /api/prod/snapshot/deploy — run snapshot + deploy ────────────
 
+// ── /api/prod/snapshot/credentials — detect dev credentials ─────
+
+func handleProdSnapshotCredentials(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonError(w, "method not allowed", 405)
+		return
+	}
+
+	dses, err := readClusterDSEs()
+	if err != nil {
+		jsonError(w, "failed to read DSEs: "+err.Error(), 500)
+		return
+	}
+
+	chartName := "kindling-snapshot"
+	// Strip user prefix to match what the chart will use
+	stripDSEPrefix(dses)
+
+	entries := detectDevCredentials(chartName, dses)
+
+	// Check for cached values
+	var cachedCreds map[string]string
+	var cachedAt string
+	if prodContext != "" {
+		if cached := loadCredCache(prodContext); cached != nil && len(cached.Creds) > 0 {
+			cachedCreds = cached.Creds
+			cachedAt = cached.UpdatedAt.Format(time.RFC3339)
+		}
+	}
+
+	type credInfo struct {
+		EnvVar   string   `json:"env_var"`
+		DepType  string   `json:"dep_type"`
+		DevValue string   `json:"dev_value"`
+		Services []string `json:"services"`
+		Cached   string   `json:"cached,omitempty"` // cached production value (if any)
+	}
+
+	var result []credInfo
+	for _, e := range entries {
+		ci := credInfo{
+			EnvVar:   e.EnvVarName,
+			DepType:  e.DepType,
+			DevValue: e.DevValue,
+			Services: e.Services,
+		}
+		if cachedCreds != nil {
+			if v, ok := cachedCreds[e.EnvVarName]; ok {
+				ci.Cached = v
+			}
+		}
+		result = append(result, ci)
+	}
+
+	jsonResponse(w, map[string]interface{}{
+		"credentials": result,
+		"cached_at":   cachedAt,
+	})
+}
+
 func handleProdSnapshotDeploy(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		jsonError(w, "method not allowed", 405)
@@ -66,13 +127,14 @@ func handleProdSnapshotDeploy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var body struct {
-		Registry     string   `json:"registry"`
-		RegistryUser string   `json:"registry_user"`
-		RegistryPass string   `json:"registry_pass"`
-		Tag          string   `json:"tag"`
-		Format       string   `json:"format"`
-		Namespace    string   `json:"namespace"`
-		Ingress      []string `json:"ingress"` // services to enable ingress for
+		Registry     string            `json:"registry"`
+		RegistryUser string            `json:"registry_user"`
+		RegistryPass string            `json:"registry_pass"`
+		Tag          string            `json:"tag"`
+		Format       string            `json:"format"`
+		Namespace    string            `json:"namespace"`
+		Ingress      []string          `json:"ingress"`      // services to enable ingress for
+		Credentials  map[string]string `json:"credentials"`  // envVarName → production connection string
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonError(w, "invalid request body", 400)
@@ -178,6 +240,25 @@ func handleProdSnapshotDeploy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	send("step", fmt.Sprintf("Deploying to %s (namespace: %s)", prodContext, ns))
+
+	// Build credential overrides from user-supplied production values
+	var credOverrides map[string]map[string]string
+	if len(body.Credentials) > 0 {
+		entries := detectDevCredentials(chartName, dses)
+		credOverrides = buildOverrideMap(entries, dses, body.Credentials)
+		send("step", fmt.Sprintf("Applying %d production credential override(s)", len(body.Credentials)))
+		// Cache for future deploys
+		_ = saveCredCache(prodContext, chartName, body.Credentials)
+	} else {
+		// Auto-apply cached credentials if available
+		cached := loadCredCache(prodContext)
+		if cached != nil && len(cached.Creds) > 0 {
+			entries := detectDevCredentials(chartName, dses)
+			credOverrides = buildOverrideMap(entries, dses, cached.Creds)
+			send("step", fmt.Sprintf("Using %d cached production credential(s)", len(cached.Creds)))
+		}
+	}
+
 	out, err := deploySnapshot(DeployOpts{
 		Context:         prodContext,
 		Namespace:       ns,
@@ -187,6 +268,7 @@ func handleProdSnapshotDeploy(w http.ResponseWriter, r *http.Request) {
 		DSEs:            dses,
 		SelectedIngress: selectedSet,
 		IngressClass:    ingClass,
+		CredOverrides:   credOverrides,
 	})
 	if err != nil {
 		send("error", fmt.Sprintf("Deploy failed: %s", out))
@@ -200,6 +282,11 @@ func handleProdSnapshotDeploy(w http.ResponseWriter, r *http.Request) {
 // ── /api/prod/tls/status — cert-manager + TLS status ────────────
 
 func handleProdTLSStatus(w http.ResponseWriter, r *http.Request) {
+	if prodContext == "" {
+		jsonError(w, "no production context configured", 400)
+		return
+	}
+
 	result := map[string]interface{}{
 		"cert_manager": false,
 		"issuers":      []interface{}{},
@@ -305,20 +392,26 @@ func handleProdTLSStatus(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, result)
 }
 
-// ── /api/prod/tls/install — install cert-manager + ClusterIssuer ─
+// ── /api/prod/tls/install — install cert-manager + ClusterIssuer + patch ingress ─
 
 func handleProdTLSInstall(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		jsonError(w, "method not allowed", 405)
 		return
 	}
+	if prodContext == "" {
+		jsonError(w, "no production context configured", 400)
+		return
+	}
 
 	var body struct {
-		Email        string `json:"email"`
-		Domain       string `json:"domain"`
-		Issuer       string `json:"issuer"`
-		IngressClass string `json:"ingress_class"`
-		Staging      bool   `json:"staging"`
+		Email            string `json:"email"`
+		Domain           string `json:"domain"`
+		Issuer           string `json:"issuer"`
+		IngressClass     string `json:"ingress_class"`
+		Staging          bool   `json:"staging"`
+		IngressName      string `json:"ingress_name"`
+		IngressNamespace string `json:"ingress_namespace"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonError(w, "invalid request body", 400)
@@ -328,8 +421,17 @@ func handleProdTLSInstall(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "email and domain are required", 400)
 		return
 	}
+	// Validate inputs to prevent YAML injection
+	if strings.ContainsAny(body.Email, "\n\r\t") || strings.ContainsAny(body.Domain, "\n\r\t /") {
+		jsonError(w, "invalid characters in email or domain", 400)
+		return
+	}
 	if body.Issuer == "" {
 		body.Issuer = "letsencrypt-prod"
+	}
+	if strings.ContainsAny(body.Issuer, "\n\r\t /") {
+		jsonError(w, "invalid characters in issuer name", 400)
+		return
 	}
 	if body.IngressClass == "" {
 		body.IngressClass = "traefik"
@@ -362,14 +464,22 @@ func handleProdTLSInstall(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		send("step", "Waiting for cert-manager webhook")
+		webhookReady := false
 		for i := 0; i < 30; i++ {
 			_, err := runSilent("kubectl", "--context", ctx, "-n", "cert-manager",
 				"rollout", "status", "deployment/cert-manager-webhook", "--timeout=5s")
 			if err == nil {
+				webhookReady = true
 				break
 			}
 			time.Sleep(2 * time.Second)
 		}
+		if !webhookReady {
+			send("error", "cert-manager webhook did not become ready — check pod status in cert-manager namespace")
+			return
+		}
+		// Extra wait for CA bundle injection to complete
+		time.Sleep(5 * time.Second)
 		send("step", "cert-manager installed")
 	} else {
 		send("step", "cert-manager already installed")
@@ -404,6 +514,119 @@ spec:
 	if out, err := cmd.CombinedOutput(); err != nil {
 		send("error", "ClusterIssuer creation failed: "+strings.TrimSpace(string(out)))
 		return
+	}
+
+	// Wait for ClusterIssuer to become ready
+	send("step", "Waiting for ClusterIssuer to register with ACME")
+	issuerReady := false
+	for i := 0; i < 20; i++ {
+		out, err := runSilent("kubectl", "--context", ctx, "get", "clusterissuer", body.Issuer, "-o", "json")
+		if err == nil {
+			var issuer struct {
+				Status struct {
+					Conditions []struct {
+						Type   string `json:"type"`
+						Status string `json:"status"`
+					} `json:"conditions"`
+				} `json:"status"`
+			}
+			if json.Unmarshal([]byte(out), &issuer) == nil {
+				for _, c := range issuer.Status.Conditions {
+					if c.Type == "Ready" && c.Status == "True" {
+						issuerReady = true
+						break
+					}
+				}
+			}
+		}
+		if issuerReady {
+			break
+		}
+		time.Sleep(3 * time.Second)
+	}
+	if !issuerReady {
+		send("error", "ClusterIssuer did not become ready — check cert-manager logs and ACME registration")
+		return
+	}
+	send("step", "ClusterIssuer is ready")
+
+	// Patch ingress with TLS if an ingress was specified
+	if body.IngressName != "" {
+		ns := body.IngressNamespace
+		if ns == "" {
+			ns = "default"
+		}
+
+		send("step", fmt.Sprintf("Reading ingress %s/%s", ns, body.IngressName))
+
+		// Read current ingress to check existing TLS and host
+		ingOut, err := runSilent("kubectl", "--context", ctx, "-n", ns, "get", "ingress", body.IngressName, "-o", "json")
+		if err != nil {
+			send("error", fmt.Sprintf("Ingress %s/%s not found: %s", ns, body.IngressName, err.Error()))
+			return
+		}
+
+		var existing struct {
+			Spec struct {
+				Rules []struct {
+					Host string `json:"host"`
+				} `json:"rules"`
+				TLS []struct {
+					Hosts []string `json:"hosts"`
+				} `json:"tls"`
+			} `json:"spec"`
+		}
+		if err := json.Unmarshal([]byte(ingOut), &existing); err != nil {
+			send("error", "Failed to parse ingress: "+err.Error())
+			return
+		}
+
+		// Check if TLS is already configured for this domain
+		for _, t := range existing.Spec.TLS {
+			for _, h := range t.Hosts {
+				if h == body.Domain {
+					send("step", fmt.Sprintf("Ingress already has TLS for %s — updating annotation", body.Domain))
+				}
+			}
+		}
+
+		// Build merge patch: annotation + TLS block
+		secretName := strings.ReplaceAll(body.Domain, ".", "-") + "-tls"
+		patch := map[string]interface{}{
+			"metadata": map[string]interface{}{
+				"annotations": map[string]string{
+					"cert-manager.io/cluster-issuer": body.Issuer,
+				},
+			},
+			"spec": map[string]interface{}{
+				"tls": []map[string]interface{}{
+					{
+						"hosts":      []string{body.Domain},
+						"secretName": secretName,
+					},
+				},
+			},
+		}
+		patchJSON, _ := json.Marshal(patch)
+
+		send("step", fmt.Sprintf("Patching ingress with TLS for %s (secret: %s)", body.Domain, secretName))
+		if _, err := runSilent("kubectl", "--context", ctx, "-n", ns, "patch", "ingress", body.IngressName,
+			"--type=merge", "-p", string(patchJSON)); err != nil {
+			send("error", "Failed to patch ingress: "+err.Error())
+			return
+		}
+
+		// If first rule has no host, set it to the domain
+		if len(existing.Spec.Rules) > 0 && existing.Spec.Rules[0].Host == "" {
+			send("step", fmt.Sprintf("Setting ingress host to %s", body.Domain))
+			hostPatch := fmt.Sprintf(`[{"op":"replace","path":"/spec/rules/0/host","value":"%s"}]`, body.Domain)
+			if _, err := runSilent("kubectl", "--context", ctx, "-n", ns, "patch", "ingress", body.IngressName,
+				"--type=json", "-p", hostPatch); err != nil {
+				send("step", "Warning: could not set host on ingress rule — set it manually")
+			}
+		}
+
+		send("step", "Ingress patched — cert-manager will issue the certificate via HTTP-01 challenge")
 	}
 
 	send("done", fmt.Sprintf("TLS configured for %s with issuer %s", body.Domain, body.Issuer))

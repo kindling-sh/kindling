@@ -78,6 +78,7 @@ type snapshotDSE struct {
 	Env      []snapshotEnvVar
 	Deps     []snapshotDep
 	Ingress  *snapshotIngress
+	Compute  string // e.g. "gpu", "high-memory", "arm64"
 }
 
 type snapshotEnvVar struct {
@@ -116,6 +117,7 @@ func readClusterDSEs() ([]snapshotDSE, error) {
 					Image    string `json:"image"`
 					Port     int    `json:"port"`
 					Replicas *int   `json:"replicas"`
+					Compute  string `json:"compute,omitempty"`
 					Env      []struct {
 						Name  string `json:"name"`
 						Value string `json:"value"`
@@ -159,6 +161,7 @@ func readClusterDSEs() ([]snapshotDSE, error) {
 			Image:    item.Spec.Deployment.Image,
 			Port:     item.Spec.Deployment.Port,
 			Replicas: replicas,
+			Compute:  item.Spec.Deployment.Compute,
 		}
 		for _, e := range item.Spec.Deployment.Env {
 			d.Env = append(d.Env, snapshotEnvVar{Name: e.Name, Value: e.Value})
@@ -426,6 +429,22 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 		step("🌐", fmt.Sprintf("Using IngressClass: %s", ingClass))
 	}
 
+	// ── Production credentials ──────────────────────────────────
+	// Detect dev-default connection strings and prompt for production values.
+	credOverrides, err := resolveProductionCredentials(chartName, snapshotContext, dses)
+	if err != nil {
+		return fmt.Errorf("credential configuration failed: %w", err)
+	}
+	var credsFile string
+	if len(credOverrides) > 0 {
+		path, err := writeCredsOverrideFile(credOverrides)
+		if err != nil {
+			return err
+		}
+		credsFile = path
+		defer os.Remove(credsFile)
+	}
+
 	switch snapshotFormat {
 	case "helm":
 		if !commandExists("helm") {
@@ -439,6 +458,10 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 			"--create-namespace",
 			"-f", filepath.Join(outDir, "values-live.yaml"),
 			"--timeout", "10m",
+		}
+		// Apply production credential overrides (takes precedence over values-live.yaml)
+		if credsFile != "" {
+			helmArgs = append(helmArgs, "-f", credsFile)
 		}
 		// Enable/disable ingress for all services based on user selection.
 		for _, dse := range dses {
@@ -616,6 +639,13 @@ func buildValuesYAML(chartName string, dses []snapshotDSE, depsSeen map[string]b
 		buf.WriteString(fmt.Sprintf("  port: %d\n", dse.Port))
 		buf.WriteString(fmt.Sprintf("  replicas: %d\n", dse.Replicas))
 
+		// Compute scheduling — nodeSelector + toleration for special hardware
+		if dse.Compute != "" {
+			buf.WriteString(fmt.Sprintf("  compute: \"%s\"\n", dse.Compute))
+		} else {
+			buf.WriteString("  compute: \"\"  # e.g. \"gpu\", \"high-memory\", \"arm64\"\n")
+		}
+
 		// Env vars — user-defined + dependency connection strings
 		hasEnv := len(dse.Env) > 0 || len(dse.Deps) > 0
 		if hasEnv {
@@ -633,7 +663,7 @@ func buildValuesYAML(chartName string, dses []snapshotDSE, depsSeen map[string]b
 				if def, ok := depRegistry[dep.Type]; ok {
 					if live {
 						buf.WriteString(fmt.Sprintf("    %s: \"%s\"\n", def.EnvVarName,
-							buildExampleConnectionURL(dep.Type, helmSafe(dep.Type), def)))
+							buildConnectionURL(chartName, dep.Type, helmSafe(dep.Type), def)))
 					} else {
 						buf.WriteString(fmt.Sprintf("    %s: \"\"  # TODO: set your production %s connection string\n",
 							def.EnvVarName, dep.Type))
@@ -726,7 +756,7 @@ func buildValuesYAML(chartName string, dses []snapshotDSE, depsSeen map[string]b
 		// Connection string example
 		if !live {
 			buf.WriteString(fmt.Sprintf("  # Connection: %s\n",
-				buildExampleConnectionURL(depType, safe, def)))
+				buildConnectionURL("", depType, safe, def)))
 		}
 		buf.WriteString("\n")
 	}
@@ -734,10 +764,15 @@ func buildValuesYAML(chartName string, dses []snapshotDSE, depsSeen map[string]b
 	return buf.String()
 }
 
-// buildExampleConnectionURL generates a sample connection string for a dependency type
-// using the Helm release template format, mirroring the operator's buildConnectionURL.
-func buildExampleConnectionURL(depType, safe string, def depDefaults) string {
-	host := fmt.Sprintf("<release>-%s", safe)
+// buildConnectionURL generates a connection string for a dependency type using the
+// given release name as the hostname prefix. When releasePrefix is empty, it falls
+// back to "<release>" for documentation/example output.
+func buildConnectionURL(releasePrefix, depType, safe string, def depDefaults) string {
+	prefix := releasePrefix
+	if prefix == "" {
+		prefix = "<release>"
+	}
+	host := fmt.Sprintf("%s-%s", prefix, safe)
 	switch depType {
 	case "postgres":
 		user, pass, db := "devuser", "devpass", "devdb"
@@ -861,6 +896,16 @@ func helmDeploymentTemplate(dse snapshotDSE, chartName string, allDSEs []snapsho
 		envSection = fmt.Sprintf("        env:\n%s", envLines.String())
 	}
 
+	computeSection := fmt.Sprintf(`      {{- if .Values.%s.compute }}
+      nodeSelector:
+        kindling.dev/compute: {{ .Values.%s.compute | quote }}
+      tolerations:
+      - key: kindling.dev/compute
+        operator: Equal
+        value: {{ .Values.%s.compute | quote }}
+        effect: NoSchedule
+      {{- end }}`, vk, vk, vk)
+
 	return fmt.Sprintf(`apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -878,13 +923,14 @@ spec:
       labels:
         app: %s
     spec:
+%s
       containers:
       - name: %s
         image: {{ .Values.%s.image }}
         imagePullPolicy: Always
         ports:
         - containerPort: {{ .Values.%s.port }}
-%s`, safe, safe, chartName, vk, safe, safe, safe, vk, vk, envSection)
+%s`, safe, safe, chartName, vk, safe, safe, computeSection, safe, vk, vk, envSection)
 }
 
 func helmServiceTemplate(dse snapshotDSE, chartName string) string {

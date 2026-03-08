@@ -28,14 +28,14 @@ var dashboardCmd = &cobra.Command{
 for your kindling cluster. Shows all Kubernetes resources, DSE environments,
 runner pools, health checks, logs, and more.
 
-The dashboard runs on http://localhost:9090 by default.`,
+The dashboard runs on http://localhost:19090 by default.`,
 	RunE: runDashboard,
 }
 
 var dashboardPort int
 
 func init() {
-	dashboardCmd.Flags().IntVar(&dashboardPort, "port", 9090, "Port to serve the dashboard on")
+	dashboardCmd.Flags().IntVar(&dashboardPort, "port", 19090, "Port to serve the dashboard on")
 	dashboardCmd.Flags().StringVar(&prodContext, "prod-context", "", "Kubeconfig context for production cluster (enables production panel)")
 	rootCmd.AddCommand(dashboardCmd)
 }
@@ -44,6 +44,7 @@ func runDashboard(cmd *cobra.Command, args []string) error {
 	mux := http.NewServeMux()
 
 	// ── API routes (read-only) ──────────────────────────────────
+	mux.HandleFunc("/api/contexts", handleContexts)
 	mux.HandleFunc("/api/cluster", handleCluster)
 	mux.HandleFunc("/api/nodes", handleNodes)
 	mux.HandleFunc("/api/operator", handleOperator)
@@ -90,7 +91,9 @@ func runDashboard(cmd *cobra.Command, args []string) error {
 	mux.HandleFunc("/api/load", handleLoadAction)          // POST — build + load + rollout
 	mux.HandleFunc("/api/load-context", handleLoadContext) // GET — discover service dirs
 	mux.HandleFunc("/api/intel", handleIntel)              // GET=status, POST=activate, DELETE=deactivate
+	mux.HandleFunc("/api/analyze", handleAnalyze)          // POST — repo readiness analysis
 	mux.HandleFunc("/api/generate", handleGenerate)        // POST — AI workflow generation (ndjson)
+	mux.HandleFunc("/api/git/commit-and-push", handleGitCommitAndPush) // POST — commit + push (ndjson)
 
 	// ── API routes (topology editor) ────────────────────────────
 	mux.HandleFunc("/api/topology", handleGetTopology)                    // GET — current topology graph
@@ -104,6 +107,7 @@ func runDashboard(cmd *cobra.Command, args []string) error {
 	mux.HandleFunc("/api/topology/canvas", handleSaveCanvas)              // POST — persist canvas overlay
 	mux.HandleFunc("/api/topology/workspace", handleWorkspaceInfo)        // GET — repo root + service dirs
 	mux.HandleFunc("/api/topology/check-path", handleCheckPath)           // GET — check dir existence
+	mux.HandleFunc("/api/fs/complete", handleFsComplete)                   // GET — dir autocomplete
 
 	// ── API routes (proxy / API explorer) ───────────────────────
 	mux.HandleFunc("/api/proxy", handleProxy) // POST — proxy request to in-cluster service
@@ -157,6 +161,7 @@ func runDashboard(cmd *cobra.Command, args []string) error {
 
 		// Snapshot / Deploy
 		mux.HandleFunc("/api/prod/snapshot/status", handleProdSnapshotStatus)
+		mux.HandleFunc("/api/prod/snapshot/credentials", handleProdSnapshotCredentials)
 		mux.HandleFunc("/api/prod/snapshot/deploy", handleProdSnapshotDeploy)
 
 		// TLS management

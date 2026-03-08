@@ -263,10 +263,10 @@ func TestConnectionProtocol(t *testing.T) {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// buildExampleConnectionURL
+// buildConnectionURL
 // ────────────────────────────────────────────────────────────────────────────
 
-func TestBuildExampleConnectionURL(t *testing.T) {
+func TestBuildConnectionURL(t *testing.T) {
 	tests := []struct {
 		depType  string
 		contains string
@@ -282,9 +282,9 @@ func TestBuildExampleConnectionURL(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.depType, func(t *testing.T) {
 			def := depRegistry[tt.depType]
-			url := buildExampleConnectionURL(tt.depType, helmSafe(tt.depType), def)
+			url := buildConnectionURL("test-chart", tt.depType, helmSafe(tt.depType), def)
 			if !strings.Contains(url, tt.contains) {
-				t.Errorf("buildExampleConnectionURL(%q) = %q, want to contain %q", tt.depType, url, tt.contains)
+				t.Errorf("buildConnectionURL(%q) = %q, want to contain %q", tt.depType, url, tt.contains)
 			}
 		})
 	}

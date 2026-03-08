@@ -173,6 +173,46 @@ export async function streamGenerate(
   return lastResult;
 }
 
+// ── Git commit-and-push (ndjson stream) ──────────────────────────
+
+export interface GitPushResult extends ActionResult {
+  branch?: string;
+}
+
+export async function streamGitPush(
+  body: { repoPath?: string; files: string[]; message: string; branch?: string },
+  onMessage: (msg: string) => void,
+): Promise<GitPushResult> {
+  const res = await fetch(`${API_BASE}/api/git/commit-and-push`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const reader = res.body?.getReader();
+  if (!reader) return { ok: false, error: 'no response body' };
+
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let lastResult: GitPushResult = { ok: false, error: 'no result' };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        const parsed = JSON.parse(line);
+        if (parsed.status) onMessage(parsed.status);
+        if (parsed.ok !== undefined) lastResult = parsed;
+      } catch { /* skip malformed */ }
+    }
+  }
+  return lastResult;
+}
+
 // ── Topology helpers ─────────────────────────────────────────────
 
 export async function fetchTopology(): Promise<TopologyGraph> {
@@ -442,12 +482,29 @@ export async function fetchProdAdvisor(): Promise<AdvisorResponse> {
 
 // ── Snapshot / Deploy ───────────────────────────────────────────
 
+export interface SnapshotCredential {
+  env_var: string;
+  dep_type: string;
+  dev_value: string;
+  services: string[];
+  cached?: string;
+}
+
+export interface SnapshotCredentialsResponse {
+  credentials: SnapshotCredential[];
+  cached_at: string;
+}
+
+export async function fetchSnapshotCredentials(): Promise<SnapshotCredentialsResponse> {
+  return apiFetch<SnapshotCredentialsResponse>('/api/prod/snapshot/credentials');
+}
+
 export async function fetchSnapshotStatus(): Promise<SnapshotStatus> {
   return apiFetch<SnapshotStatus>('/api/prod/snapshot/status');
 }
 
 export function streamSnapshotDeploy(
-  body: { registry: string; registry_user: string; registry_pass: string; tag: string; format: string; namespace: string; ingress: string[] },
+  body: { registry: string; registry_user: string; registry_pass: string; tag: string; format: string; namespace: string; ingress: string[]; credentials?: Record<string, string> },
   onMessage: (msg: { type: string; message: string }) => void,
 ): () => void {
   const controller = new AbortController();
@@ -487,7 +544,7 @@ export async function fetchTLSStatus(): Promise<TLSStatus> {
 }
 
 export function streamTLSInstall(
-  body: { email: string; domain: string; issuer?: string; ingress_class?: string; staging: boolean },
+  body: { email: string; domain: string; issuer?: string; ingress_class?: string; staging: boolean; ingress_name?: string; ingress_namespace?: string },
   onMessage: (msg: { type: string; message: string }) => void,
 ): () => void {
   const controller = new AbortController();
