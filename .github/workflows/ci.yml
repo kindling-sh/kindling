@@ -124,7 +124,7 @@ jobs:
       - name: Install Kind
         run: |
           [ -f /usr/local/bin/kind ] || {
-            curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64
+            curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.25.0/kind-linux-amd64
             chmod +x ./kind
             sudo mv ./kind /usr/local/bin/kind
           }
@@ -144,7 +144,8 @@ jobs:
       - name: Pre-pull dependency images
         run: |
           # Pull lightweight dep images in parallel to speed up e2e
-          for img in mysql mongo rabbitmq:3-management nats memcached \
+          for img in gcr.io/kubebuilder/kube-rbac-proxy:v0.14.1 \
+                     mysql mongo rabbitmq:3-management nats memcached \
                      hashicorp/consul hashicorp/vault minio/minio influxdb \
                      jaegertracing/all-in-one:latest; do
             docker pull "$img" &

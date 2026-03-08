@@ -236,7 +236,15 @@ fi
 
 # Load it into the Kind cluster
 kind load docker-image "$IMG" --name "$CLUSTER_NAME"
-pass "Image loaded into Kind"
+pass "Operator image loaded into Kind"
+
+# Load the kube-rbac-proxy sidecar image (gcr.io may be unreachable from inside the cluster)
+RBAC_PROXY_IMG="gcr.io/kubebuilder/kube-rbac-proxy:v0.14.1"
+if ! docker image inspect "$RBAC_PROXY_IMG" >/dev/null 2>&1; then
+  docker pull "$RBAC_PROXY_IMG"
+fi
+kind load docker-image "$RBAC_PROXY_IMG" --name "$CLUSTER_NAME"
+pass "kube-rbac-proxy image loaded into Kind"
 
 # Install CRDs and deploy
 make install
@@ -244,7 +252,13 @@ make deploy IMG="$IMG"
 pass "CRDs and operator deployed"
 
 # Wait for the controller-manager
-kubectl rollout status deployment/kindling-controller-manager -n kindling-system --timeout="$TIMEOUT"
+if ! kubectl rollout status deployment/kindling-controller-manager -n kindling-system --timeout="$TIMEOUT"; then
+  echo "  ⚠️  Controller-manager did not become ready. Diagnostics:"
+  kubectl get pods -n kindling-system -o wide 2>/dev/null || true
+  kubectl describe pods -n kindling-system 2>/dev/null | tail -40 || true
+  kubectl logs deployment/kindling-controller-manager -n kindling-system --all-containers --tail=30 2>/dev/null || true
+  exit 1
+fi
 pass "Controller manager is running"
 
 # ── 3. Apply a test DevStagingEnvironment CR ───────────────────────────────
