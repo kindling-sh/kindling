@@ -133,8 +133,8 @@ func handleProdSnapshotDeploy(w http.ResponseWriter, r *http.Request) {
 		Tag          string            `json:"tag"`
 		Format       string            `json:"format"`
 		Namespace    string            `json:"namespace"`
-		Ingress      []string          `json:"ingress"`      // services to enable ingress for
-		Credentials  map[string]string `json:"credentials"`  // envVarName → production connection string
+		Ingress      []string          `json:"ingress"`     // services to enable ingress for
+		Credentials  map[string]string `json:"credentials"` // envVarName → production connection string
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonError(w, "invalid request body", 400)

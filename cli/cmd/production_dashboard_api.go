@@ -91,14 +91,14 @@ func handleProdIngressController(w http.ResponseWriter, r *http.Request) {
 		Name     string `json:"name,omitempty"`
 	}
 	type icInfo struct {
-		Found     bool     `json:"found"`
-		Name      string   `json:"name"`
-		Namespace string   `json:"namespace"`
-		Type      string   `json:"type"`
-		Class     string   `json:"class"` // traefik, nginx, etc.
-		ExternalIP string  `json:"external_ip"`
-		Hostname   string  `json:"hostname"`
-		ClusterIP  string  `json:"cluster_ip"`
+		Found      bool     `json:"found"`
+		Name       string   `json:"name"`
+		Namespace  string   `json:"namespace"`
+		Type       string   `json:"type"`
+		Class      string   `json:"class"` // traefik, nginx, etc.
+		ExternalIP string   `json:"external_ip"`
+		Hostname   string   `json:"hostname"`
+		ClusterIP  string   `json:"cluster_ip"`
 		Ports      []icPort `json:"ports"`
 	}
 

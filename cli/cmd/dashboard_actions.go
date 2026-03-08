@@ -1177,7 +1177,7 @@ func handleIntelDeactivate(w http.ResponseWriter, r *http.Request) {
 // Body: { "repoPath?" }
 
 type analyzeCheck struct {
-	Status  string `json:"status"`  // "pass", "warn", "fail", "info"
+	Status  string `json:"status"` // "pass", "warn", "fail", "info"
 	Message string `json:"message"`
 	Fix     string `json:"fix,omitempty"`
 }
@@ -1188,19 +1188,19 @@ type analyzeCategory struct {
 }
 
 type analyzeResponse struct {
-	OK                   bool               `json:"ok"`
-	RepoPath             string             `json:"repoPath"`
-	Language             string             `json:"language,omitempty"`
-	Categories           []analyzeCategory  `json:"categories"`
-	Summary              analyzeSummary     `json:"summary"`
-	ExistingWorkflowPath string             `json:"existingWorkflowPath,omitempty"`
-	ExistingWorkflow     string             `json:"existingWorkflow,omitempty"`
+	OK                   bool              `json:"ok"`
+	RepoPath             string            `json:"repoPath"`
+	Language             string            `json:"language,omitempty"`
+	Categories           []analyzeCategory `json:"categories"`
+	Summary              analyzeSummary    `json:"summary"`
+	ExistingWorkflowPath string            `json:"existingWorkflowPath,omitempty"`
+	ExistingWorkflow     string            `json:"existingWorkflow,omitempty"`
 }
 
 type analyzeSummary struct {
-	Pass int  `json:"pass"`
-	Warn int  `json:"warn"`
-	Fail int  `json:"fail"`
+	Pass  int  `json:"pass"`
+	Warn  int  `json:"warn"`
+	Fail  int  `json:"fail"`
 	Ready bool `json:"ready"`
 }
 

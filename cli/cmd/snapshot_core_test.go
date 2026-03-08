@@ -141,7 +141,7 @@ func TestBuildConnectionURL_AllDepTypes(t *testing.T) {
 		"nats":          "nats://",
 		"elasticsearch": "http://",
 		"minio":         "http://",
-		"kafka":         "test-kafka:",    // kafka uses host:port, no protocol
+		"kafka":         "test-kafka:",     // kafka uses host:port, no protocol
 		"memcached":     "test-memcached:", // memcached uses host:port, no protocol
 	}
 

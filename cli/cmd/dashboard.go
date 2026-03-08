@@ -85,14 +85,14 @@ func runDashboard(cmd *cobra.Command, args []string) error {
 	mux.HandleFunc("/api/scale/", handleScaleDeployment)
 	mux.HandleFunc("/api/pods/", handleDeletePod) // DELETE /api/pods/{ns}/{name}
 	mux.HandleFunc("/api/apply", handleApplyYAML)
-	mux.HandleFunc("/api/sync", handleSyncAction)          // POST=start, DELETE=stop
-	mux.HandleFunc("/api/sync/status", handleSyncStatus)   // GET
-	mux.HandleFunc("/api/runtime/", handleRuntimeDetect)   // GET /api/runtime/{ns}/{dep}
-	mux.HandleFunc("/api/load", handleLoadAction)          // POST — build + load + rollout
-	mux.HandleFunc("/api/load-context", handleLoadContext) // GET — discover service dirs
-	mux.HandleFunc("/api/intel", handleIntel)              // GET=status, POST=activate, DELETE=deactivate
-	mux.HandleFunc("/api/analyze", handleAnalyze)          // POST — repo readiness analysis
-	mux.HandleFunc("/api/generate", handleGenerate)        // POST — AI workflow generation (ndjson)
+	mux.HandleFunc("/api/sync", handleSyncAction)                      // POST=start, DELETE=stop
+	mux.HandleFunc("/api/sync/status", handleSyncStatus)               // GET
+	mux.HandleFunc("/api/runtime/", handleRuntimeDetect)               // GET /api/runtime/{ns}/{dep}
+	mux.HandleFunc("/api/load", handleLoadAction)                      // POST — build + load + rollout
+	mux.HandleFunc("/api/load-context", handleLoadContext)             // GET — discover service dirs
+	mux.HandleFunc("/api/intel", handleIntel)                          // GET=status, POST=activate, DELETE=deactivate
+	mux.HandleFunc("/api/analyze", handleAnalyze)                      // POST — repo readiness analysis
+	mux.HandleFunc("/api/generate", handleGenerate)                    // POST — AI workflow generation (ndjson)
 	mux.HandleFunc("/api/git/commit-and-push", handleGitCommitAndPush) // POST — commit + push (ndjson)
 
 	// ── API routes (topology editor) ────────────────────────────
@@ -107,7 +107,7 @@ func runDashboard(cmd *cobra.Command, args []string) error {
 	mux.HandleFunc("/api/topology/canvas", handleSaveCanvas)              // POST — persist canvas overlay
 	mux.HandleFunc("/api/topology/workspace", handleWorkspaceInfo)        // GET — repo root + service dirs
 	mux.HandleFunc("/api/topology/check-path", handleCheckPath)           // GET — check dir existence
-	mux.HandleFunc("/api/fs/complete", handleFsComplete)                   // GET — dir autocomplete
+	mux.HandleFunc("/api/fs/complete", handleFsComplete)                  // GET — dir autocomplete
 
 	// ── API routes (proxy / API explorer) ───────────────────────
 	mux.HandleFunc("/api/proxy", handleProxy) // POST — proxy request to in-cluster service

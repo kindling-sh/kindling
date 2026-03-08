@@ -170,12 +170,12 @@ func detectIngressClass(kubeCtx string) string {
 type DeployOpts struct {
 	Context         string
 	Namespace       string
-	Format          string          // "helm" or "kustomize"
-	OutDir          string          // path to the generated chart
-	ChartName       string          // Helm release name
-	DSEs            []snapshotDSE   // for ingress flag generation
-	SelectedIngress map[string]bool // services to enable ingress for
-	IngressClass    string          // IngressClass name for the target cluster
+	Format          string                       // "helm" or "kustomize"
+	OutDir          string                       // path to the generated chart
+	ChartName       string                       // Helm release name
+	DSEs            []snapshotDSE                // for ingress flag generation
+	SelectedIngress map[string]bool              // services to enable ingress for
+	IngressClass    string                       // IngressClass name for the target cluster
 	CredOverrides   map[string]map[string]string // valuesKey → envVar → prodValue
 }
 
