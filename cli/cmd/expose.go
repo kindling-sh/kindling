@@ -29,8 +29,13 @@ Examples:
   kindling expose --port 443               # expose a different port
   kindling expose --stop                   # stop a running tunnel
 
+  # Stable URL (set once, reused automatically on future runs):
+  kindling expose --domain myapp-dev.ngrok-free.app
+
 The public URL is saved to .kindling/tunnel.yaml so that other commands
-(kindling generate) can reference it.`,
+(kindling generate) can reference it. When --domain is set, the domain
+is persisted to .kindling/tunnel-config.yaml and reused automatically
+on subsequent runs — configure your OAuth callback URL once.`,
 	RunE: runExpose,
 }
 
@@ -39,6 +44,7 @@ var (
 	exposePort     int
 	exposeStop     bool
 	exposeService  string
+	exposeDomain   string
 )
 
 func init() {
@@ -46,6 +52,7 @@ func init() {
 	exposeCmd.Flags().IntVar(&exposePort, "port", 80, "Local port to expose (default: 80, the ingress controller)")
 	exposeCmd.Flags().BoolVar(&exposeStop, "stop", false, "Stop a running tunnel")
 	exposeCmd.Flags().StringVar(&exposeService, "service", "", "Ingress name to route tunnel traffic to (default: first ingress found)")
+	exposeCmd.Flags().StringVar(&exposeDomain, "domain", "", "Stable domain for the tunnel (e.g. myapp-dev.ngrok-free.app) — set once, reused automatically")
 	rootCmd.AddCommand(exposeCmd)
 }
 
@@ -73,10 +80,31 @@ func runExpose(cmd *cobra.Command, args []string) error {
 		core.CleanupTunnel(clusterName)
 	}
 
+	// ── Resolve stored domain ───────────────────────────────────
+	domain := exposeDomain
+	if domain == "" {
+		if cfg, err := core.ReadStableTunnelConfig(); err == nil && cfg != nil && cfg.Domain != "" {
+			domain = cfg.Domain
+			step("🔗", fmt.Sprintf("Using saved domain: %s%s%s", colorBold, domain, colorReset))
+		}
+	}
+
+	// Save domain for future runs if provided via flag
+	if exposeDomain != "" {
+		if err := core.SaveStableTunnelConfig(&core.StableTunnelConfig{Domain: exposeDomain}); err != nil {
+			warn(fmt.Sprintf("Could not save domain config: %v", err))
+		}
+	}
+
 	// ── Resolve provider ────────────────────────────────────────
 	provider := exposeProvider
 	if provider == "" {
-		provider = core.DetectTunnelProvider()
+		// When a stable domain is set, prefer ngrok (supports --domain natively).
+		if domain != "" && core.CommandExists("ngrok") {
+			provider = "ngrok"
+		} else {
+			provider = core.DetectTunnelProvider()
+		}
 	}
 	if provider == "" {
 		fail("No tunnel provider found")
@@ -88,12 +116,23 @@ func runExpose(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("install cloudflared or ngrok and try again")
 	}
 
+	// Stable domains require ngrok — cloudflared quick tunnels are always random.
+	if domain != "" && provider != "ngrok" {
+		warn("--domain requires ngrok (cloudflared quick tunnels don't support custom domains)")
+		fmt.Printf("  Install ngrok: %sbrew install ngrok/ngrok/ngrok%s\n\n", colorCyan, colorReset)
+		return fmt.Errorf("install ngrok to use --domain")
+	}
+
 	// ── Verify cluster is running ───────────────────────────────
 	if !core.ClusterExists(clusterName) {
 		return fmt.Errorf("Kind cluster %q not found — run 'kindling init' first", clusterName)
 	}
 
 	// ── Start tunnel ────────────────────────────────────────────
+	if domain != "" {
+		return runStableNgrokTunnel(domain)
+	}
+
 	switch provider {
 	case "cloudflared":
 		return runCloudflaredTunnel()
@@ -138,6 +177,30 @@ func runNgrokTunnel() error {
 	core.SaveTunnelInfo(clusterName, result.PublicURL, "ngrok", result.PID)
 	patchIngressesForTunnel(result.PublicURL)
 	printTunnelRunning(result.PublicURL, result.PID)
+
+	return nil
+}
+
+// ── Ngrok with stable domain ────────────────────────────────────
+
+func runStableNgrokTunnel(domain string) error {
+	step("🔗", fmt.Sprintf("Starting ngrok tunnel with domain %s%s%s...", colorBold, domain, colorReset))
+
+	result, err := core.StartStableNgrokTunnel(exposePort, domain)
+	if err != nil {
+		return err
+	}
+
+	core.SaveTunnelInfo(clusterName, result.PublicURL, "ngrok", result.PID)
+	patchIngressesForTunnel(result.PublicURL)
+
+	fmt.Println()
+	success(fmt.Sprintf("%s%s%s %s(stable)%s", colorBold, result.PublicURL, colorReset, colorDim, colorReset))
+	fmt.Println()
+	fmt.Printf("  This URL is stable — configure it as your OAuth callback URL once.\n")
+	fmt.Printf("  Tunnel running in background %s(pid %d)%s\n", colorDim, result.PID, colorReset)
+	fmt.Printf("  Stop with: %skindling expose --stop%s\n", colorCyan, colorReset)
+	fmt.Println()
 
 	return nil
 }

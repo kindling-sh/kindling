@@ -292,8 +292,8 @@ func handleEnvList(w http.ResponseWriter, r *http.Request) {
 }
 
 // ── POST /api/expose ────────────────────────────────────────────
-// Starts a cloudflared tunnel using the same flow as the CLI.
-// Body: { "service": "my-ingress" } (optional)
+// Starts a tunnel using the same flow as the CLI.
+// Body: { "service": "my-ingress", "domain": "myapp.ngrok-free.app" } (all optional)
 
 func handleExposeAction(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodDelete {
@@ -301,11 +301,6 @@ func handleExposeAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !requireMethod(w, r, http.MethodPost) {
-		return
-	}
-
-	if !core.CommandExists("cloudflared") {
-		actionErr(w, "cloudflared is not installed. Install it with: brew install cloudflared", http.StatusUnprocessableEntity)
 		return
 	}
 
@@ -320,16 +315,52 @@ func handleExposeAction(w http.ResponseWriter, r *http.Request) {
 		restoreIngresses()
 	}
 
-	// Parse optional service from body.
+	// Parse optional fields from body.
 	var body struct {
 		Service string `json:"service"`
+		Domain  string `json:"domain"`
 	}
 	if r.Body != nil {
 		json.NewDecoder(r.Body).Decode(&body)
 	}
 	exposeService = body.Service
 
-	// Start cloudflared — use the same core function as the CLI (15s timeout for HTTP).
+	// Resolve domain: explicit > stored config
+	domain := body.Domain
+	if domain == "" {
+		if cfg, err := core.ReadStableTunnelConfig(); err == nil && cfg != nil && cfg.Domain != "" {
+			domain = cfg.Domain
+		}
+	}
+
+	// Save domain for future runs if provided explicitly
+	if body.Domain != "" {
+		_ = core.SaveStableTunnelConfig(&core.StableTunnelConfig{Domain: body.Domain})
+	}
+
+	// Use stable ngrok tunnel if domain is set
+	if domain != "" {
+		if !core.CommandExists("ngrok") {
+			actionErr(w, "ngrok is not installed — required for stable domains. Install with: brew install ngrok/ngrok/ngrok", http.StatusUnprocessableEntity)
+			return
+		}
+		result, err := core.StartStableNgrokTunnel(exposePort, domain)
+		if err != nil {
+			actionErr(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		core.SaveTunnelInfo(clusterName, result.PublicURL, "ngrok", result.PID)
+		patchIngressesForTunnel(result.PublicURL)
+		actionOK(w, "Tunnel started (stable): "+result.PublicURL)
+		return
+	}
+
+	// Fall back to cloudflared quick tunnel
+	if !core.CommandExists("cloudflared") {
+		actionErr(w, "cloudflared is not installed. Install it with: brew install cloudflared", http.StatusUnprocessableEntity)
+		return
+	}
+
 	result, err := core.StartCloudflaredTunnel(exposePort, 15, false)
 	if err != nil {
 		actionErr(w, err.Error(), http.StatusInternalServerError)
