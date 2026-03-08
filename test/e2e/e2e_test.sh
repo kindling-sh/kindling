@@ -1407,15 +1407,14 @@ else
 fi
 
 # Delete the secret via dashboard API
-DEL_RESP=$(curl -s -X DELETE "$DASHBOARD_URL/api/secrets/delete" \
-  -H "Content-Type: application/json" \
-  -d '{"name":"kindling-secret-dash-test-secret"}' 2>/dev/null || echo "{}")
+DEL_RESP=$(curl -s -X DELETE "$DASHBOARD_URL/api/secrets/default/kindling-secret-dash-test-secret" \
+  2>/dev/null || echo "{}")
 assert_contains "Secret delete returns ok" "true" "$DEL_RESP"
 
 # Set env via dashboard API
 ENV_SET_RESP=$(curl -s -X POST "$DASHBOARD_URL/api/env/set" \
   -H "Content-Type: application/json" \
-  -d '{"deployment":"e2e-dash-app","key":"DASH_VAR","value":"dash-value"}' 2>/dev/null || echo "{}")
+  -d '{"deployment":"e2e-dash-app","namespace":"default","env":{"DASH_VAR":"dash-value"}}' 2>/dev/null || echo "{}")
 assert_contains "Env set returns ok" "true" "$ENV_SET_RESP"
 
 sleep 3
@@ -1424,17 +1423,17 @@ DASH_ENV=$(kctl get deployment e2e-dash-app \
 assert_eq "DASH_VAR set via dashboard" "dash-value" "$DASH_ENV"
 
 # List env via dashboard API
-ENV_LIST_RESP=$(curl -s "$DASHBOARD_URL/api/env/list?deployment=e2e-dash-app" 2>/dev/null || echo "[]")
+ENV_LIST_RESP=$(curl -s "$DASHBOARD_URL/api/env/list/default/e2e-dash-app" 2>/dev/null || echo "[]")
 assert_contains "Env list contains DASH_VAR" "DASH_VAR" "$ENV_LIST_RESP"
 
 # Unset env via dashboard API
 ENV_UNSET_RESP=$(curl -s -X POST "$DASHBOARD_URL/api/env/unset" \
   -H "Content-Type: application/json" \
-  -d '{"deployment":"e2e-dash-app","key":"DASH_VAR"}' 2>/dev/null || echo "{}")
+  -d '{"deployment":"e2e-dash-app","namespace":"default","keys":["DASH_VAR"]}' 2>/dev/null || echo "{}")
 assert_contains "Env unset returns ok" "true" "$ENV_UNSET_RESP"
 
 # Scale via dashboard API
-SCALE_RESP=$(curl -s -X POST "$DASHBOARD_URL/api/scale/e2e-dash-app" \
+SCALE_RESP=$(curl -s -X POST "$DASHBOARD_URL/api/scale/default/e2e-dash-app" \
   -H "Content-Type: application/json" \
   -d '{"replicas":2}' 2>/dev/null || echo "{}")
 assert_contains "Scale returns ok" "true" "$SCALE_RESP"
@@ -1444,12 +1443,12 @@ SCALED_REPLICAS=$(kctl get deployment e2e-dash-app -o jsonpath='{.spec.replicas}
 assert_eq "Deployment scaled to 2 via dashboard" "2" "$SCALED_REPLICAS"
 
 # Scale back down
-curl -s -X POST "$DASHBOARD_URL/api/scale/e2e-dash-app" \
+curl -s -X POST "$DASHBOARD_URL/api/scale/default/e2e-dash-app" \
   -H "Content-Type: application/json" \
   -d '{"replicas":1}' 2>/dev/null || true
 
 # Restart via dashboard API
-RESTART_RESP=$(curl -s -X POST "$DASHBOARD_URL/api/restart/e2e-dash-app" \
+RESTART_RESP=$(curl -s -X POST "$DASHBOARD_URL/api/restart/default/e2e-dash-app" \
   -H "Content-Type: application/json" 2>/dev/null || echo "{}")
 assert_contains "Restart returns ok" "true" "$RESTART_RESP"
 
