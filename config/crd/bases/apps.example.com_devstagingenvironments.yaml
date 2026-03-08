@@ -327,6 +327,13 @@ spec:
                     items:
                       type: string
                     type: array
+                  compute:
+                    description: |-
+                      Compute tags this service for special compute scheduling (e.g. "gpu",
+                      "high-memory", "arm64"). When set, the snapshot Helm chart adds a
+                      nodeSelector (kindling.dev/compute=<value>) and a matching toleration
+                      so the pod lands on appropriately labelled nodes.
+                    type: string
                   env:
                     description: Env is a list of environment variables to set in
                       the container.
@@ -740,6 +747,11 @@ spec:
               url:
                 description: URL is the externally reachable URL if Ingress is configured.
                 type: string
+            required:
+            - dependenciesReady
+            - deploymentReady
+            - ingressReady
+            - serviceReady
             type: object
         type: object
     served: true

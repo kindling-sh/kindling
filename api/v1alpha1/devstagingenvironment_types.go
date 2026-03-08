@@ -260,16 +260,16 @@ type DevStagingEnvironmentStatus struct {
 	AvailableReplicas int32 `json:"availableReplicas,omitempty"`
 
 	// DeploymentReady indicates whether the Deployment has reached the desired state.
-	DeploymentReady bool `json:"deploymentReady,omitempty"`
+	DeploymentReady bool `json:"deploymentReady"`
 
 	// ServiceReady indicates whether the Service is created.
-	ServiceReady bool `json:"serviceReady,omitempty"`
+	ServiceReady bool `json:"serviceReady"`
 
 	// IngressReady indicates whether the Ingress is created (if enabled).
-	IngressReady bool `json:"ingressReady,omitempty"`
+	IngressReady bool `json:"ingressReady"`
 
 	// DependenciesReady indicates whether all declared dependencies are running.
-	DependenciesReady bool `json:"dependenciesReady,omitempty"`
+	DependenciesReady bool `json:"dependenciesReady"`
 
 	// URL is the externally reachable URL if Ingress is configured.
 	//+optional

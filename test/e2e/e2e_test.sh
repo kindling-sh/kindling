@@ -94,7 +94,7 @@ assert_contains() {
 assert_not_contains() {
   TESTS=$((TESTS + 1))
   local desc="$1" needle="$2" haystack="$3"
-  if ! echo "$haystack" | grep -q "$needle"; then
+  if ! echo "$haystack" | grep -qw "$needle"; then
     pass "$desc"
   else
     fail "$desc (should not contain '$needle')"
