@@ -9,6 +9,10 @@ description: Register self-hosted CI runners that build and deploy inside your K
 kindling provisions self-hosted GitHub Actions runners directly in your Kind
 cluster so CI jobs execute locally — no cloud minutes, no queuing.
 
+:::tip Dashboard
+You can also register runners from the dashboard: **Setup → Runners**, or press **⌘K** and type "runner". See [Dashboard](dashboard.md) for details.
+:::
+
 ## Register a runner
 
 ```bash

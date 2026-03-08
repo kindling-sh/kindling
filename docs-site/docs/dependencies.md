@@ -12,6 +12,10 @@ and the operator creates a Pod, Service, and credential Secret for each
 one, then **injects connection-string environment variables** into your
 app container automatically.
 
+:::tip Dashboard
+You can also manage dependencies visually in the dashboard: **Setup → App Designer** (topology editor). Draw edges from services to dependency nodes and deploy from the canvas. See [Dashboard](dashboard.md) for details.
+:::
+
 ---
 
 ## How it works

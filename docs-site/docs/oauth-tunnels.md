@@ -14,6 +14,10 @@ Since kindling runs on `*.localhost`, these callbacks fail by default.
 `kindling expose` solves this by creating a secure tunnel from a public
 HTTPS URL to your local cluster.
 
+:::tip Dashboard
+You can also start tunnels from the dashboard: press **⌘K** and type "expose". See [Dashboard](dashboard.md) for details.
+:::
+
 ---
 
 ## Quick start

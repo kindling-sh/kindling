@@ -10,6 +10,10 @@ description: Run your frontend dev server locally with hot reload, while hitting
 to backend services in the cluster. Edit code, see changes instantly —
 API calls go to the same services you deployed with `kindling deploy`.
 
+:::tip Dashboard
+You can also start dev mode from the dashboard: **Develop → Environments**, then click the **Dev** button on a frontend environment. See [Dashboard](dashboard.md) for details.
+:::
+
 ---
 
 ## Quickstart

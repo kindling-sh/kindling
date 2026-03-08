@@ -28,6 +28,10 @@ kindling secrets delete STRIPE_KEY
 kindling secrets restore
 ```
 
+:::tip Dashboard
+You can also manage secrets from the dashboard: **Develop → Cluster Resources → Secrets** tab, or press **⌘K** and type "secret". See [Dashboard](dashboard.md) for details.
+:::
+
 ---
 
 ## How it works
