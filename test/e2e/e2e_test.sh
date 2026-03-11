@@ -1368,15 +1368,9 @@ TUNNEL_HOST="abc-test-tunnel.trycloudflare.com"
 #   3. Save original TLS as annotation
 #   4. Remove TLS (tunnel provider handles TLS at edge)
 CURRENT_TLS=$(kctl get ingress e2e-tunnel-app -o jsonpath='{.spec.tls}' 2>/dev/null || echo "")
-PATCH_OPS=$(cat <<PATCHEOF
-[
-  {"op":"add","path":"/metadata/annotations/kindling.dev~1original-host","value":"myapp.localhost"},
-  {"op":"replace","path":"/spec/rules/0/host","value":"$TUNNEL_HOST"},
-  {"op":"add","path":"/metadata/annotations/kindling.dev~1original-tls","value":"$CURRENT_TLS"},
-  {"op":"remove","path":"/spec/tls"}
-]
-PATCHEOF
-)
+# Escape inner JSON quotes so the value is a valid JSON string inside the patch
+ESCAPED_TLS=$(echo "$CURRENT_TLS" | sed 's/"/\\"/g')
+PATCH_OPS="[{\"op\":\"add\",\"path\":\"/metadata/annotations/kindling.dev~1original-host\",\"value\":\"myapp.localhost\"},{\"op\":\"replace\",\"path\":\"/spec/rules/0/host\",\"value\":\"$TUNNEL_HOST\"},{\"op\":\"add\",\"path\":\"/metadata/annotations/kindling.dev~1original-tls\",\"value\":\"$ESCAPED_TLS\"},{\"op\":\"remove\",\"path\":\"/spec/tls\"}]"
 kctl patch ingress e2e-tunnel-app --type=json -p="$PATCH_OPS"
 sleep 2
 
