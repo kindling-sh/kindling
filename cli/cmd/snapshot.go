@@ -78,11 +78,13 @@ type snapshotDSE struct {
 	Env      []snapshotEnvVar
 	Deps     []snapshotDep
 	Ingress  *snapshotIngress
+	Compute  string // e.g. "gpu", "high-memory", "arm64"
 }
 
 type snapshotEnvVar struct {
-	Name  string
-	Value string
+	Name     string
+	Value    string
+	IsSecret bool // true when sourced from a K8s secretKeyRef
 }
 
 type snapshotDep struct {
@@ -109,16 +111,24 @@ func readClusterDSEs() ([]snapshotDSE, error) {
 	var list struct {
 		Items []struct {
 			Metadata struct {
-				Name string `json:"name"`
+				Name      string `json:"name"`
+				Namespace string `json:"namespace"`
 			} `json:"metadata"`
 			Spec struct {
 				Deployment struct {
 					Image    string `json:"image"`
 					Port     int    `json:"port"`
 					Replicas *int   `json:"replicas"`
+					Compute  string `json:"compute,omitempty"`
 					Env      []struct {
-						Name  string `json:"name"`
-						Value string `json:"value"`
+						Name      string `json:"name"`
+						Value     string `json:"value"`
+						ValueFrom *struct {
+							SecretKeyRef *struct {
+								Name string `json:"name"`
+								Key  string `json:"key"`
+							} `json:"secretKeyRef"`
+						} `json:"valueFrom,omitempty"`
 					} `json:"env"`
 				} `json:"deployment"`
 				Service struct {
@@ -159,9 +169,19 @@ func readClusterDSEs() ([]snapshotDSE, error) {
 			Image:    item.Spec.Deployment.Image,
 			Port:     item.Spec.Deployment.Port,
 			Replicas: replicas,
+			Compute:  item.Spec.Deployment.Compute,
 		}
 		for _, e := range item.Spec.Deployment.Env {
-			d.Env = append(d.Env, snapshotEnvVar{Name: e.Name, Value: e.Value})
+			if e.ValueFrom != nil && e.ValueFrom.SecretKeyRef != nil {
+				// Resolve the secret value from the cluster
+				val := resolveSecretValue(e.ValueFrom.SecretKeyRef.Name,
+					e.ValueFrom.SecretKeyRef.Key, item.Metadata.Namespace)
+				d.Env = append(d.Env, snapshotEnvVar{
+					Name: e.Name, Value: val, IsSecret: true,
+				})
+			} else {
+				d.Env = append(d.Env, snapshotEnvVar{Name: e.Name, Value: e.Value})
+			}
 		}
 		for _, dep := range item.Spec.Dependencies {
 			port := 0
@@ -203,6 +223,118 @@ func readClusterDSEs() ([]snapshotDSE, error) {
 	}
 
 	return dses, nil
+}
+
+// resolveSecretValue reads a K8s secret value from the cluster.
+// Falls back to empty string on error (the user will supply the
+// production value via the credential prompt).
+func resolveSecretValue(secretName, key, namespace string) string {
+	ns := namespace
+	if ns == "" {
+		ns = "default"
+	}
+	// Try the DSE's namespace first, then default
+	for _, tryNS := range []string{ns, "default"} {
+		out, err := exec.Command("kubectl", "get", "secret", secretName,
+			"-n", tryNS,
+			"-o", fmt.Sprintf("jsonpath={.data.%s}", key)).CombinedOutput()
+		if err != nil || len(strings.TrimSpace(string(out))) == 0 {
+			continue
+		}
+		decoded, err := exec.Command("bash", "-c",
+			fmt.Sprintf("echo -n '%s' | base64 -d", strings.TrimSpace(string(out)))).CombinedOutput()
+		if err != nil {
+			continue
+		}
+		return strings.TrimSpace(string(decoded))
+	}
+	return ""
+}
+
+// promptSnapshotSecrets prompts the user for production values for all
+// secret-backed env vars. The dev cluster values are shown as defaults.
+// The user can press Enter to accept the default or type a new value.
+// Updated values are written back into the DSE structs so they appear
+// in the generated chart (values-live.yaml and the credential override).
+func promptSnapshotSecrets(dses []snapshotDSE) error {
+	// Collect all secret env vars across services
+	type secretField struct {
+		dseIdx int
+		envIdx int
+		name   string
+		devVal string
+		svc    string
+	}
+	var fields []secretField
+	for i, dse := range dses {
+		for j, e := range dse.Env {
+			if e.IsSecret {
+				fields = append(fields, secretField{
+					dseIdx: i, envIdx: j,
+					name: e.Name, devVal: e.Value,
+					svc: dse.Name,
+				})
+			}
+		}
+	}
+	if len(fields) == 0 {
+		return nil
+	}
+
+	fmt.Fprintln(os.Stderr)
+	step("🔑", fmt.Sprintf("Found %d %s from K8s secrets",
+		len(fields), pluralize(len(fields), "env var", "env vars")))
+	fmt.Fprintln(os.Stderr, "       Accept the dev defaults (press Enter) or enter production values.")
+	fmt.Fprintln(os.Stderr)
+
+	// Build form fields — one input per secret
+	type fieldRef struct {
+		idx   int
+		value *string
+	}
+	var refs []fieldRef
+	var huhFields []huh.Field
+
+	for i, f := range fields {
+		val := new(string)
+		*val = f.devVal // pre-fill with dev value
+
+		desc := fmt.Sprintf("Service: %s", f.svc)
+		if f.devVal != "" {
+			desc += fmt.Sprintf("\nDev value: %s", truncateStr(f.devVal, 60))
+		}
+
+		huhFields = append(huhFields, huh.NewInput().
+			Title(f.name).
+			Description(desc).
+			Value(val))
+
+		refs = append(refs, fieldRef{idx: i, value: val})
+	}
+
+	form := huh.NewForm(huh.NewGroup(huhFields...))
+	if err := form.Run(); err != nil {
+		return fmt.Errorf("secret configuration cancelled: %w", err)
+	}
+
+	// Write values back into DSE structs
+	changed := 0
+	for _, ref := range refs {
+		f := fields[ref.idx]
+		newVal := *ref.value
+		if newVal != f.devVal {
+			changed++
+		}
+		dses[f.dseIdx].Env[f.envIdx].Value = newVal
+	}
+
+	if changed > 0 {
+		step("✓", fmt.Sprintf("Updated %d %s with production values",
+			changed, pluralize(changed, "secret", "secrets")))
+	} else {
+		step("✓", "Using dev values for all secrets")
+	}
+	return nil
 }
 
 // detectUserPrefix finds the GitHub actor prefix (e.g. "jeff-vincent-")
@@ -299,24 +431,9 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 	success(fmt.Sprintf("Found %d service(s)", len(dses)))
 
 	// Strip GitHub actor prefix (e.g. "jeff-vincent-gateway" → "gateway")
-	var userPrefix string
-	if prefix := detectUserPrefix(dses); prefix != "" {
-		userPrefix = prefix
-		step("✂️", fmt.Sprintf("Stripping user prefix %q from service names", strings.TrimSuffix(prefix, "-")))
-		for i := range dses {
-			if stripped := strings.TrimPrefix(dses[i].Name, prefix); stripped != "" {
-				dses[i].Name = stripped
-			}
-			// Also strip prefix from ingress host
-			if dses[i].Ingress != nil && dses[i].Ingress.Host != "" {
-				dses[i].Ingress.Host = strings.TrimPrefix(dses[i].Ingress.Host, prefix)
-			}
-			// Strip prefix from env var values (e.g. service URLs like
-			// "http://jeff-vincent-orders:5000" → "http://orders:5000")
-			for j := range dses[i].Env {
-				dses[i].Env[j].Value = strings.ReplaceAll(dses[i].Env[j].Value, prefix, "")
-			}
-		}
+	userPrefix := stripDSEPrefix(dses)
+	if userPrefix != "" {
+		step("✂️", fmt.Sprintf("Stripping user prefix %q from service names", strings.TrimSuffix(userPrefix, "-")))
 	}
 
 	chartName := snapshotName
@@ -331,6 +448,7 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 	outDir, _ = filepath.Abs(outDir)
 
 	// ── Registry: re-tag and push images ────────────────────────
+	var regUser, regPass string
 	if snapshotRegistry != "" {
 		tag := snapshotTag
 		if tag == "" {
@@ -338,7 +456,25 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 		}
 		step("🏷", fmt.Sprintf("Re-tagging images → %s (tag: %s)", snapshotRegistry, tag))
 
-		if err := craneCopyImages(dses, snapshotRegistry, tag, userPrefix); err != nil {
+		// Prompt for registry credentials
+		regHost := registryHost(snapshotRegistry)
+		step("🔑", fmt.Sprintf("Registry credentials for %s", regHost))
+		form := huh.NewForm(
+			huh.NewGroup(
+				huh.NewInput().
+					Title("Username").
+					Value(&regUser),
+				huh.NewInput().
+					Title("Password / Token").
+					EchoMode(huh.EchoModePassword).
+					Value(&regPass),
+			),
+		)
+		if err := form.Run(); err != nil {
+			return fmt.Errorf("registry credentials cancelled: %w", err)
+		}
+
+		if err := craneCopyImages(dses, snapshotRegistry, tag, userPrefix, regUser, regPass); err != nil {
 			warn(fmt.Sprintf("Could not push images: %v", err))
 			warn("Falling back to image references only (no push)")
 			// Still rewrite image refs so the chart targets the right registry
@@ -348,17 +484,15 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	var exportErr error
-	switch snapshotFormat {
-	case "helm":
-		exportErr = exportHelm(outDir, chartName, dses)
-	case "kustomize":
-		exportErr = exportKustomize(outDir, chartName, dses)
-	default:
-		return fmt.Errorf("unknown format %q — use 'helm' or 'kustomize'", snapshotFormat)
+	// ── Prompt for secret values ────────────────────────────────
+	// If any services have secretKeyRef env vars, prompt the user to
+	// accept the dev defaults or enter production-specific values.
+	if err := promptSnapshotSecrets(dses); err != nil {
+		return err
 	}
-	if exportErr != nil {
-		return exportErr
+
+	if err := exportSnapshot(snapshotFormat, outDir, chartName, dses); err != nil {
+		return err
 	}
 
 	// ── Deploy to production cluster ───────────────────────────
@@ -375,22 +509,29 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("cannot reach cluster via context %q: %w", snapshotContext, err)
 	}
 
-	// ── Ingress selector ──────────────────────────────────────
-	// Collect services that have ingress defined
-	var ingressServices []string
-	for _, dse := range dses {
-		if dse.Ingress != nil && dse.Ingress.Enabled {
-			ingressServices = append(ingressServices, dse.Name)
-		}
+	// ── Ensure ingress controller ──────────────────────────────
+	if err := ensureIngressController(snapshotContext, func(msg string) {
+		step("🌐", msg)
+	}); err != nil {
+		warn(fmt.Sprintf("Could not ensure ingress controller: %v", err))
 	}
 
+	// ── Ingress selector ──────────────────────────────────────
+	// Offer ALL services for ingress selection, pre-selecting ones
+	// that already had ingress enabled in dev.
 	var selectedIngress []string
-	if len(ingressServices) > 0 {
-		// Build multi-select options
-		options := make([]huh.Option[string], len(ingressServices))
-		for i, svc := range ingressServices {
-			options[i] = huh.NewOption(svc, svc)
+	if len(dses) > 0 {
+		options := make([]huh.Option[string], len(dses))
+		var preSelected []string
+		for i, dse := range dses {
+			label := dse.Name
+			if dse.Ingress != nil && dse.Ingress.Enabled {
+				label += " (ingress in dev)"
+				preSelected = append(preSelected, dse.Name)
+			}
+			options[i] = huh.NewOption(label, dse.Name)
 		}
+		selectedIngress = preSelected
 
 		form := huh.NewForm(
 			huh.NewGroup(
@@ -414,8 +555,30 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 	}
 	if len(selectedIngress) > 0 {
 		step("🌐", fmt.Sprintf("Ingress enabled for: %s", strings.Join(selectedIngress, ", ")))
-	} else if len(ingressServices) > 0 {
+	} else {
 		step("🌐", "No services selected for public ingress")
+	}
+
+	// Detect the IngressClass on the target cluster
+	ingClass := detectIngressClass(snapshotContext)
+	if ingClass != "" {
+		step("🌐", fmt.Sprintf("Using IngressClass: %s", ingClass))
+	}
+
+	// ── Production credentials ──────────────────────────────────
+	// Detect dev-default connection strings and prompt for production values.
+	credOverrides, err := resolveProductionCredentials(chartName, snapshotContext, dses)
+	if err != nil {
+		return fmt.Errorf("credential configuration failed: %w", err)
+	}
+	var credsFile string
+	if len(credOverrides) > 0 {
+		path, err := writeCredsOverrideFile(credOverrides)
+		if err != nil {
+			return err
+		}
+		credsFile = path
+		defer os.Remove(credsFile)
 	}
 
 	switch snapshotFormat {
@@ -432,15 +595,21 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 			"-f", filepath.Join(outDir, "values-live.yaml"),
 			"--timeout", "10m",
 		}
-		// Disable ingress for services the user didn't select;
-		// clear the dev-cluster hostname for selected services so the
-		// ingress catches all traffic on the LoadBalancer IP.
-		for _, svc := range ingressServices {
-			vk := helmValuesKey(svc)
-			if !selectedSet[svc] {
-				helmArgs = append(helmArgs, "--set", fmt.Sprintf("%s.ingress.enabled=false", vk))
-			} else {
+		// Apply production credential overrides (takes precedence over values-live.yaml)
+		if credsFile != "" {
+			helmArgs = append(helmArgs, "-f", credsFile)
+		}
+		// Enable/disable ingress for all services based on user selection.
+		for _, dse := range dses {
+			vk := helmValuesKey(dse.Name)
+			if selectedSet[dse.Name] {
+				helmArgs = append(helmArgs, "--set", fmt.Sprintf("%s.ingress.enabled=true", vk))
 				helmArgs = append(helmArgs, "--set", fmt.Sprintf("%s.ingress.host=", vk))
+				if ingClass != "" {
+					helmArgs = append(helmArgs, "--set", fmt.Sprintf("%s.ingress.ingressClassName=%s", vk, ingClass))
+				}
+			} else {
+				helmArgs = append(helmArgs, "--set", fmt.Sprintf("%s.ingress.enabled=false", vk))
 			}
 		}
 		if err := run("helm", helmArgs...); err != nil {
@@ -525,9 +694,20 @@ tmp
 		safe := helmSafe(dse.Name)
 		writeSnapshotFile(templatesDir, safe+"-deployment.yaml", helmDeploymentTemplate(dse, chartName, dses))
 		writeSnapshotFile(templatesDir, safe+"-service.yaml", helmServiceTemplate(dse, chartName))
-		if dse.Ingress != nil && dse.Ingress.Enabled {
-			writeSnapshotFile(templatesDir, safe+"-ingress.yaml", helmIngressTemplate(dse, chartName))
+		// Generate secrets template if the service has secret-backed env vars
+		if tpl := helmSecretsTemplate(dse, chartName); tpl != "" {
+			writeSnapshotFile(templatesDir, safe+"-secrets.yaml", tpl)
 		}
+		// Generate ingress template for every service so users can
+		// enable ingress at deploy time even if it wasn't in dev.
+		if dse.Ingress == nil {
+			dse.Ingress = &snapshotIngress{
+				Enabled:  false,
+				Path:     "/",
+				PathType: "Prefix",
+			}
+		}
+		writeSnapshotFile(templatesDir, safe+"-ingress.yaml", helmIngressTemplate(dse, chartName))
 	}
 
 	// ── Templates: dependency deployments ───────────────────────
@@ -599,12 +779,28 @@ func buildValuesYAML(chartName string, dses []snapshotDSE, depsSeen map[string]b
 		buf.WriteString(fmt.Sprintf("  port: %d\n", dse.Port))
 		buf.WriteString(fmt.Sprintf("  replicas: %d\n", dse.Replicas))
 
-		// Env vars — user-defined + dependency connection strings
-		hasEnv := len(dse.Env) > 0 || len(dse.Deps) > 0
-		if hasEnv {
+		// Compute scheduling — nodeSelector + toleration for special hardware
+		if dse.Compute != "" {
+			buf.WriteString(fmt.Sprintf("  compute: \"%s\"\n", dse.Compute))
+		} else {
+			buf.WriteString("  compute: \"\"  # e.g. \"gpu\", \"high-memory\", \"arm64\"\n")
+		}
+
+		// Env vars — user-defined (non-secret) + dependency connection strings
+		hasPlainEnv := false
+		for _, e := range dse.Env {
+			if !e.IsSecret {
+				hasPlainEnv = true
+				break
+			}
+		}
+		if hasPlainEnv || len(dse.Deps) > 0 {
 			buf.WriteString("  env:\n")
-			// User-defined env vars
+			// Non-secret user env vars
 			for _, e := range dse.Env {
+				if e.IsSecret {
+					continue
+				}
 				if live {
 					buf.WriteString(fmt.Sprintf("    %s: \"%s\"\n", e.Name, e.Value))
 				} else {
@@ -616,7 +812,7 @@ func buildValuesYAML(chartName string, dses []snapshotDSE, depsSeen map[string]b
 				if def, ok := depRegistry[dep.Type]; ok {
 					if live {
 						buf.WriteString(fmt.Sprintf("    %s: \"%s\"\n", def.EnvVarName,
-							buildExampleConnectionURL(dep.Type, helmSafe(dep.Type), def)))
+							buildConnectionURL(chartName, dep.Type, helmSafe(dep.Type), def)))
 					} else {
 						buf.WriteString(fmt.Sprintf("    %s: \"\"  # TODO: set your production %s connection string\n",
 							def.EnvVarName, dep.Type))
@@ -625,17 +821,47 @@ func buildValuesYAML(chartName string, dses []snapshotDSE, depsSeen map[string]b
 			}
 		}
 
-		// Ingress config
+		// Secrets — env vars sourced from K8s secrets in dev
+		hasSecrets := false
+		for _, e := range dse.Env {
+			if e.IsSecret {
+				hasSecrets = true
+				break
+			}
+		}
+		if hasSecrets {
+			buf.WriteString("  secrets:\n")
+			for _, e := range dse.Env {
+				if !e.IsSecret {
+					continue
+				}
+				if live {
+					buf.WriteString(fmt.Sprintf("    %s: \"%s\"\n", e.Name, yamlEscape(e.Value)))
+				} else {
+					buf.WriteString(fmt.Sprintf("    %s: \"\"  # TODO: set production value\n", e.Name))
+				}
+			}
+		}
+
+		// Ingress config — always generate so users can enable at deploy time
+		buf.WriteString("  ingress:\n")
 		if dse.Ingress != nil && dse.Ingress.Enabled {
-			buf.WriteString("  ingress:\n")
 			buf.WriteString("    enabled: true\n")
 			if live {
 				buf.WriteString(fmt.Sprintf("    host: \"%s\"\n", dse.Ingress.Host))
 			} else {
 				buf.WriteString(fmt.Sprintf("    host: \"\"  # TODO: set your production hostname (dev: %s)\n", dse.Ingress.Host))
 			}
-			buf.WriteString(fmt.Sprintf("    path: \"%s\"\n", dse.Ingress.Path))
-			buf.WriteString(fmt.Sprintf("    pathType: \"%s\"\n", dse.Ingress.PathType))
+			path := dse.Ingress.Path
+			pathType := dse.Ingress.PathType
+			if path == "" {
+				path = "/"
+			}
+			if pathType == "" {
+				pathType = "Prefix"
+			}
+			buf.WriteString(fmt.Sprintf("    path: \"%s\"\n", path))
+			buf.WriteString(fmt.Sprintf("    pathType: \"%s\"\n", pathType))
 			if dse.Ingress.IngressClassName != "" {
 				buf.WriteString(fmt.Sprintf("    ingressClassName: \"%s\"\n", dse.Ingress.IngressClassName))
 			}
@@ -643,6 +869,12 @@ func buildValuesYAML(chartName string, dses []snapshotDSE, depsSeen map[string]b
 				buf.WriteString("    tls:\n")
 				buf.WriteString(fmt.Sprintf("      secretName: \"%s\"\n", dse.Ingress.TLSSecretName))
 			}
+			buf.WriteString("    annotations: {}\n")
+		} else {
+			buf.WriteString("    enabled: false\n")
+			buf.WriteString("    host: \"\"\n")
+			buf.WriteString("    path: \"/\"\n")
+			buf.WriteString("    pathType: \"Prefix\"\n")
 			buf.WriteString("    annotations: {}\n")
 		}
 
@@ -695,7 +927,7 @@ func buildValuesYAML(chartName string, dses []snapshotDSE, depsSeen map[string]b
 		// Connection string example
 		if !live {
 			buf.WriteString(fmt.Sprintf("  # Connection: %s\n",
-				buildExampleConnectionURL(depType, safe, def)))
+				buildConnectionURL("", depType, safe, def)))
 		}
 		buf.WriteString("\n")
 	}
@@ -703,10 +935,15 @@ func buildValuesYAML(chartName string, dses []snapshotDSE, depsSeen map[string]b
 	return buf.String()
 }
 
-// buildExampleConnectionURL generates a sample connection string for a dependency type
-// using the Helm release template format, mirroring the operator's buildConnectionURL.
-func buildExampleConnectionURL(depType, safe string, def depDefaults) string {
-	host := fmt.Sprintf("<release>-%s", safe)
+// buildConnectionURL generates a connection string for a dependency type using the
+// given release name as the hostname prefix. When releasePrefix is empty, it falls
+// back to "<release>" for documentation/example output.
+func buildConnectionURL(releasePrefix, depType, safe string, def depDefaults) string {
+	prefix := releasePrefix
+	if prefix == "" {
+		prefix = "<release>"
+	}
+	host := fmt.Sprintf("%s-%s", prefix, safe)
 	switch depType {
 	case "postgres":
 		user, pass, db := "devuser", "devpass", "devdb"
@@ -809,10 +1046,19 @@ func helmDeploymentTemplate(dse snapshotDSE, chartName string, allDSEs []snapsho
 	}
 	// User-defined env vars — if the value references a sibling service,
 	// generate a Helm template expression so the URL uses the release name.
+	// Secret-backed env vars use secretKeyRef pointing to the chart-managed secret.
 	// Otherwise source from values.yaml.
 	if len(dse.Env) > 0 {
 		for _, e := range dse.Env {
-			if helmVal := rewriteServiceURL(e.Value, knownServices); helmVal != "" {
+			if e.IsSecret {
+				// Reference the chart-managed K8s Secret via secretKeyRef
+				envLines.WriteString(fmt.Sprintf(`        - name: %s
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Release.Name }}-%s-secrets
+              key: %s
+`, e.Name, safe, e.Name))
+			} else if helmVal := rewriteServiceURL(e.Value, knownServices); helmVal != "" {
 				// Directly embed the Helm-templated value
 				envLines.WriteString(fmt.Sprintf("        - name: %s\n          value: %s\n", e.Name, helmVal))
 			} else {
@@ -829,6 +1075,16 @@ func helmDeploymentTemplate(dse snapshotDSE, chartName string, allDSEs []snapsho
 	if envLines.Len() > 0 {
 		envSection = fmt.Sprintf("        env:\n%s", envLines.String())
 	}
+
+	computeSection := fmt.Sprintf(`      {{- if .Values.%s.compute }}
+      nodeSelector:
+        kindling.dev/compute: {{ .Values.%s.compute | quote }}
+      tolerations:
+      - key: kindling.dev/compute
+        operator: Equal
+        value: {{ .Values.%s.compute | quote }}
+        effect: NoSchedule
+      {{- end }}`, vk, vk, vk)
 
 	return fmt.Sprintf(`apiVersion: apps/v1
 kind: Deployment
@@ -847,13 +1103,14 @@ spec:
       labels:
         app: %s
     spec:
+%s
       containers:
       - name: %s
         image: {{ .Values.%s.image }}
         imagePullPolicy: Always
         ports:
         - containerPort: {{ .Values.%s.port }}
-%s`, safe, safe, chartName, vk, safe, safe, safe, vk, vk, envSection)
+%s`, safe, safe, chartName, vk, safe, safe, computeSection, safe, vk, vk, envSection)
 }
 
 func helmServiceTemplate(dse snapshotDSE, chartName string) string {
@@ -874,6 +1131,39 @@ spec:
     targetPort: {{ .Values.%s.port }}
     protocol: TCP
 `, safe, safe, chartName, safe, vk, vk)
+}
+
+// helmSecretsTemplate generates a K8s Secret resource for a service's
+// secret-backed env vars. Returns "" if the service has no secrets.
+func helmSecretsTemplate(dse snapshotDSE, chartName string) string {
+	var secretKeys []snapshotEnvVar
+	for _, e := range dse.Env {
+		if e.IsSecret {
+			secretKeys = append(secretKeys, e)
+		}
+	}
+	if len(secretKeys) == 0 {
+		return ""
+	}
+
+	safe := helmSafe(dse.Name)
+	vk := helmValuesKey(dse.Name)
+
+	var dataLines strings.Builder
+	for _, e := range secretKeys {
+		dataLines.WriteString(fmt.Sprintf("  %s: {{ .Values.%s.secrets.%s | quote }}\n", e.Name, vk, e.Name))
+	}
+
+	return fmt.Sprintf(`apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Release.Name }}-%s-secrets
+  labels:
+    app: %s
+    {{- include "%s.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+%s`, safe, safe, chartName, dataLines.String())
 }
 
 func helmIngressTemplate(dse snapshotDSE, chartName string) string {
@@ -1249,6 +1539,13 @@ func helmSafe(name string) string {
 	return s
 }
 
+// yamlEscape escapes a string for safe inclusion in a YAML double-quoted value.
+func yamlEscape(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `"`, `\"`)
+	return s
+}
+
 // helmValuesKey makes a name safe for use as a Helm values.yaml key.
 // Helm's Go template parser treats hyphens as subtraction operators,
 // so we convert to underscores.
@@ -1398,6 +1695,18 @@ func isClusterRegistryImage(image string) bool {
 	return false
 }
 
+// registryHost extracts the hostname (with port) from a registry string.
+// e.g. "ghcr.io/myorg" → "ghcr.io", "jeffvincent" → "index.docker.io"
+func registryHost(registry string) string {
+	parts := strings.SplitN(registry, "/", 2)
+	host := parts[0]
+	if !strings.Contains(host, ".") {
+		// Bare name like "jeffvincent" → Docker Hub
+		return "index.docker.io"
+	}
+	return host
+}
+
 // startRegistryPortForward opens a kubectl port-forward to the in-cluster
 // registry service and returns the local port and a cleanup function.
 func startRegistryPortForward() (int, func(), error) {
@@ -1462,10 +1771,47 @@ func startRegistryPortForward() (int, func(), error) {
 // stripped from DSE names. It's needed to find images in the Docker daemon
 // because `kindling load` tags them with the original prefixed name
 // (e.g. "jeff-vincent-gateway:12345").
-func craneCopyImages(dses []snapshotDSE, registry, tag, userPrefix string) error {
+func craneCopyImages(dses []snapshotDSE, registry, tag, userPrefix, regUser, regPass string) error {
 	// Check crane is installed
 	if _, err := exec.LookPath("crane"); err != nil {
 		return fmt.Errorf("crane is required for --registry (brew install crane)")
+	}
+
+	// Build a temporary Docker config dir so crane bypasses
+	// Docker Desktop's "credsStore":"desktop" credential helper,
+	// which crane can't resolve properly.
+	var craneEnv []string
+	if regUser != "" && regPass != "" {
+		tmpDir, err := os.MkdirTemp("", "kindling-crane-*")
+		if err != nil {
+			return fmt.Errorf("cannot create temp docker config: %w", err)
+		}
+		defer os.RemoveAll(tmpDir)
+
+		// Write a minimal config with no credsStore
+		if err := os.WriteFile(filepath.Join(tmpDir, "config.json"), []byte(`{"auths":{}}`), 0600); err != nil {
+			return fmt.Errorf("cannot write temp docker config: %w", err)
+		}
+
+		craneEnv = []string{"DOCKER_CONFIG=" + tmpDir}
+
+		regHost := registryHost(registry)
+		loginCmd := exec.Command("crane", "auth", "login", regHost, "-u", regUser, "-p", regPass)
+		loginCmd.Env = append(os.Environ(), craneEnv...)
+		if out, err := loginCmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("crane auth login failed for %s: %w (output: %s)", regHost, err, string(out))
+		}
+		step("🔑", fmt.Sprintf("Authenticated to %s", regHost))
+	}
+
+	// runCrane executes crane with the isolated Docker config.
+	runCrane := func(args ...string) (string, error) {
+		cmd := exec.Command("crane", args...)
+		if len(craneEnv) > 0 {
+			cmd.Env = append(os.Environ(), craneEnv...)
+		}
+		out, err := cmd.CombinedOutput()
+		return strings.TrimSpace(string(out)), err
 	}
 
 	// Check if any images need the in-cluster registry
@@ -1503,30 +1849,34 @@ func craneCopyImages(dses []snapshotDSE, registry, tag, userPrefix string) error
 
 		pushed := false
 
-		// Prefer Docker daemon images — they're built by `kindling load`
-		// with --platform linux/amd64, so they're the correct arch for
-		// production. The in-cluster registry may have stale CI-built
-		// images that match the host arch (arm64 on Apple Silicon).
-		if localImg := findDockerImage(dses[i].Name, userPrefix); localImg != "" {
-			step("🐳", fmt.Sprintf("Found %s in Docker daemon — pushing directly", localImg))
-			if err := dockerTagAndPush(localImg, dst); err != nil {
-				warn(fmt.Sprintf("Docker push failed for %s: %v — trying registry", dses[i].Name, err))
-			} else {
+		// Prefer the in-cluster registry — images built by Kaniko in
+		// the CI runner are linux/amd64 regardless of host arch. Docker
+		// daemon images may be the host arch (arm64 on Apple Silicon)
+		// which would cause "exec format error" on amd64 prod nodes.
+		if !pushed && isClusterRegistryImage(dses[i].Image) {
+			src := registryPullRef(dses[i].Image, localPort)
+			if out, err := runCrane("copy", "--insecure", src, dst); err == nil {
 				pushed = true
+			} else {
+				warn(fmt.Sprintf("crane copy failed for %s: %v (src=%s, output=%s)", dses[i].Name, err, src, out))
 			}
 		}
 
-		// Fallback: crane copy from in-cluster registry
-		if !pushed && isClusterRegistryImage(dses[i].Image) {
-			src := registryPullRef(dses[i].Image, localPort)
-			args := []string{"copy", "--insecure", src, dst}
-			if _, err := runSilent("crane", args...); err == nil {
-				pushed = true
+		// Fallback: Docker daemon images (e.g. for images loaded via
+		// `kindling load` that aren't in the in-cluster registry).
+		if !pushed {
+			if localImg := findDockerImage(dses[i].Name, userPrefix); localImg != "" {
+				step("🐳", fmt.Sprintf("Found %s in Docker daemon — pushing directly", localImg))
+				if err := dockerTagAndPush(localImg, dst); err != nil {
+					warn(fmt.Sprintf("Docker push failed for %s: %v", dses[i].Name, err))
+				} else {
+					pushed = true
+				}
 			}
 		}
 
 		if !pushed {
-			warn(fmt.Sprintf("Could not push %s — not in Docker daemon or registry", dses[i].Name))
+			warn(fmt.Sprintf("Could not push %s — not in registry or Docker daemon", dses[i].Name))
 			failed = append(failed, dses[i].Name)
 		}
 

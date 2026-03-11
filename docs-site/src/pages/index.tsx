@@ -133,10 +133,9 @@ function HeroSection() {
           </div>
           <p className={styles.heroSubtitle}>{siteConfig.tagline}</p>
           <p className={styles.heroDescription}>
-            Minimize the time from idea to prod. Designed for builders, Kindling
-            enforces SDLC best practices so your project — multi-agent
-            architectures, microservices or any flavor of containerized apps —
-            runs everywhere. Your project just works. In prod.
+            Kindling layers SDLC best practices into your project so it runs
+            everywhere — multi-agent architectures, microservices, or any
+            flavor of containerized app. From idea to prod with one tool.
           </p>
           <InstallCommand />
           <div className={styles.heroButtons}>

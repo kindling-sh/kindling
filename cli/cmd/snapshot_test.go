@@ -203,6 +203,129 @@ func TestHelmDeploymentTemplate_DepEnvVarsFromValues(t *testing.T) {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// helmDeploymentTemplate — secret env vars use secretKeyRef
+// ────────────────────────────────────────────────────────────────────────────
+
+func TestHelmDeploymentTemplate_SecretKeyRef(t *testing.T) {
+	dse := snapshotDSE{
+		Name:     "gateway",
+		Image:    "gateway:latest",
+		Port:     9090,
+		Replicas: 1,
+		Env: []snapshotEnvVar{
+			{Name: "AUTH0_DOMAIN", Value: "dev.auth0.com", IsSecret: true},
+			{Name: "ORDERS_URL", Value: "http://orders:5000"},
+		},
+	}
+
+	tmpl := helmDeploymentTemplate(dse, "test-chart", nil)
+
+	// Secret env vars should use secretKeyRef
+	if !strings.Contains(tmpl, "secretKeyRef") {
+		t.Error("template should use secretKeyRef for secret env vars")
+	}
+	if !strings.Contains(tmpl, "gateway-secrets") {
+		t.Error("template should reference gateway-secrets Secret resource")
+	}
+	if !strings.Contains(tmpl, "key: AUTH0_DOMAIN") {
+		t.Error("template should reference AUTH0_DOMAIN secret key")
+	}
+
+	// Non-secret env vars should still use values.yaml
+	if !strings.Contains(tmpl, ".Values.gateway.env.ORDERS_URL") {
+		t.Error("template should reference non-secret env from values")
+	}
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// helmSecretsTemplate — generates K8s Secret resource
+// ────────────────────────────────────────────────────────────────────────────
+
+func TestHelmSecretsTemplate_Basic(t *testing.T) {
+	dse := snapshotDSE{
+		Name: "gateway",
+		Env: []snapshotEnvVar{
+			{Name: "AUTH0_DOMAIN", Value: "dev.auth0.com", IsSecret: true},
+			{Name: "SESSION_SECRET", Value: "abc123", IsSecret: true},
+			{Name: "ORDERS_URL", Value: "http://orders:5000"},
+		},
+	}
+
+	tpl := helmSecretsTemplate(dse, "test-chart")
+
+	if tpl == "" {
+		t.Fatal("expected non-empty template for service with secrets")
+	}
+	if !strings.Contains(tpl, "kind: Secret") {
+		t.Error("template should define a Secret resource")
+	}
+	if !strings.Contains(tpl, "gateway-secrets") {
+		t.Error("template should name the secret gateway-secrets")
+	}
+	if !strings.Contains(tpl, ".Values.gateway.secrets.AUTH0_DOMAIN") {
+		t.Error("template should reference AUTH0_DOMAIN from values.secrets")
+	}
+	if !strings.Contains(tpl, ".Values.gateway.secrets.SESSION_SECRET") {
+		t.Error("template should reference SESSION_SECRET from values.secrets")
+	}
+	if strings.Contains(tpl, "ORDERS_URL") {
+		t.Error("template should not include non-secret env vars")
+	}
+}
+
+func TestHelmSecretsTemplate_NoSecrets(t *testing.T) {
+	dse := snapshotDSE{
+		Name: "ui",
+		Env:  []snapshotEnvVar{{Name: "FOO", Value: "bar"}},
+	}
+
+	tpl := helmSecretsTemplate(dse, "test-chart")
+	if tpl != "" {
+		t.Error("expected empty template for service with no secrets")
+	}
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// buildValuesYAML — secrets section
+// ────────────────────────────────────────────────────────────────────────────
+
+func TestBuildValuesYAML_SecretsSection(t *testing.T) {
+	dses := []snapshotDSE{
+		{
+			Name:     "gateway",
+			Image:    "gateway:latest",
+			Port:     9090,
+			Replicas: 1,
+			Env: []snapshotEnvVar{
+				{Name: "AUTH0_DOMAIN", Value: "dev.auth0.com", IsSecret: true},
+				{Name: "ORDERS_URL", Value: "http://orders:5000"},
+			},
+		},
+	}
+
+	// Live values should include secrets section with dev values
+	live := buildValuesYAML("test", dses, nil, true)
+	if !strings.Contains(live, "secrets:") {
+		t.Error("live values should contain secrets: section")
+	}
+	if !strings.Contains(live, "AUTH0_DOMAIN: \"dev.auth0.com\"") {
+		t.Error("live values should contain resolved secret value")
+	}
+
+	// Clean values should have empty secret values with TODO
+	clean := buildValuesYAML("test", dses, nil, false)
+	if !strings.Contains(clean, "secrets:") {
+		t.Error("clean values should contain secrets: section")
+	}
+	if !strings.Contains(clean, "AUTH0_DOMAIN: \"\"") {
+		t.Error("clean values should have empty secret placeholder")
+	}
+	if !strings.Contains(clean, "TODO") {
+		t.Error("clean values should have TODO comment for secrets")
+	}
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // kustomizeDeployment — dep env vars are placeholders
 // ────────────────────────────────────────────────────────────────────────────
 
@@ -263,10 +386,10 @@ func TestConnectionProtocol(t *testing.T) {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// buildExampleConnectionURL
+// buildConnectionURL
 // ────────────────────────────────────────────────────────────────────────────
 
-func TestBuildExampleConnectionURL(t *testing.T) {
+func TestBuildConnectionURL(t *testing.T) {
 	tests := []struct {
 		depType  string
 		contains string
@@ -282,9 +405,9 @@ func TestBuildExampleConnectionURL(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.depType, func(t *testing.T) {
 			def := depRegistry[tt.depType]
-			url := buildExampleConnectionURL(tt.depType, helmSafe(tt.depType), def)
+			url := buildConnectionURL("test-chart", tt.depType, helmSafe(tt.depType), def)
 			if !strings.Contains(url, tt.contains) {
-				t.Errorf("buildExampleConnectionURL(%q) = %q, want to contain %q", tt.depType, url, tt.contains)
+				t.Errorf("buildConnectionURL(%q) = %q, want to contain %q", tt.depType, url, tt.contains)
 			}
 		})
 	}

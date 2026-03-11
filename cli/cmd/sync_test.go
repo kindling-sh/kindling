@@ -1148,20 +1148,25 @@ func TestLoadImageTag(t *testing.T) {
 		t.Errorf("LoadImageTag(%q) = %q, should start with 'orders:'", "orders", tag)
 	}
 
-	// The timestamp part should be a valid unix timestamp
+	// Format is service:timestamp-seq
 	parts := strings.SplitN(tag, ":", 2)
 	if len(parts) != 2 {
-		t.Fatalf("LoadImageTag(%q) = %q, expected service:timestamp format", "orders", tag)
+		t.Fatalf("LoadImageTag(%q) = %q, expected service:timestamp-seq format", "orders", tag)
 	}
 
-	// Parse as int — should be close to current time
+	// Parse timestamp from "timestamp-seq"
 	var ts int64
-	if _, err := fmt.Sscanf(parts[1], "%d", &ts); err != nil {
-		t.Fatalf("timestamp part %q is not a number: %v", parts[1], err)
+	var seq uint64
+	if _, err := fmt.Sscanf(parts[1], "%d-%d", &ts, &seq); err != nil {
+		t.Fatalf("tag suffix %q is not timestamp-seq format: %v", parts[1], err)
 	}
 
-	now := time.Now().Unix()
-	if ts < now-5 || ts > now+5 {
+	now := time.Now().UnixNano()
+	diff := now - ts
+	if diff < 0 {
+		diff = -diff
+	}
+	if diff > 5*int64(time.Second) {
 		t.Errorf("timestamp %d is not within 5 seconds of now (%d)", ts, now)
 	}
 }

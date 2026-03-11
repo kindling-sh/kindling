@@ -1,3 +1,39 @@
+## ⚠️ Handle merge conflicts in the blog post flow
+
+The `git push` step in the "From Source to Production with OAuth" flow
+can hit merge conflicts when the remote has diverged (e.g. after
+`kindling generate` pushes a workflow). The blog should mention resolving
+conflicts before force-pushing, or advise `git pull --rebase` first.
+
+## ✅ Blog: move secrets before first deploy (DONE)
+
+Resolved — blog was restructured so secrets are set in Step 4, before the
+first `git push` deploy in Step 5.
+
+## ⚠️ Inconsistent CLI working directory expectations
+
+Some commands (e.g. `kindling debug`, `kindling sync`) require being run
+from the project root to find source files, while others (e.g. `kindling status`,
+`kindling secrets set`) work from anywhere. This should be made consistent:
+either all commands detect/require the project root, or none do. At minimum,
+commands that need the project root should error clearly when run from the
+wrong directory instead of failing silently.
+
+## Dashboard: API Explorer as core DSE view
+
+The API explorer (exec + curl into running services) is the killer feature
+when paired with the logical entities of the DSE. It should be the primary
+view for each DSE in the dashboard, not a secondary panel. Improvements:
+
+- Make the API explorer the default/prominent view when clicking a DSE
+- Show all services in the DSE as addressable targets (with their ports
+  and health endpoints pre-populated)
+- Improve UX: easier endpoint entry, response formatting, request history
+- Surface inter-service calls (e.g. gateway → orders, gateway → inventory)
+  so users can trace requests across the service graph from one place
+
+---
+
 # Kindling — Roadmap
 
 Prioritized for mass adoption. The ordering is: harden what people will
@@ -1093,3 +1129,40 @@ ingress class, emitted in the generated DSE YAML.
 - `CODE_OF_CONDUCT.md` (Contributor Covenant v2.1)
 - Issue & PR templates (`.github/ISSUE_TEMPLATE/`, PR template)
 - Dynamic README badges (CI status, release, Go Report Card, coverage)
+
+---
+
+## Future — Native macOS app (Tauri)
+
+Package the dashboard as a standalone macOS app alongside VS Code on the
+dock. Open both — one is your editor, the other is your infrastructure.
+
+### Why Tauri
+
+- Wraps the existing React dashboard in the OS webview (~5MB binary)
+- No Electron/Chromium bloat
+- Rust shell calls out to the Go CLI — no rewrite needed
+
+### Key features unlocked
+
+- System tray with live cluster status (green/yellow/red dot)
+- Native notifications: build done, deploy failed, tunnel dropped
+- Menu bar quick actions (deploy, sync, expose)
+- Auto-start on login
+- Peer to VS Code — not a tool inside it
+
+### Prerequisites (wait until these are true)
+
+- [ ] Dashboard feature set is stable (not changing every week)
+- [ ] Dashboard is becoming the primary interface, not just a CLI companion
+- [ ] There's demand from non-CLI users (PMs, designers interacting with dev envs)
+
+### Conversion toolkit
+
+When packaging, also build `kindling fix` — a structured migration toolkit
+for existing apps. `kindling analyze` already produces a problem list; the
+missing piece is a fix catalog:
+
+- **Auto-fixable**: deterministic transforms (Kaniko compat, .gitignore, cache redirects)
+- **Agent-assisted**: scoped instruction files per problem class (secret extraction, dependency conversion, health check addition) — agent skills loaded when user opens the flagged file
+- **Manual with guidance**: complex migrations where analyze provides a plan

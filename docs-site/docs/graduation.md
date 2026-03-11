@@ -17,6 +17,10 @@ kindling's graduation flow uses two commands:
 | `kindling snapshot --deploy` | Generate a Helm chart, push images, and deploy |
 | `kindling production tls` | Set up TLS with cert-manager and Let's Encrypt |
 
+:::tip Dashboard
+You can also manage graduation from the dashboard: **Production → Overview** and **Production → Deploy**. See [Dashboard](dashboard.md) for details.
+:::
+
 ---
 
 ## Prerequisites

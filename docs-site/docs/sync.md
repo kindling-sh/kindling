@@ -31,6 +31,10 @@ With `kindling intel` feeding your agent the project context and
 autonomously: write code → see it running → fix issues → repeat.
 No human in the loop for the build-deploy cycle.
 
+:::tip Dashboard
+You can also trigger a sync from the dashboard: **Develop → Environments**, then click the **Sync** button on any environment. See [Dashboard](dashboard.md) for details.
+:::
+
 ---
 
 ## Core language support

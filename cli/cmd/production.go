@@ -14,13 +14,14 @@ import (
 
 var productionCmd = &cobra.Command{
 	Use:   "production",
-	Short: "Production cluster utilities (TLS, cert-manager)",
+	Short: "Production cluster utilities (TLS, metrics)",
 	Long: `Utilities for managing production Kubernetes clusters.
 
 To deploy your app to production, use 'kindling snapshot --deploy'.
 
 Subcommands:
-  tls      Install cert-manager and configure TLS for Ingress resources`,
+  tls      Install cert-manager and configure TLS for Ingress resources
+  metrics  Install lightweight metrics (VictoriaMetrics + kube-state-metrics)`,
 }
 
 func init() {

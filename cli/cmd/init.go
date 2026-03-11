@@ -186,6 +186,17 @@ func runInit(cmd *cobra.Command, args []string) error {
 	}
 	success("Image loaded")
 
+	// ── Load kube-rbac-proxy sidecar into Kind ──────────────────
+	rbacProxyImg := "registry.k8s.io/kubebuilder/kube-rbac-proxy:v0.16.0"
+	step("📦", "Loading kube-rbac-proxy sidecar image")
+	if err := run("docker", "pull", rbacProxyImg); err != nil {
+		warn("Failed to pull kube-rbac-proxy image — operator may not start")
+	} else if err := run("kind", "load", "docker-image", rbacProxyImg, "--name", clusterName); err != nil {
+		warn("Failed to load kube-rbac-proxy into Kind")
+	} else {
+		success("kube-rbac-proxy sidecar loaded")
+	}
+
 	// ── Ensure kustomize is available ───────────────────────────
 	kustomizeBin, err := ensureKustomize(dir)
 	if err != nil {

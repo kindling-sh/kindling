@@ -89,9 +89,10 @@ func runRunners(cmd *cobra.Command, args []string) error {
 	deployName := "deployment/" + provider.Runner().DeploymentName(ci.SanitizeDNS(ghUsername))
 	step("⏳", fmt.Sprintf("Polling for %s to appear...", deployName))
 
+	ctx := core.ClusterContext(clusterName)
 	found := false
 	for i := 0; i < 30; i++ {
-		if _, err := runSilent("kubectl", "get", deployName); err == nil {
+		if _, err := runSilent("kubectl", "--context", ctx, "get", deployName); err == nil {
 			found = true
 			break
 		}
@@ -105,7 +106,7 @@ func runRunners(cmd *cobra.Command, args []string) error {
 	}
 
 	step("⏳", "Waiting for rollout to complete...")
-	if err := run("kubectl", "rollout", "status", deployName, "--timeout=120s"); err != nil {
+	if err := run("kubectl", "--context", ctx, "rollout", "status", deployName, "--timeout=120s"); err != nil {
 		return fmt.Errorf("runner rollout failed: %w", err)
 	}
 

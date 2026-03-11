@@ -112,6 +112,7 @@ jobs:
     name: E2E
     runs-on: ubuntu-latest
     needs: [lint, test, build]
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -123,7 +124,7 @@ jobs:
       - name: Install Kind
         run: |
           [ -f /usr/local/bin/kind ] || {
-            curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64
+            curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.25.0/kind-linux-amd64
             chmod +x ./kind
             sudo mv ./kind /usr/local/bin/kind
           }
@@ -137,7 +138,30 @@ jobs:
       - name: Build dashboard UI
         run: cd cli/cmd/dashboard-ui && npm ci && npm run build
 
+      - name: Build CLI
+        run: make cli
+
+      - name: Pre-pull dependency images
+        run: |
+          # Pull lightweight dep images in parallel to speed up e2e
+          for img in quay.io/brancz/kube-rbac-proxy:v0.18.1 \
+                     mysql mongo rabbitmq:3-management nats memcached \
+                     hashicorp/consul hashicorp/vault minio/minio influxdb \
+                     jaegertracing/all-in-one:latest; do
+            docker pull "$img" &
+          done
+          wait
+
       - name: Run E2E tests
         run: make e2e
         env:
           E2E_CLUSTER_NAME: kindling-e2e-ci
+
+      - name: Upload e2e logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-logs
+          path: |
+            /tmp/kindling-e2e-*.log
+          retention-days: 7

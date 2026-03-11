@@ -107,6 +107,50 @@ func GetSecretKeys(clusterName, secretName, namespace string) ([]string, error) 
 	return ParseSecretKeys(keys), nil
 }
 
+// RestartSecretConsumers finds all deployments in the given namespace whose
+// pod spec references the named K8s secret (via secretKeyRef) and performs a
+// rollout restart on each one so they pick up the updated value.
+func RestartSecretConsumers(clusterName, k8sSecretName, namespace string) ([]string, error) {
+	if namespace == "" {
+		namespace = "default"
+	}
+
+	// List all deployments in the namespace
+	out, err := Kubectl(clusterName, "get", "deployments",
+		"-n", namespace,
+		"-o", "jsonpath={range .items[*]}{.metadata.name}{'\t'}{.spec.template.spec}{' '}{end}")
+	if err != nil {
+		return nil, nil // no deployments or cluster issue — not fatal
+	}
+
+	var restarted []string
+	for _, entry := range strings.Split(strings.TrimSpace(out), " ") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		parts := strings.SplitN(entry, "\t", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		deployName := parts[0]
+		podSpec := parts[1]
+
+		// Check if the pod spec references the secret by name
+		if !strings.Contains(podSpec, k8sSecretName) {
+			continue
+		}
+
+		_, err := Kubectl(clusterName, "rollout", "restart",
+			"deployment/"+deployName, "-n", namespace)
+		if err == nil {
+			restarted = append(restarted, deployName)
+		}
+	}
+
+	return restarted, nil
+}
+
 // ParseSecretKeys extracts key names from a kubectl JSON data output like
 // map[KEY1:base64... KEY2:base64...]
 func ParseSecretKeys(jsonData string) []string {

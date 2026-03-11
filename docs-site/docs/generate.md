@@ -30,6 +30,10 @@ kindling generate -k sk-... -r . --dry-run
 kindling generate -k sk-ant-... -r . --ai-provider anthropic
 ```
 
+:::tip Dashboard
+You can also generate workflows from the dashboard: **Setup → Analyze & Generate** (step 2), or press **⌘K** and type "generate". The AI output streams in real time. See [Dashboard](dashboard.md) for details.
+:::
+
 ---
 
 ## What it detects

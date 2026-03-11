@@ -1,82 +1,78 @@
 import { useState, useEffect } from 'react';
 import type { ReactNode } from 'react';
 import { ToastProvider, ActionModal, ConfirmDialog, useToast, ResultOutput } from './pages/actions';
-import { useApi, apiPost, apiDelete, fetchExposeStatus, streamInit, streamGenerate } from './api';
+import { useApi, apiPost, apiDelete, fetchExposeStatus, streamInit, streamGenerate, fetchProdIngressController } from './api';
 import type { ActionResult, GenerateResult } from './api';
 import { OverviewPage } from './pages/OverviewPage';
 import { DSEPage } from './pages/DSEPage';
+import { AnalyzePage } from './pages/AnalyzePage';
 import { RunnersPage } from './pages/RunnersPage';
-import { DeploymentsPage } from './pages/DeploymentsPage';
-import { PodsPage } from './pages/PodsPage';
-import { ServicesPage } from './pages/ServicesPage';
-import { IngressesPage } from './pages/IngressesPage';
-import { SecretsPage } from './pages/SecretsPage';
-import { EventsPage } from './pages/EventsPage';
-import { RBACPage } from './pages/RBACPage';
 import { TopologyPage } from './pages/TopologyPage';
 import { ApiExplorerPage } from './pages/ApiExplorerPage';
-import type { K8sList, K8sIngress } from './types';
+import { K8sPrimitivesPage } from './pages/K8sPrimitivesPage';
+import { ProductionOverviewPage } from './pages/ProductionOverviewPage';
+import { ProductionWorkloadsPage } from './pages/ProductionWorkloadsPage';
+import { ProductionNetworkPage } from './pages/ProductionNetworkPage';
+import { ProductionMetricsPage } from './pages/ProductionMetricsPage';
+import { ProductionDeployPage } from './pages/ProductionDeployPage';
+import { ProductionTLSPage } from './pages/ProductionTLSPage';
+import type { K8sList, K8sIngress, IngressControllerInfo } from './types';
 
+interface ContextsInfo {
+  local: string;
+  production: string;
+  current: string;
+}
 type Page =
   | 'overview'
   | 'topology'
+  | 'analyze'
   | 'api-explorer'
   | 'dses'
   | 'runners'
-  | 'deployments'
-  | 'pods'
-  | 'services'
-  | 'ingresses'
-  | 'secrets'
-  | 'events'
-  | 'rbac';
+  | 'k8s'
+  | 'prod-overview'
+  | 'prod-workloads'
+  | 'prod-network'
+  | 'prod-tls'
+  | 'prod-metrics'
+  | 'prod-deploy';
 
 interface NavGroup {
   label: string;
+  icon?: string;
   items: { page: Page; icon: string; label: string }[];
 }
 
 const NAV_GROUPS: NavGroup[] = [
   {
-    label: 'Cluster',
+    label: 'Setup',
+    icon: '△',
     items: [
-      { page: 'overview', icon: '⬡', label: 'Overview' },
-      { page: 'events', icon: '⚡', label: 'Events' },
-    ],
-  },
-  {
-    label: 'Kindling',
-    items: [
-      { page: 'topology', icon: '◇', label: 'Topology' },
-      { page: 'api-explorer', icon: '⇆', label: 'API Explorer' },
-      { page: 'dses', icon: '◆', label: 'Environments' },
+      { page: 'topology', icon: '◇', label: 'App Designer' },
+      { page: 'analyze', icon: '◇', label: 'Analyze & Generate' },
       { page: 'runners', icon: '▶', label: 'Runners' },
     ],
   },
   {
-    label: 'Workloads',
+    label: 'Develop',
+    icon: '⬡',
     items: [
-      { page: 'deployments', icon: '□', label: 'Deployments' },
-      { page: 'pods', icon: '○', label: 'Pods' },
+      { page: 'dses', icon: '◆', label: 'Environments' },
+      { page: 'api-explorer', icon: '⇆', label: 'API Explorer' },
+      { page: 'k8s', icon: '◎', label: 'Cluster Resources' },
     ],
   },
   {
-    label: 'Network',
+    label: 'Production',
+    icon: '◎',
     items: [
-      { page: 'services', icon: '◎', label: 'Services' },
-      { page: 'ingresses', icon: '⊕', label: 'Ingresses' },
-    ],
-  },
-  {
-    label: 'Configuration',
-    items: [
-      { page: 'secrets', icon: '◈', label: 'Secrets' },
-    ],
-  },
-  {
-    label: 'Access Control',
-    items: [
-      { page: 'rbac', icon: '⊘', label: 'RBAC' },
+      { page: 'prod-overview', icon: '⬢', label: 'Overview' },
+      { page: 'prod-deploy', icon: '▷', label: 'Deploy' },
+      { page: 'prod-workloads', icon: '□', label: 'Workloads' },
+      { page: 'prod-network', icon: '◎', label: 'Network' },
+      { page: 'prod-tls', icon: '◈', label: 'TLS' },
+      { page: 'prod-metrics', icon: '◇', label: 'Metrics' },
     ],
   },
 ];
@@ -84,16 +80,17 @@ const NAV_GROUPS: NavGroup[] = [
 const PAGES: Record<Page, () => ReactNode> = {
   overview: OverviewPage,
   topology: TopologyPage,
+  analyze: AnalyzePage,
   'api-explorer': ApiExplorerPage,
   dses: DSEPage,
   runners: RunnersPage,
-  deployments: DeploymentsPage,
-  pods: PodsPage,
-  services: ServicesPage,
-  ingresses: IngressesPage,
-  secrets: SecretsPage,
-  events: EventsPage,
-  rbac: RBACPage,
+  k8s: K8sPrimitivesPage,
+  'prod-overview': ProductionOverviewPage,
+  'prod-workloads': ProductionWorkloadsPage,
+  'prod-network': ProductionNetworkPage,
+  'prod-tls': ProductionTLSPage,
+  'prod-metrics': ProductionMetricsPage,
+  'prod-deploy': ProductionDeployPage,
 };
 
 function App() {
@@ -143,9 +140,9 @@ function CommandMenu({ onClose, onAction }: {
         <div className="cmd-menu-header">Commands</div>
 
         <div className="cmd-menu-group">
-          <div className="cmd-menu-group-label">Lifecycle</div>
+          <div className="cmd-menu-group-label">Setup</div>
           <button className="cmd-item" onClick={() => onAction('init')}>
-            <span className="cmd-item-icon i-green">⚡</span>
+            <span className="cmd-item-icon i-green">▶</span>
             <span className="cmd-item-text">
               <div className="cmd-item-label">Init Cluster</div>
               <div className="cmd-item-desc">Bootstrap Kind + operator</div>
@@ -161,7 +158,7 @@ function CommandMenu({ onClose, onAction }: {
         </div>
 
         <div className="cmd-menu-group">
-          <div className="cmd-menu-group-label">Deploy</div>
+          <div className="cmd-menu-group-label">Develop</div>
           <button className="cmd-item" onClick={() => onAction('deploy')}>
             <span className="cmd-item-icon i-blue">▲</span>
             <span className="cmd-item-text">
@@ -176,17 +173,6 @@ function CommandMenu({ onClose, onAction }: {
               <div className="cmd-item-desc">Run kubectl apply with raw YAML</div>
             </span>
           </button>
-          <button className="cmd-item" onClick={() => onAction('generate')}>
-            <span className="cmd-item-icon i-cyan">✦</span>
-            <span className="cmd-item-text">
-              <div className="cmd-item-label">Generate Workflow</div>
-              <div className="cmd-item-desc">AI-generate a CI workflow from your repo</div>
-            </span>
-          </button>
-        </div>
-
-        <div className="cmd-menu-group">
-          <div className="cmd-menu-group-label">Network</div>
           <button className="cmd-item" onClick={() => onAction('expose')}>
             <span className="cmd-item-icon i-cyan">↗</span>
             <span className="cmd-item-text">
@@ -194,10 +180,6 @@ function CommandMenu({ onClose, onAction }: {
               <div className="cmd-item-desc">Public HTTPS tunnel for OAuth</div>
             </span>
           </button>
-        </div>
-
-        <div className="cmd-menu-group">
-          <div className="cmd-menu-group-label">Manage</div>
           <button className="cmd-item" onClick={() => onAction('secret')}>
             <span className="cmd-item-icon i-orange">◈</span>
             <span className="cmd-item-text">
@@ -205,11 +187,22 @@ function CommandMenu({ onClose, onAction }: {
               <div className="cmd-item-desc">Store an external secret</div>
             </span>
           </button>
+        </div>
+
+        <div className="cmd-menu-group">
+          <div className="cmd-menu-group-label">CI / CD</div>
           <button className="cmd-item" onClick={() => onAction('runner')}>
             <span className="cmd-item-icon i-green">▶</span>
             <span className="cmd-item-text">
               <div className="cmd-item-label">Create Runner</div>
               <div className="cmd-item-desc">Register a GitHub Actions runner</div>
+            </span>
+          </button>
+          <button className="cmd-item" onClick={() => onAction('generate')}>
+            <span className="cmd-item-icon i-cyan">✦</span>
+            <span className="cmd-item-text">
+              <div className="cmd-item-label">Generate Workflow</div>
+              <div className="cmd-item-desc">AI-generate a CI workflow from your repo</div>
             </span>
           </button>
         </div>
@@ -222,7 +215,7 @@ function CommandMenu({ onClose, onAction }: {
   );
 }
 
-// ── Expose Modal (ingress picker) ───────────────────────────────
+// ── Expose Modal (quick tunnel) ──────────────────────────────────
 
 function ExposeModal({ running, onStart, onStop, onClose }: {
   running: boolean;
@@ -230,54 +223,61 @@ function ExposeModal({ running, onStart, onStop, onClose }: {
   onStop: () => void;
   onClose: () => void;
 }) {
-  const { data } = useApi<K8sList<K8sIngress>>('/api/ingresses');
+  const { data: ingressData } = useApi<K8sList<K8sIngress>>('/api/ingresses');
   const [selected, setSelected] = useState('');
-
-  const ingresses = (data?.items || []).filter(
+  const ingresses = (ingressData?.items || []).filter(
     (i) => i.metadata.namespace !== 'kube-system' && i.metadata.namespace !== 'traefik'
   );
 
-  if (running) {
-    return (
-      <ActionModal title="Stop Tunnel" submitLabel="Stop Tunnel" onSubmit={onStop} onClose={onClose}>
-        <p style={{ color: 'var(--text-secondary)', fontSize: 13 }}>
-          A tunnel is currently active. Stopping it will restore the original ingress hosts.
-        </p>
-      </ActionModal>
-    );
-  }
-
   return (
-    <ActionModal
-      title="Expose / Tunnel"
-      submitLabel="Start Tunnel"
-      onSubmit={() => onStart(selected || undefined)}
-      onClose={onClose}
-    >
-      <p style={{ color: 'var(--text-secondary)', fontSize: 13, marginBottom: 12 }}>
-        Creates a public HTTPS tunnel via Cloudflare and patches the selected ingress host to route through it.
-      </p>
-      <label className="form-label">Target Ingress</label>
-      {ingresses.length === 0 ? (
-        <p style={{ color: 'var(--text-tertiary)', fontSize: 12 }}>
-          No ingresses found — the tunnel will start but no ingress will be patched.
-        </p>
-      ) : (
-        <select
-          className="form-input"
-          value={selected}
-          onChange={(e) => setSelected(e.target.value)}
-        >
-          <option value="">All ingresses (first match)</option>
-          {ingresses.map((ing) => (
-            <option key={`${ing.metadata.namespace}/${ing.metadata.name}`} value={ing.metadata.name}>
-              {ing.metadata.name}
-              {ing.spec.rules?.[0]?.host ? ` (${ing.spec.rules[0].host})` : ''}
-            </option>
-          ))}
-        </select>
-      )}
-    </ActionModal>
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal modal-wide" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 520 }}>
+        <div className="modal-header">
+          <h3>Expose / Tunnel</h3>
+          <button className="btn btn-sm btn-ghost" onClick={onClose}>✕</button>
+        </div>
+
+        <div className="modal-body">
+          {running ? (
+            <>
+              <p style={{ color: 'var(--text-secondary)', fontSize: 13 }}>
+                A tunnel is currently active. Stopping it will restore the original ingress hosts.
+              </p>
+              <div className="modal-footer" style={{ borderTop: 'none', padding: '12px 0 0' }}>
+                <button className="btn" onClick={onClose}>Cancel</button>
+                <button className="btn btn-primary" style={{ background: 'var(--danger)' }} onClick={onStop}>Stop Tunnel</button>
+              </div>
+            </>
+          ) : (
+            <>
+              <p style={{ color: 'var(--text-secondary)', fontSize: 13, marginBottom: 12 }}>
+                Creates a public HTTPS tunnel via Cloudflare and patches the selected ingress host to route through it.
+              </p>
+              <label className="form-label">Target Ingress</label>
+              {ingresses.length === 0 ? (
+                <p style={{ color: 'var(--text-tertiary)', fontSize: 12 }}>
+                  No ingresses found — the tunnel will start but no ingress will be patched.
+                </p>
+              ) : (
+                <select className="form-input" value={selected} onChange={(e) => setSelected(e.target.value)}>
+                  <option value="">All ingresses (first match)</option>
+                  {ingresses.map((ing) => (
+                    <option key={`${ing.metadata.namespace}/${ing.metadata.name}`} value={ing.metadata.name}>
+                      {ing.metadata.name}
+                      {ing.spec.rules?.[0]?.host ? ` (${ing.spec.rules[0].host})` : ''}
+                    </option>
+                  ))}
+                </select>
+              )}
+              <div className="modal-footer" style={{ borderTop: 'none', padding: '12px 0 0' }}>
+                <button className="btn" onClick={onClose}>Cancel</button>
+                <button className="btn btn-primary" onClick={() => onStart(selected || undefined)}>Start Tunnel</button>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -287,6 +287,30 @@ function AppSidebar({ activePage, setActivePage }: { activePage: Page; setActive
   const { toast } = useToast();
 
   const [cmdOpen, setCmdOpen] = useState(false);
+  const { data: contexts } = useApi<ContextsInfo>('/api/contexts', 10000);
+
+  // Determine which cluster section the current context matches
+  const currentCtx = contexts?.current || '';
+  const localCtx = contexts?.local || 'kind-dev';
+  const prodCtx = contexts?.production || '';
+  const isLocalActive = currentCtx === localCtx;
+  const isProdActive = prodCtx !== '' && currentCtx === prodCtx;
+
+  // Separate local and prod nav groups
+  const localGroups = NAV_GROUPS.filter(g => g.label !== 'Production');
+  const prodGroup = NAV_GROUPS.find(g => g.label === 'Production');
+
+  // Fetch production ingress controller for public IP
+  const [prodIC, setProdIC] = useState<IngressControllerInfo | null>(null);
+  useEffect(() => {
+    if (!prodCtx) return;
+    fetchProdIngressController().then(setProdIC).catch(() => {});
+    const interval = setInterval(() => {
+      fetchProdIngressController().then(setProdIC).catch(() => {});
+    }, 30000);
+    return () => clearInterval(interval);
+  }, [prodCtx]);
+  const prodPublicIP = prodIC?.external_ip || prodIC?.hostname || '';
 
   // ── modal state ───────────────────────────────────
   const [showDeploy, setShowDeploy] = useState(false);
@@ -470,14 +494,138 @@ function AppSidebar({ activePage, setActivePage }: { activePage: Page; setActive
   return (
     <aside className="sidebar">
       <div className="sidebar-brand">
-        <span className="brand-icon">🔥</span>
+        <svg className="brand-icon-svg" viewBox="0 0 64 64" width="22" height="22">
+          <defs>
+            <linearGradient id="sb-fo" x1="0%" y1="100%" x2="50%" y2="0%">
+              <stop offset="0%" stopColor="#FF6B35"/><stop offset="50%" stopColor="#F7931E"/><stop offset="100%" stopColor="#FFD23F"/>
+            </linearGradient>
+            <linearGradient id="sb-fi" x1="0%" y1="100%" x2="50%" y2="0%">
+              <stop offset="0%" stopColor="#FFD23F"/><stop offset="100%" stopColor="#FFF5CC"/>
+            </linearGradient>
+            <linearGradient id="sb-lg" x1="0%" y1="0%" x2="0%" y2="100%">
+              <stop offset="0%" stopColor="#8B5E3C"/><stop offset="100%" stopColor="#5C3A1E"/>
+            </linearGradient>
+          </defs>
+          <rect x="14" y="50" width="36" height="5" rx="2.5" fill="url(#sb-lg)" transform="rotate(-8 32 52)"/>
+          <rect x="14" y="50" width="36" height="5" rx="2.5" fill="url(#sb-lg)" transform="rotate(8 32 52)"/>
+          <path d="M32 4C32 4 14 24 14 36C14 46 22 54 32 54C42 54 50 46 50 36C50 24 32 4 32 4Z" fill="url(#sb-fo)" opacity="0.95"/>
+          <path d="M32 14C32 14 20 28 20 37C20 44 25 49 32 49C39 49 44 44 44 37C44 28 32 14 32 14Z" fill="#FFAD33" opacity="0.85"/>
+          <path d="M32 24C32 24 25 33 25 38C25 42 28 46 32 46C36 46 39 42 39 38C39 33 32 24 32 24Z" fill="url(#sb-fi)" opacity="0.95"/>
+        </svg>
         <span className="brand-text">kindling</span>
       </div>
+
+      {/* ── Home button ──────────────────── */}
+      <button
+        className={`nav-home-btn ${activePage === 'overview' ? 'active' : ''}`}
+        onClick={() => setActivePage('overview')}
+      >
+        <span className="nav-icon">⌂</span>
+        <span>Home</span>
+      </button>
+
       <nav className="sidebar-nav">
-        {NAV_GROUPS.map((group) => (
-          <div key={group.label}>
-            <div className="nav-group-label">{group.label}</div>
-            {group.items.map((item) => (
+        {/* ── LOCAL CLUSTER section ────────── */}
+        <div className={`cluster-section ${isLocalActive ? 'cluster-active' : ''}`}>
+          <div className="cluster-section-header">
+            <span className="cluster-section-icon">⬡</span>
+            <div className="cluster-section-info">
+              <span className="cluster-section-title">Local Cluster</span>
+              <span className="cluster-context-badge" title={localCtx}>{localCtx}</span>
+            </div>
+            {isLocalActive && <span className="cluster-active-dot" title="kubectl pointing here" />}
+          </div>
+          {localGroups.map((group) => (
+            <div key={group.label}>
+              <div className="nav-group-label">
+                {group.icon && <span style={{ marginRight: 6 }}>{group.icon}</span>}
+                {group.label}
+              </div>
+              {group.items.map((item) => (
+                <button
+                  key={item.page}
+                  className={`nav-item ${activePage === item.page ? 'active' : ''}`}
+                  onClick={() => setActivePage(item.page)}
+                >
+                  <span className="nav-icon">{item.icon}</span>
+                  <span className="nav-label">{item.label}</span>
+                </button>
+              ))}
+            </div>
+          ))}
+
+          {/* ── Tunnel widget (local cluster) ── */}
+          {tunnelStatus?.running && tunnelStatus.url && (
+            <div className="tunnel-widget" style={!tunnelStatus.dns_ready ? { background: 'var(--amber-muted, rgba(255,193,7,0.08))', borderColor: 'color-mix(in srgb, var(--amber, #ffc107) 25%, transparent)' } : undefined}>
+              <div className="tunnel-widget-header">
+                <span className={tunnelStatus.dns_ready ? 'tunnel-pulse' : 'tunnel-pulse tunnel-pulse-amber'} />
+                <span className="tunnel-widget-label" style={!tunnelStatus.dns_ready ? { color: 'var(--amber, #ffc107)' } : undefined}>
+                  {tunnelStatus.dns_ready ? 'Tunnel Active' : 'DNS Propagating…'}
+                </span>
+              </div>
+              {tunnelStatus.dns_ready ? (
+                <a href={tunnelStatus.url} target="_blank" rel="noopener" className="tunnel-widget-url">
+                  {tunnelStatus.url.replace('https://', '')}
+                </a>
+              ) : (
+                <span className="tunnel-widget-url" style={{ opacity: 0.6, cursor: 'default' }}>
+                  {tunnelStatus.url.replace('https://', '')}
+                </span>
+              )}
+              <div style={{ display: 'flex', gap: 6 }}>
+                <button
+                  className="tunnel-copy-btn"
+                  onClick={() => {
+                    navigator.clipboard.writeText(tunnelStatus.url!);
+                    toast('URL copied', 'success');
+                  }}
+                >
+                  Copy URL
+                </button>
+                <button
+                  className="tunnel-copy-btn"
+                  style={{ background: 'var(--danger)', color: '#fff' }}
+                  onClick={() => toggleTunnel()}
+                >
+                  Stop
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* ── Command trigger (local cluster) ── */}
+          <div style={{ padding: '8px 0 0' }}>
+            <button className="cmd-trigger" onClick={() => setCmdOpen(!cmdOpen)}>
+              <span className="cmd-trigger-icon">⌘</span>
+              <span className="cmd-trigger-label">Commands</span>
+              <span className="cmd-trigger-hint">⌘K</span>
+            </button>
+          </div>
+        </div>
+
+        {/* ── PRODUCTION section ──────────── */}
+        {prodGroup && (
+          <div className={`cluster-section cluster-section-prod ${isProdActive ? 'cluster-active' : ''}`}>
+            <div className="cluster-section-header cluster-section-header-prod">
+              <span className="cluster-section-icon">⬢</span>
+              <div className="cluster-section-info">
+                <span className="cluster-section-title">Production</span>
+                {prodCtx ? (
+                  <span className="cluster-context-badge cluster-context-badge-prod" title={prodCtx}>
+                    {prodCtx.length > 24 ? prodCtx.slice(0, 22) + '…' : prodCtx}
+                  </span>
+                ) : (
+                  <span className="cluster-context-badge cluster-context-badge-none">no --prod-context</span>
+                )}
+                {prodPublicIP && (
+                  <span className="cluster-context-ip" title={prodPublicIP} style={{ fontSize: 10, color: 'var(--accent)', fontFamily: 'var(--font-mono)', opacity: 0.85 }}>
+                    {prodPublicIP}
+                  </span>
+                )}
+              </div>
+              {isProdActive && <span className="cluster-active-dot cluster-active-dot-prod" title="kubectl pointing here" />}
+            </div>
+            {prodGroup.items.map((item) => (
               <button
                 key={item.page}
                 className={`nav-item ${activePage === item.page ? 'active' : ''}`}
@@ -488,60 +636,24 @@ function AppSidebar({ activePage, setActivePage }: { activePage: Page; setActive
               </button>
             ))}
           </div>
-        ))}
-      </nav>
+        )}
 
-      {/* ── Command trigger ──────────────── */}
-      <div style={{ padding: '12px 0 0' }}>
-        <button className="cmd-trigger" onClick={() => setCmdOpen(!cmdOpen)}>
-          <span className="cmd-trigger-icon">⌘</span>
-          <span className="cmd-trigger-label">Commands</span>
-          <span className="cmd-trigger-hint">⌘K</span>
-        </button>
-      </div>
+        {/* ── Context indicator ───────────── */}
+        {contexts && (
+          <div className="cluster-context-indicator">
+            <span className="cluster-context-indicator-label">kubectl →</span>
+            <span className={`cluster-context-indicator-value ${isLocalActive ? 'ctx-local' : isProdActive ? 'ctx-prod' : 'ctx-other'}`}>
+              {currentCtx ? (currentCtx.length > 20 ? currentCtx.slice(0, 18) + '…' : currentCtx) : 'unknown'}
+            </span>
+          </div>
+        )}
+      </nav>
 
       {cmdOpen && (
         <CommandMenu onClose={() => setCmdOpen(false)} onAction={handleAction} />
       )}
 
       <div className="sidebar-footer">
-        {tunnelStatus?.running && tunnelStatus.url && (
-          <div className="tunnel-widget" style={!tunnelStatus.dns_ready ? { background: 'var(--amber-muted, rgba(255,193,7,0.08))', borderColor: 'color-mix(in srgb, var(--amber, #ffc107) 25%, transparent)' } : undefined}>
-            <div className="tunnel-widget-header">
-              <span className={tunnelStatus.dns_ready ? 'tunnel-pulse' : 'tunnel-pulse tunnel-pulse-amber'} />
-              <span className="tunnel-widget-label" style={!tunnelStatus.dns_ready ? { color: 'var(--amber, #ffc107)' } : undefined}>
-                {tunnelStatus.dns_ready ? 'Tunnel Active' : 'DNS Propagating…'}
-              </span>
-            </div>
-            {tunnelStatus.dns_ready ? (
-              <a href={tunnelStatus.url} target="_blank" rel="noopener" className="tunnel-widget-url">
-                {tunnelStatus.url.replace('https://', '')}
-              </a>
-            ) : (
-              <span className="tunnel-widget-url" style={{ opacity: 0.6, cursor: 'default' }}>
-                {tunnelStatus.url.replace('https://', '')}
-              </span>
-            )}
-            <div style={{ display: 'flex', gap: 6 }}>
-              <button
-                className="tunnel-copy-btn"
-                onClick={() => {
-                  navigator.clipboard.writeText(tunnelStatus.url!);
-                  toast('URL copied', 'success');
-                }}
-              >
-                Copy URL
-              </button>
-              <button
-                className="tunnel-copy-btn"
-                style={{ background: 'var(--danger)', color: '#fff' }}
-                onClick={() => toggleTunnel()}
-              >
-                Stop
-              </button>
-            </div>
-          </div>
-        )}
         <span className="version">kindling dashboard v0.1</span>
       </div>
 

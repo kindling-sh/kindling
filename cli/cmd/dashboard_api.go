@@ -87,6 +87,28 @@ var (
 	handleEvents              = resourceHandler("events", resourceOpts{namespaced: true, emptyOnError: true, extraArgs: []string{"--sort-by=.lastTimestamp"}})
 )
 
+// ── /api/contexts — kubectl context overview ────────────────────
+
+func handleContexts(w http.ResponseWriter, r *http.Request) {
+	type contextsResponse struct {
+		Local      string `json:"local"`
+		Production string `json:"production"`
+		Current    string `json:"current"`
+	}
+
+	resp := contextsResponse{
+		Local:      kindContext(),
+		Production: prodContext,
+	}
+
+	// Get current kubectl context
+	if out, err := runCapture("kubectl", "config", "current-context"); err == nil {
+		resp.Current = strings.TrimSpace(out)
+	}
+
+	jsonResponse(w, resp)
+}
+
 // ── /api/cluster — cluster overview ─────────────────────────────
 
 func handleCluster(w http.ResponseWriter, r *http.Request) {

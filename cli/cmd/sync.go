@@ -712,6 +712,19 @@ func detectFrontendOutputDir(srcDir string) string {
 	return "dist"
 }
 
+// containerHasNginx returns true if the container has nginx installed and
+// running (or at least present). This is used to detect frontend containers
+// even when PID 1 is an entrypoint script or wrapper.
+func containerHasNginx(pod, namespace, container string) bool {
+	args := []string{"exec", pod, "-n", namespace, "--context", kindContext()}
+	if container != "" {
+		args = append(args, "-c", container)
+	}
+	args = append(args, "--", "sh", "-c", "which nginx 2>/dev/null || command -v nginx 2>/dev/null")
+	out, err := runCapture("kubectl", args...)
+	return err == nil && strings.TrimSpace(out) != ""
+}
+
 // detectNginxHtmlRoot tries to determine the nginx document root from the
 // container's configuration.  Falls back to /usr/share/nginx/html.
 func detectNginxHtmlRoot(pod, namespace, container string) string {
@@ -785,6 +798,17 @@ func restartViaFrontendBuild(pod, namespace, container, srcDir string, profile r
 
 	// Detect the static file root in the container
 	htmlRoot := detectNginxHtmlRoot(pod, namespace, container)
+
+	// Clean the html root before syncing — previous syncs may have left
+	// raw source files (index.html, src/, node_modules/) that would shadow
+	// the built assets.
+	cleanCmd := fmt.Sprintf("find %s -mindepth 1 -maxdepth 1 -exec rm -rf {} +", htmlRoot)
+	cleanArgs := []string{"exec", pod, "-n", namespace, "--context", kindContext()}
+	if container != "" {
+		cleanArgs = append(cleanArgs, "-c", container)
+	}
+	cleanArgs = append(cleanArgs, "--", "sh", "-c", cleanCmd)
+	_, _ = runSilent("kubectl", cleanArgs...)
 
 	// Sync the built output
 	step("📦", fmt.Sprintf("Syncing %s/ → %s:%s", outputDir, pod, htmlRoot))
@@ -979,6 +1003,12 @@ func patchDeploymentWrapper(deployment, pod, namespace, container string) (strin
 	if origCmd == "" {
 		return pod, fmt.Errorf("cannot determine container command for deployment/%s", deployment)
 	}
+
+	// If the command is "sh -c <something>", unwrap to just <something>
+	// so we don't end up with a double-nested sh -c inside the wrapper
+	// (which breaks commands containing ; or &&).
+	origCmd = stripShellWrapper(origCmd)
+
 	step("📝", fmt.Sprintf("Original command: %s", origCmd))
 
 	wrapperScript := fmt.Sprintf(
@@ -1226,6 +1256,11 @@ func isDistroless(pod, namespace, container string) bool {
 func patchDistrolessWithWrapper(deployment, namespace, container, origCmd string) (string, error) {
 	cName := containerNameForDeployment(deployment, namespace, container)
 
+	// If the command is "sh -c <something>", unwrap to just <something>
+	// so we don't end up with a double-nested sh -c inside the wrapper
+	// (which breaks commands containing ; or &&).
+	origCmd = stripShellWrapper(origCmd)
+
 	step("📝", fmt.Sprintf("Original command: %s", origCmd))
 
 	wrapperScript := fmt.Sprintf(
@@ -1429,17 +1464,33 @@ func syncAndRestart(pod, namespace, container, srcDir, dest string, excludes []s
 	}
 
 	// ── Frontend build detection ────────────────────────────────
-	// If the runtime is a static file server (Nginx, Caddy) and the source
-	// directory is a frontend project with a build step, run the build locally
-	// and sync the built assets instead of raw source files.
-	if srcDir != "" && profile.Mode == modeSignal && !profile.Interpreted && isFrontendProject(srcDir) {
-		step("🔍", fmt.Sprintf("Detected runtime: %s%s + Frontend Build%s  →  strategy: %slocal build + asset sync%s",
-			colorCyan, profile.Name, colorReset,
-			colorGreen, colorReset))
-		if cmdline != "" {
-			step("📝", fmt.Sprintf("Process: %s", cmdline))
+	// If the source directory is a frontend project with a build step and the
+	// container has nginx/caddy, build locally and sync the built assets.
+	// We check isFrontendProject (local source) independently of runtime
+	// detection because PID 1 may be an entrypoint script, qemu wrapper, or
+	// our own sync wrapper — none of which match "nginx" in the runtime table.
+	if srcDir != "" && isFrontendProject(srcDir) {
+		// Verify there's actually a static file server in the container
+		isStaticServer := (profile.Mode == modeSignal && !profile.Interpreted) // detected nginx/caddy directly
+		if !isStaticServer {
+			// Runtime detection missed it (wrapper/entrypoint) — probe for nginx binary
+			if containerHasNginx(pod, namespace, container) {
+				isStaticServer = true
+			}
 		}
-		return restartViaFrontendBuild(pod, namespace, container, srcDir, profile)
+		if isStaticServer {
+			if profile.Mode != modeSignal {
+				// Override profile so restartViaFrontendBuild uses correct settings
+				profile = runtimeTable["nginx"]
+			}
+			step("🔍", fmt.Sprintf("Detected runtime: %s%s + Frontend Build%s  →  strategy: %slocal build + asset sync%s",
+				colorCyan, profile.Name, colorReset,
+				colorGreen, colorReset))
+			if cmdline != "" {
+				step("📝", fmt.Sprintf("Process: %s", cmdline))
+			}
+			return restartViaFrontendBuild(pod, namespace, container, srcDir, profile)
+		}
 	}
 
 	// Print detected runtime info
@@ -1620,6 +1671,12 @@ func parseJSONStringArray(s string) string {
 	if s == "" || s == "[]" {
 		return ""
 	}
+	// Use proper JSON parsing to handle values containing commas or quotes.
+	var arr []string
+	if err := json.Unmarshal([]byte(s), &arr); err == nil {
+		return strings.Join(arr, " ")
+	}
+	// Fallback for non-JSON bracket-wrapped strings.
 	s = strings.TrimPrefix(s, "[")
 	s = strings.TrimSuffix(s, "]")
 	parts := strings.Split(s, ",")
@@ -1632,6 +1689,22 @@ func parseJSONStringArray(s string) string {
 		}
 	}
 	return strings.Join(result, " ")
+}
+
+// stripShellWrapper removes a leading "sh -c " from a command string so that
+// embedding it in another "sh -c ..." wrapper doesn't create double-nesting.
+// When readContainerCommand returns ["sh","-c","pip install ...; python ..."]
+// as a single string "sh -c pip install ...; python ...", the sync wrapper
+// would otherwise produce:  while true; do sh -c pip install ...; python ... &
+// which breaks because sh -c only takes one argument.
+func stripShellWrapper(cmd string) string {
+	if strings.HasPrefix(cmd, "sh -c ") {
+		return strings.TrimPrefix(cmd, "sh -c ")
+	}
+	if strings.HasPrefix(cmd, "/bin/sh -c ") {
+		return strings.TrimPrefix(cmd, "/bin/sh -c ")
+	}
+	return cmd
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -1673,7 +1746,8 @@ func runSync(cmd *cobra.Command, args []string) error {
 
 	// ── Detect runtime (quiet — for display only; syncAndRestart will print details) ──
 	profile, _ := detectRuntime(pod, syncNamespace, syncContainer)
-	frontendMode := profile.Mode == modeSignal && !profile.Interpreted && isFrontendProject(srcDir)
+	frontendMode := isFrontendProject(srcDir) &&
+		((profile.Mode == modeSignal && !profile.Interpreted) || containerHasNginx(pod, syncNamespace, syncContainer))
 
 	// ── Initial sync ────────────────────────────────────────────
 	if syncRestart {
@@ -1688,12 +1762,20 @@ func runSync(cmd *cobra.Command, args []string) error {
 			return err
 		}
 	} else {
-		step("📦", fmt.Sprintf("Syncing %s → %s:%s", srcDir, pod, syncDest))
-		if err := syncDir(pod, syncNamespace, srcDir, syncDest, syncContainer); err != nil {
-			return fmt.Errorf("initial sync failed: %w", err)
+		if frontendMode {
+			// Frontend project without --restart: build locally and sync
+			// built assets into the nginx html root.
+			if _, err := restartViaFrontendBuild(pod, syncNamespace, syncContainer, srcDir, profile); err != nil {
+				return fmt.Errorf("initial frontend build+sync failed: %w", err)
+			}
+		} else {
+			step("📦", fmt.Sprintf("Syncing %s → %s:%s", srcDir, pod, syncDest))
+			if err := syncDir(pod, syncNamespace, srcDir, syncDest, syncContainer); err != nil {
+				return fmt.Errorf("initial sync failed: %w", err)
+			}
+			success("Initial sync complete")
+			printSyncOnlyTips(profile)
 		}
-		success("Initial sync complete")
-		printSyncOnlyTips(profile)
 	}
 
 	// ── One-shot mode ───────────────────────────────────────────
@@ -1784,14 +1866,24 @@ func runSync(cmd *cobra.Command, args []string) error {
 			fmt.Printf("  %s[%s]%s  ↑ %d files changed\n", colorDim, ts, colorReset, count)
 		}
 
-		// For frontend builds, skip individual file sync — the full build
-		// + asset sync in syncAndRestart handles everything.
-		if frontendMode && syncRestart {
-			newPod, err := syncAndRestart(pod, syncNamespace, syncContainer, srcDir, syncDest, excludes)
-			if err != nil {
-				warn(fmt.Sprintf("Build failed: %v", err))
+		// For frontend builds, always do a full local build + asset sync
+		// (raw source files are useless to nginx/caddy).
+		if frontendMode {
+			if syncRestart {
+				newPod, err := syncAndRestart(pod, syncNamespace, syncContainer, srcDir, syncDest, excludes)
+				if err != nil {
+					warn(fmt.Sprintf("Build failed: %v", err))
+				} else {
+					pod = newPod
+				}
 			} else {
-				pod = newPod
+				// No --restart but still a frontend: build + sync assets.
+				newPod, err := restartViaFrontendBuild(pod, syncNamespace, syncContainer, srcDir, profile)
+				if err != nil {
+					warn(fmt.Sprintf("Build failed: %v", err))
+				} else {
+					pod = newPod
+				}
 			}
 		} else {
 			var syncErrors int

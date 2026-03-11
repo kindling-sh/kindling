@@ -21,3 +21,7 @@ docs-site/.docusaurus/
 install.sh
 example-apps/
 .github/workflows/fuzz.yml
+kindling-snapshot/
+
+# kindling secrets (do not commit)
+.kindling/secrets.yaml

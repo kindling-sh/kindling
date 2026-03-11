@@ -32,6 +32,10 @@ When intel activates, kindling:
 
 When intel deactivates, the originals are restored exactly as they were.
 
+:::tip Dashboard
+You can toggle Agent Intel from the dashboard home page with one click, or press **⌘K** and type "intel". See [Dashboard](dashboard.md) for details.
+:::
+
 ---
 
 ## Auto-lifecycle

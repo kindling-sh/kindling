@@ -79,22 +79,26 @@ func runAnalyze(cmd *cobra.Command, args []string) error {
 	// ── 1. Git state ────────────────────────────────────────────
 	checks = append(checks, checkGitState(repoPath)...)
 
-	// ── 2. Dockerfiles ──────────────────────────────────────────
+	// ── 2. CI Workflow ──────────────────────────────────────────
+	wfChecks, _ := checkExistingWorkflow(repoPath)
+	checks = append(checks, wfChecks...)
+
+	// ── 3. Dockerfiles ──────────────────────────────────────────
 	checks = append(checks, checkDockerfiles(repoPath, repoCtx)...)
 
-	// ── 3. Dependencies & language detection ────────────────────
+	// ── 4. Dependencies & language detection ────────────────────
 	checks = append(checks, checkDependencies(repoCtx)...)
 
-	// ── 4. Project structure (multi-service layout) ─────────────
+	// ── 5. Project structure (multi-service layout) ─────────────
 	checks = append(checks, checkProjectStructure(repoPath, repoCtx)...)
 
-	// ── 5. Multi-agent architecture ─────────────────────────────
+	// ── 6. Multi-agent architecture ─────────────────────────────
 	checks = append(checks, checkAgentArchitecture(repoCtx)...)
 
-	// ── 6. Secrets & credentials ────────────────────────────────
+	// ── 7. Secrets & credentials ────────────────────────────────
 	checks = append(checks, checkSecrets(repoCtx)...)
 
-	// ── 7. Kindling cluster readiness ───────────────────────────
+	// ── 8. Kindling cluster readiness ───────────────────────────
 	checks = append(checks, checkCluster()...)
 
 	// ── Print results ───────────────────────────────────────────
@@ -745,6 +749,182 @@ func inferFrameworkSecrets(ctx *repoContext) []string {
 	}
 
 	return secrets
+}
+
+// ── Existing CI workflow checks ─────────────────────────────────
+
+// workflowInfo holds metadata about a discovered workflow file,
+// returned alongside the analyze checks so the frontend can surface it.
+type workflowInfo struct {
+	Path    string `json:"path"`    // relative path within repo
+	Content string `json:"content"` // raw file content
+}
+
+func checkExistingWorkflow(repoPath string) ([]checkResult, *workflowInfo) {
+	var results []checkResult
+
+	// Look for known kindling workflow files
+	candidates := []struct {
+		rel      string
+		provider string
+	}{
+		{".github/workflows/dev-deploy.yml", "GitHub Actions"},
+		{".github/workflows/dev-deploy.yaml", "GitHub Actions"},
+		{".gitlab-ci.yml", "GitLab CI"},
+	}
+
+	var foundPath, foundRel, foundProvider string
+	var content []byte
+	for _, c := range candidates {
+		p := filepath.Join(repoPath, c.rel)
+		data, err := os.ReadFile(p)
+		if err == nil {
+			foundPath = p
+			foundRel = c.rel
+			foundProvider = c.provider
+			content = data
+			break
+		}
+	}
+
+	if foundPath == "" {
+		results = append(results, checkResult{
+			status:  checkInfo,
+			message: "No existing CI workflow found — generate one in Step 2",
+		})
+		return results, nil
+	}
+
+	results = append(results, checkResult{
+		status:  checkPass,
+		message: fmt.Sprintf("Found %s workflow: %s", foundProvider, foundRel),
+	})
+
+	wfContent := string(content)
+	lines := strings.Split(wfContent, "\n")
+
+	// ── Structure checks ────────────────────
+	hasOn := false
+	hasJobs := false
+	hasKindlingAction := false
+	hasBuildStep := false
+	hasDeployStep := false
+	jobCount := 0
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(line, "on:") || strings.HasPrefix(line, "'on':") || strings.HasPrefix(line, "\"on\":") {
+			hasOn = true
+		}
+		if strings.HasPrefix(line, "jobs:") {
+			hasJobs = true
+		}
+		if strings.Contains(trimmed, "kindling-build") || strings.Contains(trimmed, "kindling-deploy") ||
+			strings.Contains(trimmed, "kindling") {
+			hasKindlingAction = true
+		}
+		if strings.Contains(strings.ToLower(trimmed), "build") && (strings.HasPrefix(trimmed, "- name:") || strings.HasPrefix(trimmed, "name:")) {
+			hasBuildStep = true
+		}
+		if strings.Contains(strings.ToLower(trimmed), "deploy") && (strings.HasPrefix(trimmed, "- name:") || strings.HasPrefix(trimmed, "name:")) {
+			hasDeployStep = true
+		}
+		// Count top-level jobs (lines that are indented exactly 2 spaces and end with ":")
+		if len(line) > 2 && line[:2] == "  " && line[2] != ' ' && strings.HasSuffix(trimmed, ":") &&
+			!strings.HasPrefix(trimmed, "-") && !strings.HasPrefix(trimmed, "#") {
+			jobCount++
+		}
+	}
+
+	if !hasOn {
+		results = append(results, checkResult{
+			status:  checkFail,
+			message: "Workflow missing 'on:' trigger — it will never run",
+			fix:     "Add 'on: push:' or 'on: workflow_dispatch:' at the top of the file",
+		})
+	}
+	if !hasJobs {
+		results = append(results, checkResult{
+			status:  checkFail,
+			message: "Workflow missing 'jobs:' section — no steps will execute",
+		})
+	}
+	if hasOn && hasJobs {
+		results = append(results, checkResult{
+			status: checkPass, message: fmt.Sprintf("Workflow structure valid (%d job(s))", jobCount),
+		})
+	}
+	if !hasKindlingAction {
+		results = append(results, checkResult{
+			status:  checkWarn,
+			message: "Workflow does not reference kindling actions — may not build/deploy correctly",
+		})
+	}
+	if !hasBuildStep {
+		results = append(results, checkResult{
+			status:  checkWarn,
+			message: "No build step found in workflow",
+		})
+	}
+	if !hasDeployStep {
+		results = append(results, checkResult{
+			status:  checkWarn,
+			message: "No deploy step found in workflow",
+		})
+	}
+
+	// ── Secret checks ───────────────────────
+	requiredSecrets := extractSecretKeyRefNames(wfContent)
+	if len(requiredSecrets) > 0 {
+		clusterSecrets := listClusterSecrets()
+		var missing []string
+		for _, name := range requiredSecrets {
+			if clusterSecrets[name] || clusterSecrets["kindling-secret-"+name] {
+				continue
+			}
+			missing = append(missing, name)
+		}
+		if len(missing) > 0 {
+			for _, m := range missing {
+				results = append(results, checkResult{
+					status:  checkFail,
+					message: fmt.Sprintf("Workflow references secret '%s' but it's missing from the cluster", m),
+					fix:     fmt.Sprintf("kindling secrets set %s <value>", strings.ToUpper(strings.ReplaceAll(m, "-", "_"))),
+				})
+			}
+		} else {
+			results = append(results, checkResult{
+				status:  checkPass,
+				message: fmt.Sprintf("All %d referenced secrets are present in cluster", len(requiredSecrets)),
+			})
+		}
+	}
+
+	// ── YAML syntax check (basic) ───────────
+	// Check for common YAML issues: tabs instead of spaces
+	for i, line := range lines {
+		if strings.Contains(line, "\t") {
+			results = append(results, checkResult{
+				status:  checkFail,
+				message: fmt.Sprintf("Line %d contains tabs — YAML requires spaces for indentation", i+1),
+				fix:     "Replace tabs with spaces in " + foundRel,
+			})
+			break // Only report once
+		}
+	}
+
+	// Check file size
+	if len(content) > 50000 {
+		results = append(results, checkResult{
+			status:  checkWarn,
+			message: fmt.Sprintf("Workflow is very large (%d bytes) — consider splitting into reusable workflows", len(content)),
+		})
+	}
+
+	return results, &workflowInfo{
+		Path:    foundRel,
+		Content: wfContent,
+	}
 }
 
 func checkCluster() []checkResult {

@@ -64,7 +64,7 @@ metadata:
   name: traefik
 rules:
   - apiGroups: [""]
-    resources: ["services", "endpoints", "secrets", "namespaces"]
+    resources: ["services", "endpoints", "secrets", "namespaces", "nodes"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["extensions", "networking.k8s.io"]
     resources: ["ingresses", "ingressclasses"]
@@ -140,6 +140,7 @@ spec:
             - --providers.kubernetesingress
             - --providers.kubernetesingress.ingressclass=traefik
             - --providers.kubernetesingress.allowemptyservices=true
+            - --providers.kubernetesingress.ingressendpoint.hostname=localhost
             - --ping=true
             - --log.level=INFO
           ports:

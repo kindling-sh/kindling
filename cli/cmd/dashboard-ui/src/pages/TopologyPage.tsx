@@ -900,7 +900,7 @@ function DetailSidebar({ node, onClose, onUpdate, onDelete, edges, allNodes }: {
               onClick={handleDebugToggle}
               disabled={debugLoading}
             >
-              {debugLoading ? '⏳ …' : debugActive ? '🛑 Stop Debugger' : '🔧 Debug'}
+              {debugLoading ? '◔ …' : debugActive ? '■ Stop Debugger' : '⬡ Debug'}
             </button>
             {debugActive && debugPort && (
               <div className="topo-debug-status">
@@ -913,7 +913,7 @@ function DetailSidebar({ node, onClose, onUpdate, onDelete, edges, allNodes }: {
                       navigator.clipboard.writeText(JSON.stringify(debugLaunch, null, 2));
                     }}
                   >
-                    📋 Copy launch config
+                    ≡ Copy launch config
                   </button>
                 )}
               </div>
@@ -2268,7 +2268,7 @@ export function TopologyPage() {
               </button>
             )}
             <button className="btn btn-primary" onClick={handleDeploy} disabled={deploying}>
-              {deploying ? 'Deploying…' : '🚀 Deploy'}
+              {deploying ? 'Deploying…' : '△ Deploy'}
             </button>
           </div>
         </div>

@@ -340,6 +340,7 @@ export interface RuntimeInfo {
 
 export interface SyncStatus {
   running: boolean;
+  stopping?: boolean;
   deployment?: string;
   namespace?: string;
   src?: string;
@@ -382,21 +383,21 @@ export const DEPENDENCY_TYPES = [
 export type DependencyType = typeof DEPENDENCY_TYPES[number];
 
 export const DEP_META: Record<DependencyType, { icon: string; label: string; color: string; defaultPort: number; envVar: string }> = {
-  postgres:      { icon: '🐘', label: 'PostgreSQL',    color: '#336791', defaultPort: 5432, envVar: 'DATABASE_URL' },
-  redis:         { icon: '🔴', label: 'Redis',         color: '#DC382D', defaultPort: 6379, envVar: 'REDIS_URL' },
-  mysql:         { icon: '🐬', label: 'MySQL',         color: '#4479A1', defaultPort: 3306, envVar: 'DATABASE_URL' },
-  mongodb:       { icon: '🍃', label: 'MongoDB',       color: '#47A248', defaultPort: 27017, envVar: 'MONGO_URL' },
-  rabbitmq:      { icon: '🐰', label: 'RabbitMQ',      color: '#FF6600', defaultPort: 5672, envVar: 'AMQP_URL' },
-  minio:         { icon: '📦', label: 'MinIO',         color: '#C72C48', defaultPort: 9000, envVar: 'S3_ENDPOINT' },
-  elasticsearch: { icon: '🔍', label: 'Elasticsearch', color: '#FEC514', defaultPort: 9200, envVar: 'ELASTICSEARCH_URL' },
-  kafka:         { icon: '📡', label: 'Kafka',         color: '#231F20', defaultPort: 9092, envVar: 'KAFKA_BROKER_URL' },
-  nats:          { icon: '⚡', label: 'NATS',          color: '#27AAE1', defaultPort: 4222, envVar: 'NATS_URL' },
-  memcached:     { icon: '🧊', label: 'Memcached',     color: '#00875A', defaultPort: 11211, envVar: 'MEMCACHED_URL' },
-  cassandra:     { icon: '👁', label: 'Cassandra',     color: '#1287B1', defaultPort: 9042, envVar: 'CASSANDRA_URL' },
-  consul:        { icon: '🏛', label: 'Consul',        color: '#CA2171', defaultPort: 8500, envVar: 'CONSUL_URL' },
-  vault:         { icon: '🔐', label: 'Vault',         color: '#000000', defaultPort: 8200, envVar: 'VAULT_ADDR' },
-  influxdb:      { icon: '📈', label: 'InfluxDB',      color: '#22ADF6', defaultPort: 8086, envVar: 'INFLUXDB_URL' },
-  jaeger:        { icon: '🔭', label: 'Jaeger',        color: '#60D0E4', defaultPort: 16686, envVar: 'JAEGER_URL' },
+  postgres:      { icon: '◆', label: 'PostgreSQL',    color: '#336791', defaultPort: 5432, envVar: 'DATABASE_URL' },
+  redis:         { icon: '●', label: 'Redis',         color: '#DC382D', defaultPort: 6379, envVar: 'REDIS_URL' },
+  mysql:         { icon: '◇', label: 'MySQL',         color: '#4479A1', defaultPort: 3306, envVar: 'DATABASE_URL' },
+  mongodb:       { icon: '◉', label: 'MongoDB',       color: '#47A248', defaultPort: 27017, envVar: 'MONGO_URL' },
+  rabbitmq:      { icon: '⬡', label: 'RabbitMQ',      color: '#FF6600', defaultPort: 5672, envVar: 'AMQP_URL' },
+  minio:         { icon: '▣', label: 'MinIO',         color: '#C72C48', defaultPort: 9000, envVar: 'S3_ENDPOINT' },
+  elasticsearch: { icon: '◎', label: 'Elasticsearch', color: '#FEC514', defaultPort: 9200, envVar: 'ELASTICSEARCH_URL' },
+  kafka:         { icon: '⇆', label: 'Kafka',         color: '#231F20', defaultPort: 9092, envVar: 'KAFKA_BROKER_URL' },
+  nats:          { icon: '▶', label: 'NATS',          color: '#27AAE1', defaultPort: 4222, envVar: 'NATS_URL' },
+  memcached:     { icon: '□', label: 'Memcached',     color: '#00875A', defaultPort: 11211, envVar: 'MEMCACHED_URL' },
+  cassandra:     { icon: '◔', label: 'Cassandra',     color: '#1287B1', defaultPort: 9042, envVar: 'CASSANDRA_URL' },
+  consul:        { icon: '⬢', label: 'Consul',        color: '#CA2171', defaultPort: 8500, envVar: 'CONSUL_URL' },
+  vault:         { icon: '◈', label: 'Vault',         color: '#000000', defaultPort: 8200, envVar: 'VAULT_ADDR' },
+  influxdb:      { icon: '△', label: 'InfluxDB',      color: '#22ADF6', defaultPort: 8086, envVar: 'INFLUXDB_URL' },
+  jaeger:        { icon: '▷', label: 'Jaeger',        color: '#60D0E4', defaultPort: 16686, envVar: 'JAEGER_URL' },
 };
 
 export interface TopologyNodeData {
@@ -507,4 +508,201 @@ export interface TopologyLogEntry {
 export interface TopologyLogs {
   lines: TopologyLogEntry[];
   pods: string[];
+}
+
+// ── Production Cluster ──────────────────────────────────────────
+
+export interface ProdClusterInfo {
+  context: string;
+  connected: boolean;
+  provider: string;
+  version: string;
+  nodes: number;
+  prometheus: boolean;
+  cert_manager: boolean;
+  traefik?: unknown;
+}
+
+export interface NodeMetric {
+  name: string;
+  cpu_cores: string;
+  cpu_pct: string;
+  mem_bytes: string;
+  mem_pct: string;
+}
+
+export interface PodMetric {
+  namespace: string;
+  name: string;
+  cpu: string;
+  memory: string;
+}
+
+export interface RolloutRevision {
+  revision: string;
+  change_cause: string;
+}
+
+export interface CertificateItem {
+  metadata: K8sMetadata;
+  spec?: {
+    secretName?: string;
+    issuerRef?: { name: string; kind: string };
+    dnsNames?: string[];
+    duration?: string;
+    renewBefore?: string;
+  };
+  status?: {
+    conditions?: K8sCondition[];
+    notAfter?: string;
+    notBefore?: string;
+    renewalTime?: string;
+  };
+}
+
+export interface ClusterIssuerItem {
+  metadata: K8sMetadata;
+  spec?: {
+    acme?: {
+      server: string;
+      email: string;
+    };
+  };
+  status?: {
+    conditions?: K8sCondition[];
+  };
+}
+
+export interface PrometheusStatus {
+  detected: boolean;
+  namespace: string;
+  service: string;
+  port: number;
+  connected: boolean;
+}
+
+export interface PromQueryResult {
+  status: string;
+  data?: {
+    resultType: string;
+    result: {
+      metric: Record<string, string>;
+      value?: [number, string];
+      values?: [number, string][];
+    }[];
+  };
+}
+
+export interface K8sStatefulSet {
+  metadata: K8sMetadata;
+  spec: {
+    replicas?: number;
+    serviceName?: string;
+    selector?: { matchLabels?: Record<string, string> };
+  };
+  status: {
+    replicas?: number;
+    readyReplicas?: number;
+    currentReplicas?: number;
+    updatedReplicas?: number;
+  };
+}
+
+export interface K8sDaemonSet {
+  metadata: K8sMetadata;
+  spec: {
+    selector?: { matchLabels?: Record<string, string> };
+  };
+  status: {
+    desiredNumberScheduled?: number;
+    currentNumberScheduled?: number;
+    numberReady?: number;
+    numberAvailable?: number;
+    numberUnavailable?: number;
+  };
+}
+
+export interface Advisory {
+  severity: 'critical' | 'warning' | 'info';
+  title: string;
+  detail: string;
+  action: string;
+  resource?: string;
+}
+
+export interface AdvisorResponse {
+  advisories: Advisory[];
+  checked_at: string;
+}
+
+// ── Snapshot / Deploy ───────────────────────────────────────────
+
+export interface SnapshotService {
+  name: string;
+  image: string;
+  port: number;
+  replicas: number;
+  ingress?: { enabled: boolean; host: string };
+  deps: string[];
+  compute?: string; // e.g. "gpu", "high-memory", "arm64"
+}
+
+export interface SnapshotStatus {
+  services: SnapshotService[];
+  helm: boolean;
+  crane: boolean;
+  docker: boolean;
+  context: string;
+  connected: boolean;
+}
+
+export interface SSEMessage {
+  type: 'step' | 'error' | 'done';
+  message: string;
+}
+
+// ── TLS Management ──────────────────────────────────────────────
+
+export interface TLSIssuer {
+  name: string;
+  server?: string;
+  email?: string;
+  ready: boolean;
+}
+
+export interface TLSCert {
+  name: string;
+  namespace: string;
+  dns_names: string[];
+  issuer: string;
+  not_after: string;
+  ready: boolean;
+}
+
+export interface TLSStatus {
+  cert_manager: boolean;
+  issuers: TLSIssuer[];
+  certificates: TLSCert[];
+}
+
+// ── Metrics Management ──────────────────────────────────────────
+
+export interface MetricsStackStatus {
+  victoria_metrics: boolean;
+  kube_state_metrics: boolean;
+  vm_version: string;
+}
+
+// ── Ingress Controller ──────────────────────────────────────────
+
+export interface IngressControllerInfo {
+  found: boolean;
+  name: string;
+  namespace: string;
+  type: string;
+  class: string;
+  external_ip: string;
+  hostname: string;
+  cluster_ip: string;
+  ports: { port: number; nodePort?: number; protocol: string; name?: string }[];
 }

@@ -13,6 +13,10 @@ description: Check your project's readiness before generating a CI workflow.
 kindling analyze
 ```
 
+:::tip Dashboard
+You can also run analysis from the dashboard: **Setup → Analyze & Generate**, or press **⌘K** and type "analyze". See [Dashboard](dashboard.md) for details.
+:::
+
 ## What it checks
 
 ### Dockerfiles

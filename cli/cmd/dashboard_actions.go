@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -291,8 +292,8 @@ func handleEnvList(w http.ResponseWriter, r *http.Request) {
 }
 
 // ── POST /api/expose ────────────────────────────────────────────
-// Starts a cloudflared tunnel using the same flow as the CLI.
-// Body: { "service": "my-ingress" } (optional)
+// Starts a tunnel using the same flow as the CLI.
+// Body: { "service": "my-ingress", "domain": "myapp.ngrok-free.app" } (all optional)
 
 func handleExposeAction(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodDelete {
@@ -303,23 +304,13 @@ func handleExposeAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !core.CommandExists("cloudflared") {
-		actionErr(w, "cloudflared is not installed. Install it with: brew install cloudflared", http.StatusUnprocessableEntity)
+	// Reuse the shared running-tunnel check.
+	if reused := checkRunningTunnel(); reused {
+		actionErr(w, "tunnel already running — stop it first", http.StatusConflict)
 		return
 	}
 
-	// Check if already running — same check the CLI uses.
-	if info, _ := core.ReadTunnelInfo(); info != nil && info.PID > 0 {
-		if core.ProcessAlive(info.PID) {
-			actionErr(w, "tunnel already running — stop it first", http.StatusConflict)
-			return
-		}
-		// Stale PID — clean up before starting fresh.
-		core.CleanupTunnel(clusterName)
-		restoreIngresses()
-	}
-
-	// Parse optional service from body.
+	// Parse optional fields from body.
 	var body struct {
 		Service string `json:"service"`
 	}
@@ -328,17 +319,24 @@ func handleExposeAction(w http.ResponseWriter, r *http.Request) {
 	}
 	exposeService = body.Service
 
-	// Start cloudflared — use the same core function as the CLI (15s timeout for HTTP).
-	result, err := core.StartCloudflaredTunnel(exposePort, 15, false)
-	if err != nil {
+	// Detect provider and start a quick tunnel.
+	provider := core.DetectTunnelProvider()
+	if provider == "" {
+		actionErr(w, "No tunnel provider found. Install cloudflared or ngrok.", http.StatusUnprocessableEntity)
+		return
+	}
+
+	if err := startQuickTunnel(provider); err != nil {
 		actionErr(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	core.SaveTunnelInfo(clusterName, result.PublicURL, "cloudflared", result.PID)
-	patchIngressesForTunnel(result.PublicURL)
-
-	actionOK(w, "Tunnel started: "+result.PublicURL)
+	info, _ := core.ReadTunnelInfo()
+	url := ""
+	if info != nil {
+		url = info.URL
+	}
+	actionOK(w, "Tunnel started: "+url)
 }
 
 // ── DELETE /api/expose ──────────────────────────────────────────
@@ -635,9 +633,10 @@ func handleApplyYAML(w http.ResponseWriter, r *http.Request) {
 // Tracks a running file-sync session (one per dashboard instance).
 
 var (
-	activeSyncMu   sync.Mutex
-	activeSyncStop chan struct{} // closed to signal stop
-	activeSyncInfo *syncInfo
+	activeSyncMu       sync.Mutex
+	activeSyncStop     chan struct{} // closed to signal stop
+	activeSyncStopping bool          // true after stop requested, before cleanup finishes
+	activeSyncInfo     *syncInfo
 )
 
 type syncInfo struct {
@@ -795,6 +794,7 @@ func runDashboardSync(deployment, namespace, srcDir, dest, container string, res
 	if err != nil {
 		activeSyncMu.Lock()
 		activeSyncStop = nil
+		activeSyncStopping = false
 		activeSyncInfo = nil
 		activeSyncMu.Unlock()
 		return
@@ -829,6 +829,7 @@ func runDashboardSync(deployment, namespace, srcDir, dest, container string, res
 
 		activeSyncMu.Lock()
 		activeSyncStop = nil
+		activeSyncStopping = false
 		activeSyncInfo = nil
 		activeSyncMu.Unlock()
 	}()
@@ -971,12 +972,19 @@ func handleSyncStop(w http.ResponseWriter, r *http.Request) {
 	activeSyncMu.Lock()
 	defer activeSyncMu.Unlock()
 
+	// Already stopping — acknowledge but don't try to close again.
+	if activeSyncStopping {
+		actionOK(w, "Sync is stopping — restoring deployment...")
+		return
+	}
+
 	if activeSyncStop == nil {
 		actionErr(w, "no sync session running", http.StatusNotFound)
 		return
 	}
+	activeSyncStopping = true
 	close(activeSyncStop)
-	actionOK(w, "Sync stopped")
+	actionOK(w, "Sync stopping — restoring deployment...")
 }
 
 // ── GET /api/sync/status ────────────────────────────────────────
@@ -986,6 +994,7 @@ func handleSyncStatus(w http.ResponseWriter, r *http.Request) {
 
 	type status struct {
 		Running    bool      `json:"running"`
+		Stopping   bool      `json:"stopping,omitempty"`
 		Deployment string    `json:"deployment,omitempty"`
 		Namespace  string    `json:"namespace,omitempty"`
 		Src        string    `json:"src,omitempty"`
@@ -1003,6 +1012,7 @@ func handleSyncStatus(w http.ResponseWriter, r *http.Request) {
 
 	jsonResponse(w, status{
 		Running:    true,
+		Stopping:   activeSyncStopping,
 		Deployment: activeSyncInfo.Deployment,
 		Namespace:  activeSyncInfo.Namespace,
 		Src:        activeSyncInfo.Src,
@@ -1159,6 +1169,150 @@ func handleIntelDeactivate(w http.ResponseWriter, r *http.Request) {
 	actionOK(w, "kindling intel deactivated")
 }
 
+// ── POST /api/analyze ────────────────────────────────────────────
+// Runs the deterministic repo-readiness checks and returns structured JSON.
+// Body: { "repoPath?" }
+
+type analyzeCheck struct {
+	Status  string `json:"status"` // "pass", "warn", "fail", "info"
+	Message string `json:"message"`
+	Fix     string `json:"fix,omitempty"`
+}
+
+type analyzeCategory struct {
+	Category string         `json:"category"`
+	Checks   []analyzeCheck `json:"checks"`
+}
+
+type analyzeResponse struct {
+	OK                   bool              `json:"ok"`
+	RepoPath             string            `json:"repoPath"`
+	Language             string            `json:"language,omitempty"`
+	Categories           []analyzeCategory `json:"categories"`
+	Summary              analyzeSummary    `json:"summary"`
+	ExistingWorkflowPath string            `json:"existingWorkflowPath,omitempty"`
+	ExistingWorkflow     string            `json:"existingWorkflow,omitempty"`
+}
+
+type analyzeSummary struct {
+	Pass  int  `json:"pass"`
+	Warn  int  `json:"warn"`
+	Fail  int  `json:"fail"`
+	Ready bool `json:"ready"`
+}
+
+func handleAnalyze(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) {
+		return
+	}
+
+	var body struct {
+		RepoPath string `json:"repoPath"`
+	}
+	json.NewDecoder(r.Body).Decode(&body)
+
+	repoPath := body.RepoPath
+	if repoPath == "" {
+		root, err := findRepoRoot()
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]interface{}{"ok": false, "error": "cannot find repo root: " + err.Error()})
+			return
+		}
+		repoPath = root
+	} else {
+		abs, err := filepath.Abs(repoPath)
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]interface{}{"ok": false, "error": "invalid repo path: " + err.Error()})
+			return
+		}
+		repoPath = abs
+	}
+
+	repoCtx, err := scanRepo(repoPath)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"ok": false, "error": "repo scan failed: " + err.Error()})
+		return
+	}
+
+	// Run all checks in categories
+	convertChecks := func(checks []checkResult) []analyzeCheck {
+		var out []analyzeCheck
+		for _, c := range checks {
+			s := "info"
+			switch c.status {
+			case checkPass:
+				s = "pass"
+			case checkWarn:
+				s = "warn"
+			case checkFail:
+				s = "fail"
+			}
+			out = append(out, analyzeCheck{Status: s, Message: c.message, Fix: c.fix})
+		}
+		return out
+	}
+
+	// Check for existing workflow (returns checks + optional workflow info)
+	wfChecks, wfInfo := checkExistingWorkflow(repoPath)
+
+	categories := []analyzeCategory{
+		{Category: "Git", Checks: convertChecks(checkGitState(repoPath))},
+		{Category: "CI Workflow", Checks: convertChecks(wfChecks)},
+		{Category: "Dockerfiles", Checks: convertChecks(checkDockerfiles(repoPath, repoCtx))},
+		{Category: "Dependencies", Checks: convertChecks(checkDependencies(repoCtx))},
+		{Category: "Project Structure", Checks: convertChecks(checkProjectStructure(repoPath, repoCtx))},
+		{Category: "Architecture", Checks: convertChecks(checkAgentArchitecture(repoCtx))},
+		{Category: "Secrets", Checks: convertChecks(checkSecrets(repoCtx))},
+		{Category: "Cluster", Checks: convertChecks(checkCluster())},
+	}
+
+	// Remove empty categories
+	var filtered []analyzeCategory
+	for _, cat := range categories {
+		if len(cat.Checks) > 0 {
+			filtered = append(filtered, cat)
+		}
+	}
+
+	// Compute summary
+	var summary analyzeSummary
+	for _, cat := range filtered {
+		for _, c := range cat.Checks {
+			switch c.Status {
+			case "pass":
+				summary.Pass++
+			case "warn":
+				summary.Warn++
+			case "fail":
+				summary.Fail++
+			}
+		}
+	}
+	summary.Ready = summary.Fail == 0
+
+	lang := detectPrimaryLanguage(repoCtx)
+
+	var wfPath, wfContent string
+	if wfInfo != nil {
+		wfPath = wfInfo.Path
+		wfContent = wfInfo.Content
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(analyzeResponse{
+		OK:                   true,
+		RepoPath:             repoPath,
+		Language:             lang,
+		Categories:           filtered,
+		Summary:              summary,
+		ExistingWorkflowPath: wfPath,
+		ExistingWorkflow:     wfContent,
+	})
+}
+
 // ── POST /api/generate ──────────────────────────────────────────
 // Streams ndjson progress, then returns the generated workflow.
 // Body: { "apiKey", "repoPath?", "provider?", "model?", "ciProvider?", "branch?", "dryRun?" }
@@ -1167,6 +1321,10 @@ func handleGenerate(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
+
+	// Extend write deadline — reasoning models (o3) can take 5+ minutes.
+	rc := http.NewResponseController(w)
+	_ = rc.SetWriteDeadline(time.Now().Add(10 * time.Minute))
 
 	var body struct {
 		APIKey     string `json:"apiKey"`
@@ -1256,13 +1414,45 @@ func handleGenerate(w http.ResponseWriter, r *http.Request) {
 	send(fmt.Sprintf("Found %d Dockerfile(s), %d dependency manifest(s), %d source file(s)",
 		repoCtx.dockerfileCount, repoCtx.depFileCount, len(repoCtx.sourceSnippets)))
 
-	// Call AI
+	// Call AI — run in goroutine with heartbeat to keep connection alive
 	send(fmt.Sprintf("Calling %s (%s)…", provider, model))
 	systemPrompt, userPrompt := buildGeneratePrompt(repoCtx, ciProv)
-	workflow, err := callGenAI(provider, body.APIKey, model, systemPrompt, userPrompt)
-	if err != nil {
-		json.NewEncoder(w).Encode(actionResult{OK: false, Error: "AI generation failed: " + err.Error()})
-		return
+
+	type aiResult struct {
+		workflow string
+		err      error
+	}
+	aiCh := make(chan aiResult, 1)
+	go func() {
+		wf, err := callGenAI(provider, body.APIKey, model, systemPrompt, userPrompt)
+		aiCh <- aiResult{wf, err}
+	}()
+
+	// Send heartbeat every 8 seconds so the user knows it's still working
+	heartbeat := time.NewTicker(8 * time.Second)
+	defer heartbeat.Stop()
+	elapsed := 0
+	var workflow string
+waitLoop:
+	for {
+		select {
+		case res := <-aiCh:
+			if res.err != nil {
+				json.NewEncoder(w).Encode(actionResult{OK: false, Error: "AI generation failed: " + res.err.Error()})
+				return
+			}
+			workflow = res.workflow
+			break waitLoop
+		case <-heartbeat.C:
+			elapsed += 8
+			if isReasoningModel(model) {
+				send(fmt.Sprintf("Model is thinking… (%ds elapsed)", elapsed))
+			} else {
+				send(fmt.Sprintf("Waiting for response… (%ds elapsed)", elapsed))
+			}
+			// Extend deadline each heartbeat to prevent timeout
+			_ = rc.SetWriteDeadline(time.Now().Add(10 * time.Minute))
+		}
 	}
 	workflow = cleanYAMLResponse(workflow)
 
@@ -1299,6 +1489,142 @@ func handleGenerate(w http.ResponseWriter, r *http.Request) {
 		"output":   "Workflow generated and written to " + relPath,
 		"workflow": workflow,
 		"path":     relPath,
+	})
+}
+
+// ── POST /api/git/commit-and-push ───────────────────────────────
+// Commits one or more files and pushes to the remote.
+// Body: { "repoPath", "files": ["relative/path"], "message", "branch?" }
+// Streams ndjson progress, then returns final result.
+
+func handleGitCommitAndPush(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) {
+		return
+	}
+
+	var body struct {
+		RepoPath string   `json:"repoPath"`
+		Files    []string `json:"files"`
+		Message  string   `json:"message"`
+		Branch   string   `json:"branch"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		actionErr(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if body.Message == "" {
+		actionErr(w, "message is required", http.StatusBadRequest)
+		return
+	}
+	if len(body.Files) == 0 {
+		actionErr(w, "files is required", http.StatusBadRequest)
+		return
+	}
+
+	flusher, canFlush := w.(http.Flusher)
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	w.Header().Set("Cache-Control", "no-cache")
+
+	send := func(msg string) {
+		json.NewEncoder(w).Encode(map[string]string{"status": msg})
+		if canFlush {
+			flusher.Flush()
+		}
+	}
+
+	// Resolve repo path
+	repoPath := body.RepoPath
+	if repoPath == "" {
+		root, err := findRepoRoot()
+		if err != nil {
+			json.NewEncoder(w).Encode(actionResult{OK: false, Error: "cannot find repo root: " + err.Error()})
+			return
+		}
+		repoPath = root
+	} else {
+		abs, err := filepath.Abs(repoPath)
+		if err != nil {
+			json.NewEncoder(w).Encode(actionResult{OK: false, Error: "invalid repo path: " + err.Error()})
+			return
+		}
+		repoPath = abs
+	}
+
+	gitCmd := func(args ...string) (string, error) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repoPath
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+		err := cmd.Run()
+		out := strings.TrimSpace(stdout.String())
+		if err != nil && stderr.Len() > 0 {
+			errMsg := strings.TrimSpace(stderr.String())
+			if out == "" {
+				out = errMsg
+			} else {
+				out = out + "\n" + errMsg
+			}
+		}
+		return out, err
+	}
+
+	// Detect current branch
+	branch := body.Branch
+	if branch == "" {
+		out, err := gitCmd("symbolic-ref", "--short", "HEAD")
+		if err != nil {
+			json.NewEncoder(w).Encode(actionResult{OK: false, Error: "cannot detect current branch: " + out})
+			return
+		}
+		branch = out
+	}
+
+	// Stage files
+	send("Staging files…")
+	for _, f := range body.Files {
+		addOut, err := gitCmd("add", f)
+		if err != nil {
+			json.NewEncoder(w).Encode(actionResult{OK: false, Error: fmt.Sprintf("git add %s failed: %s", f, addOut)})
+			return
+		}
+		send(fmt.Sprintf("  ✓ staged %s", f))
+	}
+
+	// Check if there's anything to commit
+	statusOut, _ := gitCmd("diff", "--cached", "--name-only")
+	if strings.TrimSpace(statusOut) == "" {
+		send("No changes to commit — files already match HEAD")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"ok":     true,
+			"output": "Nothing to commit, working tree clean",
+			"branch": branch,
+		})
+		return
+	}
+
+	// Commit
+	send("Committing…")
+	commitOut, err := gitCmd("commit", "-m", body.Message)
+	if err != nil {
+		json.NewEncoder(w).Encode(actionResult{OK: false, Error: "git commit failed: " + commitOut})
+		return
+	}
+	send("  ✓ committed on " + branch)
+
+	// Push
+	send(fmt.Sprintf("Pushing to origin/%s…", branch))
+	pushOut, err := gitCmd("push", "origin", branch)
+	if err != nil {
+		json.NewEncoder(w).Encode(actionResult{OK: false, Error: fmt.Sprintf("git push failed: %s", pushOut)})
+		return
+	}
+	send("  ✓ pushed successfully")
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok":     true,
+		"output": fmt.Sprintf("Committed and pushed to origin/%s", branch),
+		"branch": branch,
 	})
 }
 
@@ -3120,6 +3446,87 @@ func handleCheckPath(w http.ResponseWriter, r *http.Request) {
 		"has_dockerfile": hasDockerfile,
 		"language":       lang,
 	})
+}
+
+// ── GET /api/fs/complete ────────────────────────────────────────
+// Returns directory entries matching a path prefix for autocomplete.
+// Query: ?prefix=/some/pa  → lists /some/ dirs starting with "pa"
+//        ?prefix=           → lists home directory entries
+//        ?prefix=/some/dir/ → lists children of /some/dir/
+
+func handleFsComplete(w http.ResponseWriter, r *http.Request) {
+	prefix := r.URL.Query().Get("prefix")
+
+	// Default to home directory
+	if prefix == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			jsonResponse(w, map[string]interface{}{"entries": []string{}})
+			return
+		}
+		prefix = home + "/"
+	}
+
+	// Expand ~ to home dir
+	if strings.HasPrefix(prefix, "~/") || prefix == "~" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			jsonResponse(w, map[string]interface{}{"entries": []string{}})
+			return
+		}
+		if prefix == "~" {
+			prefix = home + "/"
+		} else {
+			prefix = home + prefix[1:]
+		}
+	}
+
+	absPrefix, err := filepath.Abs(prefix)
+	if err != nil {
+		jsonResponse(w, map[string]interface{}{"entries": []string{}})
+		return
+	}
+
+	// Determine directory to list and filter prefix
+	var dirToList, filterPrefix string
+	if strings.HasSuffix(prefix, "/") {
+		// Trailing slash: list children of this dir
+		dirToList = absPrefix
+		filterPrefix = ""
+	} else {
+		// No trailing slash: list parent dir, filter by basename prefix
+		dirToList = filepath.Dir(absPrefix)
+		filterPrefix = strings.ToLower(filepath.Base(absPrefix))
+	}
+
+	entries, err := os.ReadDir(dirToList)
+	if err != nil {
+		jsonResponse(w, map[string]interface{}{"entries": []string{}})
+		return
+	}
+
+	var results []string
+	for _, e := range entries {
+		name := e.Name()
+		// Skip hidden dirs
+		if strings.HasPrefix(name, ".") {
+			continue
+		}
+		// Only return directories
+		if !e.IsDir() {
+			continue
+		}
+		// Filter by prefix
+		if filterPrefix != "" && !strings.HasPrefix(strings.ToLower(name), filterPrefix) {
+			continue
+		}
+		results = append(results, filepath.Join(dirToList, name)+"/")
+		if len(results) >= 20 {
+			break
+		}
+	}
+
+	jsonResponse(w, map[string]interface{}{"entries": results})
 }
 
 // ── POST /api/topology/edge/remove ──────────────────────────────

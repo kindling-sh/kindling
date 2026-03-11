@@ -314,9 +314,39 @@ func TestStripDebugWrapper(t *testing.T) {
 			want: "python /usr/local/bin/uvicorn main:app --host 0.0.0.0 --port 5000",
 		},
 		{
+			name: "python debugpy with wait-for-client",
+			cmd:  "pip install debugpy -q 2>/dev/null; python -m debugpy --listen 0.0.0.0:5678 --wait-for-client -m uvicorn main:app --host 0.0.0.0 --port 5000",
+			want: "python -m uvicorn main:app --host 0.0.0.0 --port 5000",
+		},
+		{
 			name: "node inspect wrapper",
 			cmd:  "node --inspect=0.0.0.0:9229 server.js",
 			want: "node server.js",
+		},
+		{
+			name: "NODE_OPTIONS wrapper",
+			cmd:  "NODE_OPTIONS='--inspect=0.0.0.0:9229' npm start",
+			want: "npm start",
+		},
+		{
+			name: "NODE_OPTIONS wrapper with yarn",
+			cmd:  "NODE_OPTIONS='--inspect=0.0.0.0:9229' yarn dev",
+			want: "yarn dev",
+		},
+		{
+			name: "go wait-loop wrapper returns empty",
+			cmd:  "echo 'Waiting for debug tools...'; while [ ! -f /tmp/dlv ]; do sleep 0.5; done; echo 'Starting Delve debugger'; /tmp/dlv exec --headless --listen=:2345 --api-version=2 --accept-multiclient --continue /tmp/_debug_bin",
+			want: "",
+		},
+		{
+			name: "dlv exec direct",
+			cmd:  "/tmp/dlv exec --headless --listen=:2345 --api-version=2 --accept-multiclient --continue /tmp/_debug_bin",
+			want: "/tmp/_debug_bin",
+		},
+		{
+			name: "rdbg wrapper",
+			cmd:  "gem install debug --no-document -q 2>/dev/null; rdbg -n -c --open --host 0.0.0.0 --port 12345 -- ruby app.rb",
+			want: "ruby app.rb",
 		},
 		{
 			name: "plain command (no wrapper)",
@@ -340,11 +370,11 @@ func TestStripDebugWrapper(t *testing.T) {
 // ────────────────────────────────────────────────────────────────────────────
 
 func TestWriteLaunchConfig(t *testing.T) {
-	// Use a temp directory to avoid polluting the workspace
+	// Use a temp directory as CWD since writeLaunchConfig always writes to CWD/.vscode/
 	tmpDir := t.TempDir()
-	origProjectDir := projectDir
-	projectDir = tmpDir
-	defer func() { projectDir = origProjectDir }()
+	origDir, _ := os.Getwd()
+	os.Chdir(tmpDir)
+	defer os.Chdir(origDir)
 
 	prof := debugProfiles["python"]
 	writeLaunchConfig("my-api", &prof, 5678, "/app", "")
@@ -491,9 +521,9 @@ func TestWriteLaunchConfig(t *testing.T) {
 // Test that writeLaunchConfig preserves existing non-kindling configs
 func TestWriteLaunchConfigPreservesExisting(t *testing.T) {
 	tmpDir := t.TempDir()
-	origProjectDir := projectDir
-	projectDir = tmpDir
-	defer func() { projectDir = origProjectDir }()
+	origDir, _ := os.Getwd()
+	os.Chdir(tmpDir)
+	defer os.Chdir(origDir)
 
 	// Create an existing launch.json with a user config
 	vsDir := filepath.Join(tmpDir, ".vscode")
@@ -539,9 +569,9 @@ func TestWriteLaunchConfigPreservesExisting(t *testing.T) {
 // Test that re-running writeLaunchConfig replaces (not duplicates) kindling configs
 func TestWriteLaunchConfigIdempotent(t *testing.T) {
 	tmpDir := t.TempDir()
-	origProjectDir := projectDir
-	projectDir = tmpDir
-	defer func() { projectDir = origProjectDir }()
+	origDir, _ := os.Getwd()
+	os.Chdir(tmpDir)
+	defer os.Chdir(origDir)
 
 	prof := debugProfiles["python"]
 
@@ -582,9 +612,9 @@ func TestWriteLaunchConfigIdempotent(t *testing.T) {
 // Test that writeLaunchConfig uses sourceSubdir in pathMappings
 func TestWriteLaunchConfigWithSourceSubdir(t *testing.T) {
 	tmpDir := t.TempDir()
-	origProjectDir := projectDir
-	projectDir = tmpDir
-	defer func() { projectDir = origProjectDir }()
+	origDir, _ := os.Getwd()
+	os.Chdir(tmpDir)
+	defer os.Chdir(origDir)
 
 	prof := debugProfiles["python"]
 	writeLaunchConfig("my-api", &prof, 5678, "/app", "orders")
@@ -628,9 +658,9 @@ func TestWriteLaunchConfigWithSourceSubdir(t *testing.T) {
 // Test that writeLaunchConfig applies sourceSubdir to Node.js localRoot/remoteRoot
 func TestWriteLaunchConfigSubdirNode(t *testing.T) {
 	tmpDir := t.TempDir()
-	origProjectDir := projectDir
-	projectDir = tmpDir
-	defer func() { projectDir = origProjectDir }()
+	origDir, _ := os.Getwd()
+	os.Chdir(tmpDir)
+	defer os.Chdir(origDir)
 
 	prof := debugProfiles["node"]
 	writeLaunchConfig("my-gateway", &prof, 9229, "/app", "gateway")
@@ -656,9 +686,9 @@ func TestWriteLaunchConfigSubdirNode(t *testing.T) {
 // translation is needed between VS Code and Delve.
 func TestWriteLaunchConfigSubdirGo(t *testing.T) {
 	tmpDir := t.TempDir()
-	origProjectDir := projectDir
-	projectDir = tmpDir
-	defer func() { projectDir = origProjectDir }()
+	origDir, _ := os.Getwd()
+	os.Chdir(tmpDir)
+	defer os.Chdir(origDir)
 
 	prof := debugProfiles["go"]
 	writeLaunchConfig("my-inventory", &prof, 2345, "/app", "inventory")

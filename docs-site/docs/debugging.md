@@ -28,6 +28,10 @@ kindling debug --stop -d <deployment-name>
 That's it. Kindling handles runtime detection, debug agent injection,
 probe management, port forwarding, and VS Code configuration automatically.
 
+:::tip Dashboard
+You can also start debug sessions from the dashboard: **Setup → App Designer**, then click the **Debug** button on any service node. See [Dashboard](dashboard.md) for details.
+:::
+
 ---
 
 ## How it works

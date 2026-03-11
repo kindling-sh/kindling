@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import type { RuntimeInfo, SyncStatus, ServiceDir, IntelStatus, TopologyGraph, TopologyStatusMap, TopologyNodeDetail, TopologyLogs } from './types';
+import type { RuntimeInfo, SyncStatus, ServiceDir, IntelStatus, TopologyGraph, TopologyStatusMap, TopologyNodeDetail, TopologyLogs, ProdClusterInfo, NodeMetric, PodMetric, RolloutRevision, PrometheusStatus, PromQueryResult, CertificateItem, ClusterIssuerItem, AdvisorResponse, SnapshotStatus, TLSStatus, MetricsStackStatus, IngressControllerInfo } from './types';
 
 const API_BASE = '';
 
@@ -154,6 +154,46 @@ export async function streamGenerate(
   const decoder = new TextDecoder();
   let buffer = '';
   let lastResult: GenerateResult = { ok: false, error: 'no result' };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        const parsed = JSON.parse(line);
+        if (parsed.status) onMessage(parsed.status);
+        if (parsed.ok !== undefined) lastResult = parsed;
+      } catch { /* skip malformed */ }
+    }
+  }
+  return lastResult;
+}
+
+// ── Git commit-and-push (ndjson stream) ──────────────────────────
+
+export interface GitPushResult extends ActionResult {
+  branch?: string;
+}
+
+export async function streamGitPush(
+  body: { repoPath?: string; files: string[]; message: string; branch?: string },
+  onMessage: (msg: string) => void,
+): Promise<GitPushResult> {
+  const res = await fetch(`${API_BASE}/api/git/commit-and-push`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const reader = res.body?.getReader();
+  if (!reader) return { ok: false, error: 'no response body' };
+
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let lastResult: GitPushResult = { ok: false, error: 'no result' };
 
   while (true) {
     const { done, value } = await reader.read();
@@ -347,4 +387,245 @@ export async function fetchDebugStatus(deployment?: string, namespace = 'default
   if (deployment) params.set('deployment', deployment);
   params.set('namespace', namespace);
   return apiFetch(`/api/debug/status?${params}`);
+}
+
+// ── Production Cluster API ──────────────────────────────────────
+
+export async function fetchProdCluster(): Promise<ProdClusterInfo> {
+  return apiFetch<ProdClusterInfo>('/api/prod/cluster');
+}
+
+export async function fetchProdContexts(): Promise<string[]> {
+  return apiFetch<string[]>('/api/prod/contexts');
+}
+
+export async function fetchProdNodeMetrics(): Promise<{ items: NodeMetric[]; error?: string }> {
+  return apiFetch('/api/prod/node-metrics');
+}
+
+export async function fetchProdPodMetrics(namespace?: string): Promise<{ items: PodMetric[]; error?: string }> {
+  const params = namespace ? `?namespace=${encodeURIComponent(namespace)}` : '';
+  return apiFetch(`/api/prod/pod-metrics${params}`);
+}
+
+export async function fetchProdLogs(namespace: string, pod: string, container?: string, tail = 200): Promise<string> {
+  let url = `/api/prod/logs/${namespace}/${pod}?tail=${tail}`;
+  if (container) url += `&container=${container}`;
+  const res = await apiFetch<{ logs: string }>(url);
+  return res.logs;
+}
+
+export async function prodRestart(namespace: string, deployment: string): Promise<ActionResult> {
+  return apiPost(`/api/prod/restart/${namespace}/${deployment}`);
+}
+
+export async function prodScale(namespace: string, deployment: string, replicas: number): Promise<ActionResult> {
+  return apiPost(`/api/prod/scale/${namespace}/${deployment}`, { replicas });
+}
+
+export async function prodDeletePod(namespace: string, pod: string): Promise<ActionResult> {
+  return apiDelete(`/api/prod/delete-pod/${namespace}/${pod}`);
+}
+
+export async function fetchProdRolloutHistory(namespace: string, deployment: string): Promise<{ items: RolloutRevision[]; raw: string }> {
+  return apiFetch(`/api/prod/rollout-history/${namespace}/${deployment}`);
+}
+
+export async function prodRollback(namespace: string, deployment: string, revision?: number): Promise<ActionResult> {
+  return apiPost(`/api/prod/rollback/${namespace}/${deployment}`, revision ? { revision } : {});
+}
+
+export async function fetchProdRolloutStatus(namespace: string, deployment: string): Promise<{ status: string; output: string }> {
+  return apiFetch(`/api/prod/rollout-status/${namespace}/${deployment}`);
+}
+
+export async function prodExec(namespace: string, pod: string, command: string, container?: string): Promise<ActionResult> {
+  return apiPost('/api/prod/exec', { namespace, pod, command, container });
+}
+
+export async function prodApply(yaml: string): Promise<ActionResult> {
+  return apiPost('/api/prod/apply', { yaml });
+}
+
+export async function fetchProdDescribe(kind: string, namespace: string, name: string): Promise<{ output: string }> {
+  return apiFetch(`/api/prod/describe/${kind}/${namespace}/${name}`);
+}
+
+export async function fetchProdCertificates(): Promise<{ items: CertificateItem[] }> {
+  return apiFetch('/api/prod/certificates');
+}
+
+export async function fetchProdClusterIssuers(): Promise<{ items: ClusterIssuerItem[] }> {
+  return apiFetch('/api/prod/clusterissuers');
+}
+
+export async function fetchProdIngressController(): Promise<IngressControllerInfo> {
+  return apiFetch<IngressControllerInfo>('/api/prod/ingress-controller');
+}
+
+export async function fetchPromStatus(): Promise<PrometheusStatus> {
+  return apiFetch<PrometheusStatus>('/api/prod/prometheus/status');
+}
+
+export async function promQuery(query: string): Promise<PromQueryResult> {
+  return apiFetch<PromQueryResult>(`/api/prod/prometheus/query?query=${encodeURIComponent(query)}`);
+}
+
+export async function promQueryRange(query: string, start: string, end: string, step: string): Promise<PromQueryResult> {
+  const params = new URLSearchParams({ query, start, end, step });
+  return apiFetch<PromQueryResult>(`/api/prod/prometheus/query_range?${params}`);
+}
+
+export async function fetchProdAdvisor(): Promise<AdvisorResponse> {
+  return apiFetch<AdvisorResponse>('/api/prod/advisor');
+}
+
+// ── Snapshot / Deploy ───────────────────────────────────────────
+
+export interface SnapshotCredential {
+  env_var: string;
+  dep_type: string;
+  dev_value: string;
+  services: string[];
+  cached?: string;
+}
+
+export interface SnapshotCredentialsResponse {
+  credentials: SnapshotCredential[];
+  cached_at: string;
+}
+
+export async function fetchSnapshotCredentials(): Promise<SnapshotCredentialsResponse> {
+  return apiFetch<SnapshotCredentialsResponse>('/api/prod/snapshot/credentials');
+}
+
+export async function fetchSnapshotStatus(): Promise<SnapshotStatus> {
+  return apiFetch<SnapshotStatus>('/api/prod/snapshot/status');
+}
+
+export async function updateProdSecrets(
+  body: { namespace: string; credentials: Record<string, string> },
+): Promise<{ ok: boolean; updated: number; restarted: string[] }> {
+  const res = await fetch(`${API_BASE}/api/prod/snapshot/secrets/update`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || `${res.status} ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export function streamSnapshotDeploy(
+  body: { registry: string; registry_user: string; registry_pass: string; tag: string; format: string; namespace: string; ingress: string[]; credentials?: Record<string, string> },
+  onMessage: (msg: { type: string; message: string }) => void,
+): () => void {
+  const controller = new AbortController();
+  fetch(`${API_BASE}/api/prod/snapshot/deploy`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal: controller.signal,
+  }).then(async (res) => {
+    const reader = res.body?.getReader();
+    if (!reader) return;
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          try {
+            const msg = JSON.parse(line.slice(6));
+            onMessage(msg);
+          } catch { /* skip */ }
+        }
+      }
+    }
+  }).catch(() => { /* aborted */ });
+  return () => controller.abort();
+}
+
+// ── TLS Management ──────────────────────────────────────────────
+
+export async function fetchTLSStatus(): Promise<TLSStatus> {
+  return apiFetch<TLSStatus>('/api/prod/tls/status');
+}
+
+export function streamTLSInstall(
+  body: { email: string; domain: string; issuer?: string; ingress_class?: string; staging: boolean; ingress_name?: string; ingress_namespace?: string },
+  onMessage: (msg: { type: string; message: string }) => void,
+): () => void {
+  const controller = new AbortController();
+  fetch(`${API_BASE}/api/prod/tls/install`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal: controller.signal,
+  }).then(async (res) => {
+    const reader = res.body?.getReader();
+    if (!reader) return;
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          try { onMessage(JSON.parse(line.slice(6))); } catch { /* skip */ }
+        }
+      }
+    }
+  }).catch(() => { /* aborted */ });
+  return () => controller.abort();
+}
+
+// ── Metrics Stack Management ────────────────────────────────────
+
+export async function fetchMetricsStatus(): Promise<MetricsStackStatus> {
+  return apiFetch<MetricsStackStatus>('/api/prod/metrics/status');
+}
+
+export function streamMetricsInstall(
+  body: { retention: string; scrape: string },
+  onMessage: (msg: { type: string; message: string }) => void,
+): () => void {
+  const controller = new AbortController();
+  fetch(`${API_BASE}/api/prod/metrics/install`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal: controller.signal,
+  }).then(async (res) => {
+    const reader = res.body?.getReader();
+    if (!reader) return;
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          try { onMessage(JSON.parse(line.slice(6))); } catch { /* skip */ }
+        }
+      }
+    }
+  }).catch(() => { /* aborted */ });
+  return () => controller.abort();
+}
+
+export async function uninstallMetricsStack(): Promise<ActionResult> {
+  return apiPost('/api/prod/metrics/uninstall');
 }

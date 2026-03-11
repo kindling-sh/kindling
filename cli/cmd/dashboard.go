@@ -28,14 +28,15 @@ var dashboardCmd = &cobra.Command{
 for your kindling cluster. Shows all Kubernetes resources, DSE environments,
 runner pools, health checks, logs, and more.
 
-The dashboard runs on http://localhost:9090 by default.`,
+The dashboard runs on http://localhost:19090 by default.`,
 	RunE: runDashboard,
 }
 
 var dashboardPort int
 
 func init() {
-	dashboardCmd.Flags().IntVar(&dashboardPort, "port", 9090, "Port to serve the dashboard on")
+	dashboardCmd.Flags().IntVar(&dashboardPort, "port", 19090, "Port to serve the dashboard on")
+	dashboardCmd.Flags().StringVar(&prodContext, "prod-context", "", "Kubeconfig context for production cluster (enables production panel)")
 	rootCmd.AddCommand(dashboardCmd)
 }
 
@@ -43,6 +44,7 @@ func runDashboard(cmd *cobra.Command, args []string) error {
 	mux := http.NewServeMux()
 
 	// ── API routes (read-only) ──────────────────────────────────
+	mux.HandleFunc("/api/contexts", handleContexts)
 	mux.HandleFunc("/api/cluster", handleCluster)
 	mux.HandleFunc("/api/nodes", handleNodes)
 	mux.HandleFunc("/api/operator", handleOperator)
@@ -74,22 +76,24 @@ func runDashboard(cmd *cobra.Command, args []string) error {
 	mux.HandleFunc("/api/reset-runners", handleResetRunners)
 	mux.HandleFunc("/api/env/set", handleEnvSet)
 	mux.HandleFunc("/api/env/unset", handleEnvUnset)
-	mux.HandleFunc("/api/env/list/", handleEnvList)   // GET /api/env/list/{ns}/{dep}
-	mux.HandleFunc("/api/expose", handleExposeAction) // POST=start, DELETE=stop
-	mux.HandleFunc("/api/expose/status", handleExposeStatus)
+	mux.HandleFunc("/api/env/list/", handleEnvList)          // GET /api/env/list/{ns}/{dep}
+	mux.HandleFunc("/api/expose", handleExposeAction)        // POST=start, DELETE=stop
+	mux.HandleFunc("/api/expose/status", handleExposeStatus) // GET
 	mux.HandleFunc("/api/cluster/destroy", handleDestroyCluster)
 	mux.HandleFunc("/api/init", handleInitCluster)
 	mux.HandleFunc("/api/restart/", handleRestartDeployment)
 	mux.HandleFunc("/api/scale/", handleScaleDeployment)
 	mux.HandleFunc("/api/pods/", handleDeletePod) // DELETE /api/pods/{ns}/{name}
 	mux.HandleFunc("/api/apply", handleApplyYAML)
-	mux.HandleFunc("/api/sync", handleSyncAction)          // POST=start, DELETE=stop
-	mux.HandleFunc("/api/sync/status", handleSyncStatus)   // GET
-	mux.HandleFunc("/api/runtime/", handleRuntimeDetect)   // GET /api/runtime/{ns}/{dep}
-	mux.HandleFunc("/api/load", handleLoadAction)          // POST — build + load + rollout
-	mux.HandleFunc("/api/load-context", handleLoadContext) // GET — discover service dirs
-	mux.HandleFunc("/api/intel", handleIntel)              // GET=status, POST=activate, DELETE=deactivate
-	mux.HandleFunc("/api/generate", handleGenerate)        // POST — AI workflow generation (ndjson)
+	mux.HandleFunc("/api/sync", handleSyncAction)                      // POST=start, DELETE=stop
+	mux.HandleFunc("/api/sync/status", handleSyncStatus)               // GET
+	mux.HandleFunc("/api/runtime/", handleRuntimeDetect)               // GET /api/runtime/{ns}/{dep}
+	mux.HandleFunc("/api/load", handleLoadAction)                      // POST — build + load + rollout
+	mux.HandleFunc("/api/load-context", handleLoadContext)             // GET — discover service dirs
+	mux.HandleFunc("/api/intel", handleIntel)                          // GET=status, POST=activate, DELETE=deactivate
+	mux.HandleFunc("/api/analyze", handleAnalyze)                      // POST — repo readiness analysis
+	mux.HandleFunc("/api/generate", handleGenerate)                    // POST — AI workflow generation (ndjson)
+	mux.HandleFunc("/api/git/commit-and-push", handleGitCommitAndPush) // POST — commit + push (ndjson)
 
 	// ── API routes (topology editor) ────────────────────────────
 	mux.HandleFunc("/api/topology", handleGetTopology)                    // GET — current topology graph
@@ -103,6 +107,7 @@ func runDashboard(cmd *cobra.Command, args []string) error {
 	mux.HandleFunc("/api/topology/canvas", handleSaveCanvas)              // POST — persist canvas overlay
 	mux.HandleFunc("/api/topology/workspace", handleWorkspaceInfo)        // GET — repo root + service dirs
 	mux.HandleFunc("/api/topology/check-path", handleCheckPath)           // GET — check dir existence
+	mux.HandleFunc("/api/fs/complete", handleFsComplete)                  // GET — dir autocomplete
 
 	// ── API routes (proxy / API explorer) ───────────────────────
 	mux.HandleFunc("/api/proxy", handleProxy) // POST — proxy request to in-cluster service
@@ -119,6 +124,69 @@ func runDashboard(cmd *cobra.Command, args []string) error {
 	// ── API routes (debug) ──────────────────────────────────────
 	mux.HandleFunc("/api/debug", handleDebugAction)        // POST=start, DELETE=stop
 	mux.HandleFunc("/api/debug/status", handleDebugStatus) // GET — active debug sessions
+
+	// ── API routes (production cluster) ─────────────────────────
+	if prodContext != "" {
+		mux.HandleFunc("/api/prod/cluster", handleProdCluster)
+		mux.HandleFunc("/api/prod/contexts", handleProdContexts)
+		mux.HandleFunc("/api/prod/nodes", handleProdNodes)
+		mux.HandleFunc("/api/prod/namespaces", handleProdNamespaces)
+		mux.HandleFunc("/api/prod/deployments", handleProdDeployments)
+		mux.HandleFunc("/api/prod/pods", handleProdPods)
+		mux.HandleFunc("/api/prod/services", handleProdServices)
+		mux.HandleFunc("/api/prod/ingresses", handleProdIngresses)
+		mux.HandleFunc("/api/prod/ingress-controller", handleProdIngressController)
+		mux.HandleFunc("/api/prod/events", handleProdEvents)
+		mux.HandleFunc("/api/prod/secrets", handleProdSecrets)
+		mux.HandleFunc("/api/prod/statefulsets", handleProdStatefulSets)
+		mux.HandleFunc("/api/prod/daemonsets", handleProdDaemonSets)
+		mux.HandleFunc("/api/prod/replicasets", handleProdReplicaSets)
+		mux.HandleFunc("/api/prod/clusterroles", handleProdClusterRoles)
+		mux.HandleFunc("/api/prod/clusterrolebindings", handleProdClusterRoleBindings)
+		mux.HandleFunc("/api/prod/logs/", handleProdLogs)
+		mux.HandleFunc("/api/prod/restart/", handleProdRestart)
+		mux.HandleFunc("/api/prod/scale/", handleProdScale)
+		mux.HandleFunc("/api/prod/delete-pod/", handleProdDeletePod)
+		mux.HandleFunc("/api/prod/rollout-history/", handleProdRolloutHistory)
+		mux.HandleFunc("/api/prod/rollback/", handleProdRollback)
+		mux.HandleFunc("/api/prod/rollout-status/", handleProdRolloutStatus)
+		mux.HandleFunc("/api/prod/exec", handleProdExec)
+		mux.HandleFunc("/api/prod/describe/", handleProdDescribe)
+		mux.HandleFunc("/api/prod/certificates", handleProdCertificates)
+		mux.HandleFunc("/api/prod/clusterissuers", handleProdClusterIssuers)
+		mux.HandleFunc("/api/prod/node-metrics", handleProdNodeMetrics)
+		mux.HandleFunc("/api/prod/pod-metrics", handleProdPodMetrics)
+		mux.HandleFunc("/api/prod/apply", handleProdApply)
+		mux.HandleFunc("/api/prod/advisor", handleProdAdvisor)
+
+		// Snapshot / Deploy
+		mux.HandleFunc("/api/prod/snapshot/status", handleProdSnapshotStatus)
+		mux.HandleFunc("/api/prod/snapshot/credentials", handleProdSnapshotCredentials)
+		mux.HandleFunc("/api/prod/snapshot/deploy", handleProdSnapshotDeploy)
+		mux.HandleFunc("/api/prod/snapshot/secrets/update", handleProdSnapshotSecretsUpdate)
+
+		// TLS management
+		mux.HandleFunc("/api/prod/tls/status", handleProdTLSStatus)
+		mux.HandleFunc("/api/prod/tls/install", handleProdTLSInstall)
+
+		// VictoriaMetrics management
+		mux.HandleFunc("/api/prod/metrics/status", handleProdMetricsStatus)
+		mux.HandleFunc("/api/prod/metrics/install", handleProdMetricsInstall)
+		mux.HandleFunc("/api/prod/metrics/uninstall", handleProdMetricsUninstall)
+
+		// Prometheus-compatible query API
+		mux.HandleFunc("/api/prod/prometheus/status", handlePromStatus)
+		mux.HandleFunc("/api/prod/prometheus/query", handlePromQuery)
+		mux.HandleFunc("/api/prod/prometheus/query_range", handlePromQueryRange)
+	} else {
+		// Return a minimal handler so the frontend can detect no prod context
+		mux.HandleFunc("/api/prod/cluster", func(w http.ResponseWriter, r *http.Request) {
+			jsonResponse(w, map[string]interface{}{
+				"context":   "",
+				"connected": false,
+			})
+		})
+	}
 
 	// ── Static frontend ─────────────────────────────────────────
 	distFS, err := fs.Sub(dashboardFS, "dashboard-ui/dist")
@@ -168,6 +236,7 @@ func runDashboard(cmd *cobra.Command, args []string) error {
 	go func() {
 		<-stop
 		fmt.Fprintln(os.Stderr, "\nShutting down dashboard...")
+		cleanupPromForward()
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		server.Shutdown(ctx)
@@ -175,6 +244,9 @@ func runDashboard(cmd *cobra.Command, args []string) error {
 
 	fmt.Fprintf(os.Stderr, "\n%s%s▸ Kindling Dashboard%s\n", colorBold, colorCyan, colorReset)
 	fmt.Fprintf(os.Stderr, "  🌐  http://localhost:%d\n", dashboardPort)
+	if prodContext != "" {
+		fmt.Fprintf(os.Stderr, "  🏭  Production context: %s%s%s\n", colorBold, prodContext, colorReset)
+	}
 	fmt.Fprintf(os.Stderr, "  %sPress Ctrl+C to stop%s\n\n", colorDim, colorReset)
 
 	if err := server.ListenAndServe(); err != http.ErrServerClosed {

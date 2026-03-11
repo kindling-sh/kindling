@@ -28,6 +28,10 @@ kindling env list myapp-dev
 kindling env unset myapp-dev LOG_LEVEL
 ```
 
+:::tip Dashboard
+You can also manage environment variables from the dashboard: **Develop → Environments**, then open an environment's detail panel. See [Dashboard](dashboard.md) for details.
+:::
+
 ---
 
 ## How it works

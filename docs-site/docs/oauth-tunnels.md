@@ -14,6 +14,10 @@ Since kindling runs on `*.localhost`, these callbacks fail by default.
 `kindling expose` solves this by creating a secure tunnel from a public
 HTTPS URL to your local cluster.
 
+:::tip Dashboard
+You can also start tunnels from the dashboard: press **⌘K** and type "expose". See [Dashboard](dashboard.md) for details.
+:::
+
 ---
 
 ## Quick start
@@ -34,6 +38,9 @@ kindling secrets set PUBLIC_URL https://random-name.trycloudflare.com
 # 5. Push code — the workflow wires PUBLIC_URL into your app
 git push origin main
 ```
+
+> **Want a stable URL that never changes?** Use `--domain` — see
+> [Stable URLs](#stable-urls-with---domain) below.
 
 ---
 
@@ -261,14 +268,73 @@ a public URL.
 
 ---
 
+## Stable URLs with `--domain`
+
+By default, tunnel URLs are random and change every session — which means
+updating your OAuth provider's callback URL every time. The `--domain`
+flag solves this by using a fixed domain that persists across restarts.
+
+### Setup (one-time)
+
+1. **Create a free ngrok account** at [ngrok.com](https://ngrok.com)
+2. **Claim your free static domain** in the ngrok dashboard under
+   *Universal Gateway > Domains* (every free account gets one)
+3. **Configure your auth token:**
+
+```bash
+ngrok config add-authtoken <your-token>
+```
+
+### Usage
+
+```bash
+# First run — pass the domain, kindling saves it for future sessions
+kindling expose --domain myapp-dev.ngrok-free.app
+
+# All future runs — the saved domain is used automatically
+kindling expose
+#   🔗 Using saved domain: myapp-dev.ngrok-free.app
+#   ✅ https://myapp-dev.ngrok-free.app (stable)
+```
+
+Configure your OAuth provider's callback URL **once**:
+
+```
+https://myapp-dev.ngrok-free.app/auth/callback
+```
+
+It never changes — stop and restart `kindling expose` as many times as
+you want, the URL stays the same.
+
+### How it works
+
+When `--domain` is provided:
+
+1. The domain is saved to `.kindling/tunnel-config.yaml`
+2. ngrok is started with `--domain <your-domain>` (uses ngrok's native
+   static domain support — no additional dependencies)
+3. Subsequent `kindling expose` calls read the saved domain automatically
+
+The config file is gitignored (inside `.kindling/`), so each developer
+on a team can have their own stable domain.
+
+### Combined with secrets
+
+Store the stable URL as a secret so your workflow can reference it:
+
+```bash
+kindling secrets set PUBLIC_URL https://myapp-dev.ngrok-free.app
+
+# Your app reads PUBLIC_URL for OAuth redirect URIs
+# No need to update it after tunnel restarts
+```
+
+---
+
 ## Limitations
 
 - **cloudflared quick tunnels** generate a new random URL each time.
-  You'll need to update your OAuth provider's callback URL after each
-  restart. For stable URLs, use a named Cloudflare Tunnel (requires a
-  free Cloudflare account).
-- **ngrok free tier** also generates random URLs. Stable subdomains
-  require a paid plan.
+  Use `--domain` with ngrok for stable URLs.
 - The tunnel must remain running in a terminal while you're developing.
 - TLS is handled entirely by the tunnel provider — the Kind cluster
   itself serves plain HTTP via Traefik.

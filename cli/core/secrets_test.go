@@ -117,3 +117,30 @@ func TestSecretsConstants(t *testing.T) {
 		t.Errorf("SecretsLabelValue = %q", SecretsLabelValue)
 	}
 }
+
+// ────────────────────────────────────────────────────────────────────────────
+// RestartSecretConsumers — graceful degradation
+// ────────────────────────────────────────────────────────────────────────────
+
+func TestRestartSecretConsumers_NoCluster(t *testing.T) {
+	// When no cluster exists, the function should return nil (not an error)
+	// so it never blocks `kindling secrets set`.
+	restarted, err := RestartSecretConsumers("nonexistent-cluster", "kindling-secret-test", "default")
+	if err != nil {
+		t.Errorf("RestartSecretConsumers should not return an error when cluster is unreachable, got %v", err)
+	}
+	if len(restarted) != 0 {
+		t.Errorf("expected no restarts, got %v", restarted)
+	}
+}
+
+func TestRestartSecretConsumers_EmptyNamespace(t *testing.T) {
+	// Empty namespace should default to "default" — same graceful behavior.
+	restarted, err := RestartSecretConsumers("nonexistent-cluster", "kindling-secret-x", "")
+	if err != nil {
+		t.Errorf("expected nil error for empty namespace, got %v", err)
+	}
+	if len(restarted) != 0 {
+		t.Errorf("expected no restarts, got %v", restarted)
+	}
+}

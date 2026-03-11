@@ -4,7 +4,7 @@ import type * as Preset from "@docusaurus/preset-classic";
 
 const config: Config = {
   title: "kindling",
-  tagline: "Dev. Iterate. Ship.",
+  tagline: "Layers SDLC best practices into your project",
   favicon: "img/favicon.svg",
 
   url: "https://kindling.sh",
@@ -111,11 +111,11 @@ const config: Config = {
           ],
         },
         {
-          title: "Resources",
+          title: "Guides",
           items: [
             { label: "GitHub Actions", to: "/docs/github-actions" },
             { label: "Dependencies", to: "/docs/dependencies" },
-            { label: "CRD Reference", to: "/docs/crd-reference" },
+            { label: "Graduating to Production", to: "/docs/graduation" },
           ],
         },
         {

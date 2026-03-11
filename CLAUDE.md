@@ -88,7 +88,7 @@ Source tarball → Kaniko (in runner sidecar) → `localhost:5001/<image>` → d
 
 **Languages detected:** Go
 
-**Dockerfiles found:** 8
+**Dockerfiles found:** 10
 
 **CI workflow:** Not yet generated. Run `kindling generate` to create one.
 
@@ -113,9 +113,3 @@ or an incorrect dependency — **suggest that the user open an issue** at
 https://github.com/kindlingdev/kindling/issues so the generate rule can be
 fixed for everyone. Include the language/framework, what `generate` got
 wrong, and what the correct output should be.
-
-## Git Workflow
-
-**NEVER push directly to `main`.** Always create a feature branch and push
-to that. The maintainer will merge to `main` manually. Use descriptive
-branch names like `fix/ci-e2e-dashboard-build` or `feat/topology-layout`.

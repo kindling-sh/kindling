@@ -15,20 +15,24 @@ func TestLoadImageTag(t *testing.T) {
 		t.Errorf("LoadImageTag(my-service) = %q, should start with my-service:", tag)
 	}
 
-	// Tag should have a timestamp part (integer)
+	// Tag should have a timestamp-seq part
 	parts := strings.SplitN(tag, ":", 2)
 	if len(parts) != 2 || parts[1] == "" {
-		t.Errorf("LoadImageTag should produce name:timestamp, got %q", tag)
+		t.Errorf("LoadImageTag should produce name:timestamp-seq, got %q", tag)
+	}
+	if !strings.Contains(parts[1], "-") {
+		t.Errorf("tag suffix should contain '-' separator, got %q", parts[1])
 	}
 }
 
 func TestLoadImageTagUniqueness(t *testing.T) {
-	tag1 := LoadImageTag("svc")
-	tag2 := LoadImageTag("svc")
-	// Tags from the same second may collide; that's expected.
-	// Both should at least have the correct prefix.
-	if !strings.HasPrefix(tag1, "svc:") || !strings.HasPrefix(tag2, "svc:") {
-		t.Error("tags should have 'svc:' prefix")
+	seen := make(map[string]bool)
+	for i := 0; i < 100; i++ {
+		tag := LoadImageTag("svc")
+		if seen[tag] {
+			t.Fatalf("duplicate tag on iteration %d: %q", i, tag)
+		}
+		seen[tag] = true
 	}
 }
 

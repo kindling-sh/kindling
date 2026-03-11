@@ -9,13 +9,13 @@ const sidebars: SidebarsConfig = {
     },
     {
       type: "category",
-      label: "Onboarding",
+      label: "Setup",
       collapsed: false,
-      items: ["analyze", "intel", "generate", "secrets", "dependencies"],
+      items: ["analyze", "intel", "generate", "runners", "dependencies"],
     },
     {
       type: "category",
-      label: "Dev Loop",
+      label: "Develop",
       collapsed: false,
       items: [
         "sync",
@@ -23,11 +23,18 @@ const sidebars: SidebarsConfig = {
         "dev-mode",
         "dashboard",
         "env-vars",
+        "secrets",
         "github-actions",
         "gitlab-ci",
         "oauth-tunnels",
         "graduation",
       ],
+    },
+    {
+      type: "category",
+      label: "Production",
+      collapsed: false,
+      items: ["graduation"],
     },
     {
       type: "category",

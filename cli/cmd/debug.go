@@ -71,7 +71,7 @@ var debugProfiles = map[string]debugProfile{
 	},
 	"python": {
 		Name: "Python (debugpy)", Port: 5678,
-		WrapFmt:    `python -m debugpy --listen 0.0.0.0:5678 --wait-for-client %s`,
+		WrapFmt:    `python -m debugpy --listen 0.0.0.0:5678 %s`,
 		LaunchType: "debugpy", Request: "attach",
 		InstallCmd: "pip install debugpy",
 		Extra: map[string]interface{}{
@@ -128,8 +128,16 @@ type debugState struct {
 }
 
 // debugStateFile returns the path to the debug state file for a deployment.
+// Uses ~/.kindling/ so state is always findable regardless of which directory
+// the user runs from (unlike kindlingDir() which depends on git rev-parse).
 func debugStateFile(deployment string) string {
-	return filepath.Join(kindlingDir(), fmt.Sprintf("debug-%s.json", deployment))
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return filepath.Join(kindlingDir(), fmt.Sprintf("debug-%s.json", deployment))
+	}
+	dir := filepath.Join(home, ".kindling")
+	os.MkdirAll(dir, 0755)
+	return filepath.Join(dir, fmt.Sprintf("debug-%s.json", deployment))
 }
 
 func saveDebugState(state debugState) error {
@@ -202,6 +210,10 @@ func startDebug(deployment, namespace string) error {
 	if state, err := loadDebugState(deployment); err == nil {
 		fmt.Printf("⚠️  Debug session already active for %s (port %d)\n", deployment, state.LocalPort)
 		fmt.Println("   Run 'kindling debug --stop -d " + deployment + "' to stop it first")
+		// Print the "Debugger ready" marker so VS Code's preLaunchTask
+		// problem matcher can complete — otherwise F5 hangs silently
+		// waiting for the pattern that will never come.
+		fmt.Printf("  🔧 Debugger ready on localhost:%d\n", state.LocalPort)
 		return nil
 	}
 
@@ -313,8 +325,35 @@ func startDebug(deployment, namespace string) error {
 	// inject that was never cleaned up), strip the debug wrapper to get the
 	// original application command. Prevents double-wrapping like:
 	//   python -m debugpy --listen ... -m debugpy --listen ... -m uvicorn ...
-	if stripped := stripDebugWrapper(origCmd); stripped != origCmd && stripped != "" {
-		origCmd = stripped
+	if stripped := stripDebugWrapper(origCmd); stripped != origCmd {
+		if stripped != "" {
+			origCmd = stripped
+		} else {
+			// Go's wait-loop wrapper destroys the original command — it can't
+			// be recovered from the string. Rollback to the pre-debug revision,
+			// wait for rollout, then re-read the original command.
+			step("⚠️", "Stale debug wrapper detected — rolling back deployment")
+			_ = run("kubectl", "rollout", "undo", fmt.Sprintf("deployment/%s", deployment),
+				"-n", namespace, "--context", kindContext())
+			_ = run("kubectl", "rollout", "status", fmt.Sprintf("deployment/%s", deployment),
+				"-n", namespace, "--context", kindContext(), "--timeout=60s")
+			time.Sleep(2 * time.Second)
+			clearDebugState(deployment)
+
+			newPod, err := findPodForDeployment(deployment, namespace)
+			if err != nil {
+				return fmt.Errorf("cannot find pod after rollback: %w", err)
+			}
+			origCmd = readContainerCommand(deployment, newPod, namespace, container)
+			if origCmd == "" {
+				return fmt.Errorf("cannot determine container command after rollback")
+			}
+			// Re-check for spec command after rollback
+			specCmd, _ = runCapture("kubectl", "get", fmt.Sprintf("deployment/%s", deployment),
+				"-n", namespace, "--context", kindContext(),
+				"-o", "jsonpath={.spec.template.spec.containers[0].command}")
+			hadCommand = strings.TrimSpace(specCmd) != "" && specCmd != "[]"
+		}
 	}
 
 	step("📝", fmt.Sprintf("Original command: %s", origCmd))
@@ -404,6 +443,30 @@ func startDebug(deployment, namespace string) error {
 		return fmt.Errorf("pod not ready after patching: %w", err)
 	}
 	step("✅", "Debug pod ready: "+newPod)
+
+	// Wait for the debug port to be listening inside the pod.
+	// debugpy may still be installing or binding when the pod reports Ready
+	// (probes are disabled). Without this check the port-forward connects
+	// too early and gets "connection refused".
+	if runtimeKey != "go" { // Go inject has its own wait
+		step("⏳", "Waiting for debug port to be ready...")
+		portReady := false
+		for i := 0; i < 30; i++ { // up to 30s
+			out, err := runSilent("kubectl", "exec", newPod,
+				"-n", namespace, "--context", kindContext(),
+				"-c", container,
+				"--", "sh", "-c",
+				fmt.Sprintf("cat /proc/net/tcp /proc/net/tcp6 2>/dev/null | grep ':%04X' || exit 1", debugProf.Port))
+			if err == nil && strings.TrimSpace(out) != "" {
+				portReady = true
+				break
+			}
+			time.Sleep(1 * time.Second)
+		}
+		if !portReady {
+			warn("Debug port not detected after 30s — port-forward may fail")
+		}
+	}
 
 	// For Go: inject locally-built debug binary + Delve into the container.
 	// The patched command is waiting for /tmp/dlv to appear.
@@ -689,6 +752,16 @@ func buildDebugCommand(prof *debugProfile, runtimeKey, origCmd string) string {
 			return fmt.Sprintf("pip install debugpy -q 2>/dev/null; python -m debugpy --listen 0.0.0.0:%d -m %s",
 				prof.Port, strings.Join(toolArgs, " "))
 		}
+		// Handle "python3.12 /usr/local/bin/uvicorn ..." — the OCI runtime
+		// resolves shebangs so we get full paths. Detect known Python tools
+		// and convert to -m <tool> so debugpy runs them as modules.
+		if len(restFields) >= 1 && isPythonTool(restFields[0]) {
+			toolName := filepath.Base(restFields[0])
+			toolArgs := append([]string{toolName}, restFields[1:]...)
+			normalized := normalizePythonForDebug(toolArgs)
+			return fmt.Sprintf("pip install debugpy -q 2>/dev/null; python -m debugpy --listen 0.0.0.0:%d -m %s",
+				prof.Port, strings.Join(normalized, " "))
+		}
 		rest := strings.Join(restFields, " ")
 		return fmt.Sprintf("pip install debugpy -q 2>/dev/null; python -m debugpy --listen 0.0.0.0:%d %s", prof.Port, rest)
 
@@ -738,6 +811,24 @@ func findRuntimeBinary(fields []string, runtimeKey string) int {
 func isPythonBinary(name string) bool {
 	base := filepath.Base(name)
 	return strings.HasPrefix(base, "python")
+}
+
+// isPythonTool checks if a path or name refers to a known Python server/tool
+// that should be invoked via `python -m <tool>` rather than as a file path.
+// Handles both bare names ("uvicorn") and full paths ("/usr/local/bin/uvicorn").
+func isPythonTool(name string) bool {
+	base := filepath.Base(name)
+	tools := []string{
+		"uvicorn", "gunicorn", "daphne", "hypercorn",
+		"waitress-serve", "sanic", "flask", "celery",
+		"django-admin",
+	}
+	for _, t := range tools {
+		if base == t {
+			return true
+		}
+	}
+	return false
 }
 
 // normalizePythonForDebug adjusts Python server flags for single-process debugging.
@@ -1123,10 +1214,31 @@ func hasSourceFiles(dir string) bool {
 //	  → "python app.py"
 //	"node --inspect=0.0.0.0:9229 server.js"
 //	  → "node server.js"
+//	"NODE_OPTIONS='--inspect=0.0.0.0:9229' npm start"
+//	  → "npm start"
+//	"echo 'Waiting for debug tools...'; while ...; /tmp/dlv exec ... /tmp/_debug_bin"
+//	  → "" (Go wrapper destroys original — caller must use saved state)
 //	"dlv exec --headless --listen=:2345 --api-version=2 --accept-multiclient --continue ./app"
 //	  → "./app"
 func stripDebugWrapper(cmd string) string {
 	if cmd == "" {
+		return ""
+	}
+
+	// Go wait-loop: "echo 'Waiting for debug tools...'; while [ ! -f /tmp/dlv ] ..."
+	// The original app command is not embedded — it was replaced entirely.
+	// Return empty so the caller falls back to the saved state.
+	if strings.Contains(cmd, "/tmp/dlv") && strings.Contains(cmd, "while") {
+		return ""
+	}
+
+	// NODE_OPTIONS wrapper: "NODE_OPTIONS='--inspect=...' <original command>"
+	if strings.HasPrefix(cmd, "NODE_OPTIONS=") {
+		// Strip the NODE_OPTIONS=... prefix (first field)
+		fields := strings.Fields(cmd)
+		if len(fields) > 1 {
+			return strings.Join(fields[1:], " ")
+		}
 		return ""
 	}
 
@@ -1173,7 +1285,7 @@ func stripDebugWrapper(cmd string) string {
 		}
 		return strings.Join(result, " ")
 
-	case strings.HasPrefix(fields[0], "dlv"):
+	case strings.HasPrefix(fields[0], "dlv") || strings.HasPrefix(fields[0], "/tmp/dlv"):
 		// "dlv exec --headless ... --continue ./app" → "./app"
 		if len(fields) > 0 {
 			return fields[len(fields)-1]
@@ -1202,12 +1314,11 @@ func stripDebugWrapper(cmd string) string {
 // The background task uses a VS Code problem matcher to detect when the debugger
 // port-forward is ready, so F5 is all you need.
 func writeLaunchConfig(deployment string, prof *debugProfile, localPort int, remoteRoot, sourceSubdir string) {
-	// Write to --project-dir if set, otherwise CWD.
-	root := "."
-	if projectDir != "" {
-		root = projectDir
-	}
-	vsDir := filepath.Join(root, ".vscode")
+	// Always write to CWD/.vscode/ — that's the VS Code workspace root.
+	// The sourceSubdir already adjusts localRoot in pathMappings
+	// (e.g. ${workspaceFolder}/orders), so there's no need to write
+	// launch.json into the service subdirectory.
+	vsDir := filepath.Join(".", ".vscode")
 	os.MkdirAll(vsDir, 0755)
 
 	// ── tasks.json ───────────────────────────────────────────────
