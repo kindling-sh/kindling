@@ -61,6 +61,7 @@ export function RunnersPage() {
           title="Create Runner Pool"
           submitLabel="Create"
           loading={creating}
+          docsUrl="https://kindling.sh/docs/runners"
           onSubmit={handleCreate}
           onClose={() => setShowCreate(false)}
         >

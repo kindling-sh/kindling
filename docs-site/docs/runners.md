@@ -69,3 +69,32 @@ No Docker daemon is required — everything runs inside the cluster.
 
 Pass `--provider gitlab` to register a GitLab runner instead.
 The flow is identical but uses a GitLab runner token.
+
+---
+
+## Examples
+
+### Simple — single repo
+
+```bash
+kindling runners -u jeff-vincent -r myorg/myapp -t ghp_abc123
+```
+
+One runner registers with `myorg/myapp`. Push to the repo and CI runs locally.
+
+### Multi-service — shared runner across repos
+
+```bash
+kindling runners -u jeff-vincent -r myorg/frontend -t ghp_abc123
+kindling runners -u jeff-vincent -r myorg/api -t ghp_abc123
+```
+
+Each repo gets its own runner pool. Both build inside the same Kind cluster.
+
+### GitLab project
+
+```bash
+kindling runners -u jeff-vincent -r mygroup/myproject -t glrt-abc123 --provider gitlab
+```
+
+Same flow, different platform. The runner registers with GitLab instead of GitHub.

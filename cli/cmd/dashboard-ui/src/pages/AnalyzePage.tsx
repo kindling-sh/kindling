@@ -131,7 +131,7 @@ export function AnalyzePage() {
           <span className="analyze-step-number">1</span>
           <div>
             <h2 className="analyze-step-title">Analyze Repository</h2>
-            <p className="analyze-step-desc">Scan your repo for Dockerfiles, dependencies, secrets, and Kaniko compatibility — no API key needed.</p>
+            <p className="analyze-step-desc">Scan your repo for Dockerfiles, dependencies, secrets, and Kaniko compatibility — no API key needed. <a href="https://kindling.sh/docs/analyze" target="_blank" rel="noopener noreferrer" style={{ fontSize: 11, color: 'var(--accent)', textDecoration: 'none' }}>Docs ↗</a></p>
           </div>
         </div>
 
@@ -218,7 +218,8 @@ export function AnalyzePage() {
                   ? 'Fix the blockers above first, then generate your CI workflow.'
                   : hasExistingWorkflow
                     ? `Existing workflow found at ${analyzeResult.existingWorkflowPath}. Re-generate to overwrite it with AI.`
-                    : 'Your repo looks good. Provide an API key to generate a CI workflow.'}
+                    : 'Your repo looks good. Provide an API key to generate a CI workflow.'}{' '}
+                <a href="https://kindling.sh/docs/generate" target="_blank" rel="noopener noreferrer" style={{ fontSize: 11, color: 'var(--accent)', textDecoration: 'none' }}>Docs ↗</a>
               </p>
             </div>
           </div>

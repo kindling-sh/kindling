@@ -234,7 +234,10 @@ function ExposeModal({ running, onStart, onStop, onClose }: {
       <div className="modal modal-wide" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 520 }}>
         <div className="modal-header">
           <h3>Expose / Tunnel</h3>
-          <button className="btn btn-sm btn-ghost" onClick={onClose}>✕</button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <a href="https://kindling.sh/docs/oauth-tunnels" target="_blank" rel="noopener noreferrer" style={{ fontSize: 12, color: 'var(--accent)', textDecoration: 'none', whiteSpace: 'nowrap' }}>Docs ↗</a>
+            <button className="btn btn-sm btn-ghost" onClick={onClose}>✕</button>
+          </div>
         </div>
 
         <div className="modal-body">
@@ -669,7 +672,7 @@ function AppSidebar({ activePage, setActivePage }: { activePage: Page; setActive
 
       {/* ── Deploy Environment modal ─────── */}
       {showDeploy && (
-        <ActionModal title="Deploy Environment" submitLabel="Deploy" loading={deploying} onSubmit={handleDeploy} onClose={() => setShowDeploy(false)}>
+        <ActionModal title="Deploy Environment" submitLabel="Deploy" loading={deploying} docsUrl="https://kindling.sh/docs/crd-reference" onSubmit={handleDeploy} onClose={() => setShowDeploy(false)}>
           <label className="form-label">DevStagingEnvironment YAML</label>
           <textarea className="form-textarea" rows={14} placeholder={"apiVersion: apps.example.com/v1alpha1\nkind: DevStagingEnvironment\nmetadata:\n  name: my-app\nspec:\n  ..."} value={deployYaml} onChange={(e) => setDeployYaml(e.target.value)} />
         </ActionModal>
@@ -677,7 +680,7 @@ function AppSidebar({ activePage, setActivePage }: { activePage: Page; setActive
 
       {/* ── Apply YAML modal ─────────────── */}
       {showApply && (
-        <ActionModal title="Apply YAML" submitLabel="Apply" loading={applying} onSubmit={handleApply} onClose={() => setShowApply(false)}>
+        <ActionModal title="Apply YAML" submitLabel="Apply" loading={applying} docsUrl="https://kindling.sh/docs/quickstart" onSubmit={handleApply} onClose={() => setShowApply(false)}>
           <label className="form-label">Raw YAML to apply via kubectl</label>
           <textarea className="form-textarea" rows={14} placeholder={"apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: my-config\n  ..."} value={applyYaml} onChange={(e) => setApplyYaml(e.target.value)} />
         </ActionModal>
@@ -685,7 +688,7 @@ function AppSidebar({ activePage, setActivePage }: { activePage: Page; setActive
 
       {/* ── Create Secret modal ──────────── */}
       {showSecret && (
-        <ActionModal title="Create Secret" submitLabel="Create" loading={creatingSec} onSubmit={handleCreateSecret} onClose={() => setShowSecret(false)}>
+        <ActionModal title="Create Secret" submitLabel="Create" loading={creatingSec} docsUrl="https://kindling.sh/docs/secrets" onSubmit={handleCreateSecret} onClose={() => setShowSecret(false)}>
           <label className="form-label">Name</label>
           <input className="form-input" placeholder="my-secret" value={secretForm.name} onChange={(e) => setSecretForm({ ...secretForm, name: e.target.value })} />
           <label className="form-label">Namespace</label>
@@ -699,7 +702,7 @@ function AppSidebar({ activePage, setActivePage }: { activePage: Page; setActive
 
       {/* ── Create Runner modal ──────────── */}
       {showRunner && (
-        <ActionModal title="Create Runner Pool" submitLabel="Create" loading={creatingRun} onSubmit={handleCreateRunner} onClose={() => setShowRunner(false)}>
+        <ActionModal title="Create Runner Pool" submitLabel="Create" loading={creatingRun} docsUrl="https://kindling.sh/docs/runners" onSubmit={handleCreateRunner} onClose={() => setShowRunner(false)}>
           <label className="form-label">GitHub Username</label>
           <input className="form-input" placeholder="your-username" value={runnerForm.username} onChange={(e) => setRunnerForm({ ...runnerForm, username: e.target.value })} />
           <label className="form-label">Repository (owner/repo)</label>
@@ -715,7 +718,10 @@ function AppSidebar({ activePage, setActivePage }: { activePage: Page; setActive
           <div className="modal modal-wide" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h3>Generate CI Workflow</h3>
-              {!generateRunning && <button className="panel-close" onClick={() => setShowGenerate(false)}>✕</button>}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <a href="https://kindling.sh/docs/generate" target="_blank" rel="noopener noreferrer" style={{ fontSize: 12, color: 'var(--accent)', textDecoration: 'none', whiteSpace: 'nowrap' }}>Docs ↗</a>
+                {!generateRunning && <button className="panel-close" onClick={() => setShowGenerate(false)}>✕</button>}
+              </div>
             </div>
             <div className="modal-body">
               {!generateRunning && !generateResult && (
