@@ -73,6 +73,7 @@ export function DSEPage() {
           title="Deploy Environment"
           submitLabel="Deploy"
           loading={deploying}
+          docsUrl="https://kindling.sh/docs/crd-reference"
           onSubmit={handleDeploy}
           onClose={() => setShowDeploy(false)}
         >
@@ -537,6 +538,7 @@ function SyncModal({
       title={`Sync — ${deployment}`}
       submitLabel="Start Sync"
       loading={loading}
+      docsUrl="https://kindling.sh/docs/sync"
       onSubmit={handleSubmit}
       onClose={onClose}
     >
@@ -671,6 +673,7 @@ function LoadModal({
       title={`Load — ${service}`}
       submitLabel={loading ? 'Building…' : 'Build & Load'}
       loading={loading}
+      docsUrl="https://kindling.sh/docs/load"
       onSubmit={handleSubmit}
       onClose={onClose}
     >

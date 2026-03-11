@@ -849,7 +849,7 @@ function SecretsTab() {
       </div>
 
       {showCreate && (
-        <ActionModal title="Create Secret" submitLabel="Create" loading={creating} onSubmit={handleCreate} onClose={() => setShowCreate(false)}>
+        <ActionModal title="Create Secret" submitLabel="Create" loading={creating} docsUrl="https://kindling.sh/docs/secrets" onSubmit={handleCreate} onClose={() => setShowCreate(false)}>
           <label className="form-label">Name</label>
           <input className="form-input" placeholder="my-secret" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
           <label className="form-label">Namespace</label>

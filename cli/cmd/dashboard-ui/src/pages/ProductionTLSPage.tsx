@@ -87,7 +87,7 @@ export function ProductionTLSPage() {
       <div className="page-header">
         <div className="page-header-left">
           <h1>TLS Certificates</h1>
-          <p className="page-subtitle">Manage cert-manager, cluster issuers, and HTTPS certificates</p>
+          <p className="page-subtitle">Manage cert-manager, cluster issuers, and HTTPS certificates <a href="https://kindling.sh/docs/tls" target="_blank" rel="noopener noreferrer" style={{ fontSize: 11, color: 'var(--accent)', textDecoration: 'none' }}>Docs ↗</a></p>
         </div>
         {!showForm && logs.length === 0 && (
           <button className="btn btn-primary" style={{ fontSize: 12, padding: '6px 14px' }} onClick={() => setShowForm(true)}>

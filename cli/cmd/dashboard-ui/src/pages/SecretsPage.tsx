@@ -64,6 +64,7 @@ export function SecretsPage() {
           title="Create Secret"
           submitLabel="Create"
           loading={creating}
+          docsUrl="https://kindling.sh/docs/secrets"
           onSubmit={handleCreate}
           onClose={() => setShowCreate(false)}
         >

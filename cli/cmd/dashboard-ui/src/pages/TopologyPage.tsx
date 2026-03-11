@@ -2091,6 +2091,7 @@ export function TopologyPage() {
         <ActionModal
           title="Add Service"
           submitLabel={hasExistingSource ? 'Add to Canvas' : undefined}
+          docsUrl="https://kindling.sh/docs/crd-reference"
           onSubmit={hasExistingSource ? handleAddCustomService : undefined}
           onClose={() => {
             setShowCustomService(false);

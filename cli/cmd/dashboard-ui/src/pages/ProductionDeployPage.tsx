@@ -142,6 +142,7 @@ export function ProductionDeployPage() {
           <h1>Deploy to Production</h1>
           <p className="page-subtitle">
             Snapshot dev environment and deploy to <span className="mono">{status?.context}</span>
+            {' '}<a href="https://kindling.sh/docs/graduation" target="_blank" rel="noopener noreferrer" style={{ fontSize: 11, color: 'var(--accent)', textDecoration: 'none' }}>Docs ↗</a>
           </p>
         </div>
         <div className="page-actions">

@@ -93,6 +93,7 @@ export function ActionModal({
   children,
   submitLabel = 'Submit',
   loading = false,
+  docsUrl,
   onSubmit,
   onClose,
 }: {
@@ -100,6 +101,7 @@ export function ActionModal({
   children: ReactNode;
   submitLabel?: string;
   loading?: boolean;
+  docsUrl?: string;
   onSubmit?: () => void;
   onClose: () => void;
 }) {
@@ -108,7 +110,14 @@ export function ActionModal({
       <div className="modal modal-wide" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <h3>{title}</h3>
-          <button className="btn btn-sm btn-ghost" onClick={onClose}>✕</button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {docsUrl && (
+              <a href={docsUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: 12, color: 'var(--accent)', textDecoration: 'none', whiteSpace: 'nowrap' }}>
+                Docs ↗
+              </a>
+            )}
+            <button className="btn btn-sm btn-ghost" onClick={onClose}>✕</button>
+          </div>
         </div>
         <div className="modal-body">
           {children}
