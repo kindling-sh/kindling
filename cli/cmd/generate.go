@@ -1087,8 +1087,8 @@ var oauthEnvPrefixes = []string{
 
 // oauthCompanionNames are env vars commonly required alongside OAuth.
 var oauthCompanionNames = map[string]bool{
-	"SESSION_SECRET":       true,
-	"PUBLIC_URL":           true,
+	"SESSION_SECRET":        true,
+	"PUBLIC_URL":            true,
 	"STRIPE_WEBHOOK_SECRET": true,
 }
 

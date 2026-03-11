@@ -76,9 +76,9 @@ func runDashboard(cmd *cobra.Command, args []string) error {
 	mux.HandleFunc("/api/reset-runners", handleResetRunners)
 	mux.HandleFunc("/api/env/set", handleEnvSet)
 	mux.HandleFunc("/api/env/unset", handleEnvUnset)
-	mux.HandleFunc("/api/env/list/", handleEnvList)   // GET /api/env/list/{ns}/{dep}
-	mux.HandleFunc("/api/expose", handleExposeAction)           // POST=start, DELETE=stop
-	mux.HandleFunc("/api/expose/status", handleExposeStatus)       // GET
+	mux.HandleFunc("/api/env/list/", handleEnvList)          // GET /api/env/list/{ns}/{dep}
+	mux.HandleFunc("/api/expose", handleExposeAction)        // POST=start, DELETE=stop
+	mux.HandleFunc("/api/expose/status", handleExposeStatus) // GET
 	mux.HandleFunc("/api/cluster/destroy", handleDestroyCluster)
 	mux.HandleFunc("/api/init", handleInitCluster)
 	mux.HandleFunc("/api/restart/", handleRestartDeployment)
