@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { fetchSnapshotStatus, fetchSnapshotCredentials, streamSnapshotDeploy } from '../api';
+import { fetchSnapshotStatus, fetchSnapshotCredentials, streamSnapshotDeploy, updateProdSecrets } from '../api';
 import type { SnapshotStatus, SnapshotService } from '../types';
 import type { SnapshotCredential } from '../api';
 import { StatusBadge, EmptyState } from './shared';
@@ -31,6 +31,11 @@ export function ProductionDeployPage() {
   const logRef = useRef<HTMLDivElement>(null);
   const cancelRef = useRef<(() => void) | null>(null);
 
+  // Post-deploy secret update state
+  const [postDeploySecretValues, setPostDeploySecretValues] = useState<Record<string, string>>({});
+  const [secretUpdateStatus, setSecretUpdateStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [secretUpdateMsg, setSecretUpdateMsg] = useState('');
+
   useEffect(() => {
     Promise.all([
       fetchSnapshotStatus(),
@@ -49,10 +54,10 @@ export function ProductionDeployPage() {
         setDevCreds(creds.credentials);
         setCachedAt(creds.cached_at || '');
         setShowCredentials(true);
-        // Pre-fill from cache
+        // Pre-fill from cache, falling back to dev values
         const initial: Record<string, string> = {};
         for (const c of creds.credentials) {
-          initial[c.env_var] = c.cached || '';
+          initial[c.env_var] = c.cached || c.dev_value || '';
         }
         setCredValues(initial);
       }
@@ -297,12 +302,12 @@ export function ProductionDeployPage() {
                 </div>
               </div>
 
-              {/* Production credentials */}
-              {showCredentials && devCreds.length > 0 && (
+              {/* Dependency credentials (devuser/devpass) */}
+              {showCredentials && devCreds.filter(c => c.dep_type !== 'secret').length > 0 && (
                 <div className="card" style={{ marginBottom: 16 }}>
                   <div className="card-header">
                     <span className="card-icon">◈</span>
-                    <h3>Production Credentials</h3>
+                    <h3>Dependency Credentials</h3>
                     {cachedAt && (
                       <span className="tag" style={{ marginLeft: 'auto', fontSize: 11 }}>
                         Cached {new Date(cachedAt).toLocaleDateString()}
@@ -312,9 +317,9 @@ export function ProductionDeployPage() {
                   <div className="card-body">
                     <div style={{ marginBottom: 12, padding: '8px 12px', background: 'var(--bg-elevated)', borderRadius: 6, border: '1px solid var(--warning-border, #a8860044)', fontSize: 13 }}>
                       <strong>⚠ Dev credentials detected.</strong> Your dependencies use default dev values (e.g. <code>devuser/devpass</code>).
-                      Enter production credentials below or they'll be deployed with dev defaults.
+                      Enter production connection strings below or they'll be deployed with dev defaults.
                     </div>
-                    {devCreds.map(cred => (
+                    {devCreds.filter(c => c.dep_type !== 'secret').map(cred => (
                       <div key={cred.env_var} className="form-group" style={{ marginTop: 12 }}>
                         <label className="form-label">
                           <span className="mono" style={{ fontWeight: 600 }}>{cred.env_var}</span>
@@ -323,6 +328,42 @@ export function ProductionDeployPage() {
                         <input
                           className="form-input"
                           type="password"
+                          placeholder={cred.dev_value}
+                          value={credValues[cred.env_var] || ''}
+                          onChange={e => setCredValues(prev => ({ ...prev, [cred.env_var]: e.target.value }))}
+                        />
+                        <span className="form-hint">
+                          Used by: {cred.services.join(', ')}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* User secrets (secretKeyRef) */}
+              {showCredentials && devCreds.filter(c => c.dep_type === 'secret').length > 0 && (
+                <div className="card" style={{ marginBottom: 16 }}>
+                  <div className="card-header">
+                    <span className="card-icon">🔑</span>
+                    <h3>Secrets</h3>
+                  </div>
+                  <div className="card-body">
+                    <div style={{ marginBottom: 12, padding: '8px 12px', background: 'var(--bg-elevated)', borderRadius: 6, border: '1px solid var(--info-border, #4488cc44)', fontSize: 13 }}>
+                      These values are pre-filled from your dev cluster secrets.
+                      Accept the defaults or enter production-specific values.
+                      Values like <code>PUBLIC_URL</code> can be updated after deploy once TLS is configured.
+                    </div>
+                    {devCreds.filter(c => c.dep_type === 'secret').map(cred => (
+                      <div key={cred.env_var} className="form-group" style={{ marginTop: 12 }}>
+                        <label className="form-label">
+                          <span className="mono" style={{ fontWeight: 600 }}>{cred.env_var}</span>
+                          {cred.env_var === 'PUBLIC_URL' && (
+                            <span className="tag" style={{ marginLeft: 8, fontSize: 10 }}>update after TLS</span>
+                          )}
+                        </label>
+                        <input
+                          className="form-input"
                           placeholder={cred.dev_value}
                           value={credValues[cred.env_var] || ''}
                           onChange={e => setCredValues(prev => ({ ...prev, [cred.env_var]: e.target.value }))}
@@ -382,6 +423,79 @@ export function ProductionDeployPage() {
               </button>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Post-deploy secret update */}
+      {step === 'done' && !logs.some(l => l.type === 'error') && devCreds.filter(c => c.dep_type === 'secret').length > 0 && (
+        <div className="card" style={{ marginTop: 16 }}>
+          <div className="card-header">
+            <span className="card-icon">🔑</span>
+            <h3>Update Secrets</h3>
+          </div>
+          <div className="card-body">
+            <div style={{ marginBottom: 12, padding: '8px 12px', background: 'var(--bg-elevated)', borderRadius: 6, border: '1px solid var(--info-border, #4488cc44)', fontSize: 13 }}>
+              Update secrets on the running production cluster (e.g. set <code>PUBLIC_URL</code> after configuring TLS).
+              Changed secrets will be patched in-place and affected deployments will be restarted automatically.
+            </div>
+            {devCreds.filter(c => c.dep_type === 'secret').map(cred => (
+              <div key={cred.env_var} className="form-group" style={{ marginTop: 12 }}>
+                <label className="form-label">
+                  <span className="mono" style={{ fontWeight: 600 }}>{cred.env_var}</span>
+                  {cred.env_var === 'PUBLIC_URL' && (
+                    <span className="tag" style={{ marginLeft: 8, fontSize: 10 }}>set your production URL</span>
+                  )}
+                </label>
+                <input
+                  className="form-input"
+                  placeholder={credValues[cred.env_var] || cred.dev_value}
+                  value={postDeploySecretValues[cred.env_var] || ''}
+                  onChange={e => setPostDeploySecretValues(prev => ({ ...prev, [cred.env_var]: e.target.value }))}
+                />
+                <span className="form-hint">
+                  Current: {credValues[cred.env_var] || cred.dev_value} · Used by: {cred.services.join(', ')}
+                </span>
+              </div>
+            ))}
+            {secretUpdateStatus === 'saved' && (
+              <div style={{ marginTop: 12, padding: '8px 12px', background: 'var(--bg-elevated)', borderRadius: 6, border: '1px solid var(--success-border, #44cc4444)', fontSize: 13 }}>
+                ✓ {secretUpdateMsg}
+              </div>
+            )}
+            {secretUpdateStatus === 'error' && (
+              <div style={{ marginTop: 12, padding: '8px 12px', background: 'var(--bg-elevated)', borderRadius: 6, border: '1px solid var(--error-border, #cc444444)', fontSize: 13 }}>
+                ✗ {secretUpdateMsg}
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
+              <button
+                className="btn btn-primary"
+                disabled={secretUpdateStatus === 'saving' || Object.values(postDeploySecretValues).every(v => !v.trim())}
+                onClick={async () => {
+                  const creds: Record<string, string> = {};
+                  for (const [k, v] of Object.entries(postDeploySecretValues)) {
+                    if (v.trim()) creds[k] = v.trim();
+                  }
+                  if (Object.keys(creds).length === 0) return;
+                  setSecretUpdateStatus('saving');
+                  try {
+                    const res = await updateProdSecrets({ namespace, credentials: creds });
+                    setSecretUpdateStatus('saved');
+                    const restartedMsg = res.restarted?.length ? ` Restarted: ${res.restarted.join(', ')}` : '';
+                    setSecretUpdateMsg(`Updated ${res.updated} secret(s).${restartedMsg}`);
+                    // Update the credValues so the "Current" hints reflect the new values
+                    setCredValues(prev => ({ ...prev, ...creds }));
+                    setPostDeploySecretValues({});
+                  } catch (err) {
+                    setSecretUpdateStatus('error');
+                    setSecretUpdateMsg(err instanceof Error ? err.message : 'Failed to update secrets');
+                  }
+                }}
+              >
+                {secretUpdateStatus === 'saving' ? 'Updating…' : 'Update Secrets & Restart'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

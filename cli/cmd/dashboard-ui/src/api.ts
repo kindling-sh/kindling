@@ -503,6 +503,21 @@ export async function fetchSnapshotStatus(): Promise<SnapshotStatus> {
   return apiFetch<SnapshotStatus>('/api/prod/snapshot/status');
 }
 
+export async function updateProdSecrets(
+  body: { namespace: string; credentials: Record<string, string> },
+): Promise<{ ok: boolean; updated: number; restarted: string[] }> {
+  const res = await fetch(`${API_BASE}/api/prod/snapshot/secrets/update`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || `${res.status} ${res.statusText}`);
+  }
+  return res.json();
+}
+
 export function streamSnapshotDeploy(
   body: { registry: string; registry_user: string; registry_pass: string; tag: string; format: string; namespace: string; ingress: string[]; credentials?: Record<string, string> },
   onMessage: (msg: { type: string; message: string }) => void,

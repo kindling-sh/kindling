@@ -91,8 +91,23 @@ func runPush(cmd *cobra.Command, args []string) error {
 	// ── git push (pass through any extra args) ──────────────────
 	pushArgs := append([]string{"push"}, args...)
 	step("🚀", fmt.Sprintf("git %s", strings.Join(pushArgs, " ")))
-	if err := runGit(pushArgs...); err != nil {
-		return fmt.Errorf("git push failed: %w", err)
+	if err := runGitCapture(pushArgs...); err != nil {
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "non-fast-forward") ||
+			strings.Contains(errMsg, "tip of your current branch is behind") ||
+			strings.Contains(errMsg, "fetch first") ||
+			strings.Contains(errMsg, "failed to push some refs") {
+			step("🔄", "Local branch is behind remote — rebasing automatically")
+			if rbErr := runGit("pull", "--rebase"); rbErr != nil {
+				return fmt.Errorf("auto-rebase failed: %w\nResolve conflicts manually with: git pull --rebase", rbErr)
+			}
+			step("🚀", "Retrying push after rebase")
+			if retryErr := runGit(pushArgs...); retryErr != nil {
+				return fmt.Errorf("git push failed after rebase: %w", retryErr)
+			}
+		} else {
+			return fmt.Errorf("git push failed: %w", err)
+		}
 	}
 
 	if len(services) > 0 {
@@ -141,6 +156,21 @@ func runGit(args ...string) error {
 	c.Stderr = os.Stderr
 	c.Stdin = os.Stdin
 	return c.Run()
+}
+
+// runGitCapture runs a git command with stdout/stdin inherited but captures
+// stderr so the caller can inspect error messages (e.g. non-fast-forward).
+func runGitCapture(args ...string) error {
+	c := exec.Command("git", args...)
+	c.Dir, _ = os.Getwd()
+	c.Stdout = os.Stdout
+	c.Stdin = os.Stdin
+	var stderr strings.Builder
+	c.Stderr = &stderr
+	if err := c.Run(); err != nil {
+		return fmt.Errorf("%s: %w", stderr.String(), err)
+	}
+	return nil
 }
 
 // checkWorkflowSecrets scans the generated CI workflow for secretKeyRef

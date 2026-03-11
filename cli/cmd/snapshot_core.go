@@ -176,7 +176,7 @@ type DeployOpts struct {
 	DSEs            []snapshotDSE                // for ingress flag generation
 	SelectedIngress map[string]bool              // services to enable ingress for
 	IngressClass    string                       // IngressClass name for the target cluster
-	CredOverrides   map[string]map[string]string // valuesKey → envVar → prodValue
+	CredOverrides   map[string]map[string]credOverride // valuesKey → envVar → prodValue
 }
 
 // deploySnapshot runs helm upgrade --install or kubectl apply -k

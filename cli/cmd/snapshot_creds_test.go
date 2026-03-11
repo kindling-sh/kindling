@@ -333,11 +333,11 @@ func TestBuildOverrideMap_Basic(t *testing.T) {
 	if result[ordersKey] == nil {
 		t.Fatalf("expected overrides for %q", ordersKey)
 	}
-	if result[ordersKey]["DATABASE_URL"] != creds["DATABASE_URL"] {
-		t.Errorf("orders DATABASE_URL = %q, want %q", result[ordersKey]["DATABASE_URL"], creds["DATABASE_URL"])
+	if result[ordersKey]["DATABASE_URL"].Value != creds["DATABASE_URL"] {
+		t.Errorf("orders DATABASE_URL = %q, want %q", result[ordersKey]["DATABASE_URL"].Value, creds["DATABASE_URL"])
 	}
-	if result[ordersKey]["REDIS_URL"] != creds["REDIS_URL"] {
-		t.Errorf("orders REDIS_URL = %q, want %q", result[ordersKey]["REDIS_URL"], creds["REDIS_URL"])
+	if result[ordersKey]["REDIS_URL"].Value != creds["REDIS_URL"] {
+		t.Errorf("orders REDIS_URL = %q, want %q", result[ordersKey]["REDIS_URL"].Value, creds["REDIS_URL"])
 	}
 
 	// api should have only DATABASE_URL
@@ -345,8 +345,8 @@ func TestBuildOverrideMap_Basic(t *testing.T) {
 	if result[apiKey] == nil {
 		t.Fatalf("expected overrides for %q", apiKey)
 	}
-	if result[apiKey]["DATABASE_URL"] != creds["DATABASE_URL"] {
-		t.Errorf("api DATABASE_URL = %q, want %q", result[apiKey]["DATABASE_URL"], creds["DATABASE_URL"])
+	if result[apiKey]["DATABASE_URL"].Value != creds["DATABASE_URL"] {
+		t.Errorf("api DATABASE_URL = %q, want %q", result[apiKey]["DATABASE_URL"].Value, creds["DATABASE_URL"])
 	}
 	if _, ok := result[apiKey]["REDIS_URL"]; ok {
 		t.Error("api should not have REDIS_URL override")
@@ -391,7 +391,7 @@ func TestBuildOverrideMap_PartialCreds(t *testing.T) {
 	result := buildOverrideMap(entries, dses, creds)
 
 	apiKey := helmValuesKey("api")
-	if result[apiKey]["DATABASE_URL"] != creds["DATABASE_URL"] {
+	if result[apiKey]["DATABASE_URL"].Value != creds["DATABASE_URL"] {
 		t.Errorf("expected DATABASE_URL override")
 	}
 	if _, ok := result[apiKey]["REDIS_URL"]; ok {
@@ -404,13 +404,13 @@ func TestBuildOverrideMap_PartialCreds(t *testing.T) {
 // ════════════════════════════════════════════════════════════════
 
 func TestWriteCredsOverrideFile_Basic(t *testing.T) {
-	overrides := map[string]map[string]string{
+	overrides := map[string]map[string]credOverride{
 		"orders": {
-			"DATABASE_URL": "postgres://prod:secret@db:5432/app",
-			"REDIS_URL":    "redis://prod-redis:6379/0",
+			"DATABASE_URL": {Value: "postgres://prod:secret@db:5432/app", IsSecret: false},
+			"REDIS_URL":    {Value: "redis://prod-redis:6379/0", IsSecret: false},
 		},
 		"inventory": {
-			"MONGO_URL": "mongodb://prod:secret@mongo:27017",
+			"MONGO_URL": {Value: "mongodb://prod:secret@mongo:27017", IsSecret: false},
 		},
 	}
 
@@ -456,9 +456,9 @@ func TestWriteCredsOverrideFile_Basic(t *testing.T) {
 }
 
 func TestWriteCredsOverrideFile_SpecialChars(t *testing.T) {
-	overrides := map[string]map[string]string{
+	overrides := map[string]map[string]credOverride{
 		"api": {
-			"DATABASE_URL": `postgres://user:p@ss"word@db:5432/app?sslmode=require`,
+			"DATABASE_URL": {Value: `postgres://user:p@ss"word@db:5432/app?sslmode=require`, IsSecret: false},
 		},
 	}
 
@@ -474,6 +474,124 @@ func TestWriteCredsOverrideFile_SpecialChars(t *testing.T) {
 	// Quotes in values should be escaped
 	if !strings.Contains(s, `\"`) {
 		t.Error("internal quotes should be escaped")
+	}
+}
+
+// ════════════════════════════════════════════════════════════════
+// detectUserSecrets
+// ════════════════════════════════════════════════════════════════
+
+func TestDetectUserSecrets_Basic(t *testing.T) {
+	dses := []snapshotDSE{
+		{
+			Name: "gateway",
+			Env: []snapshotEnvVar{
+				{Name: "AUTH0_DOMAIN", Value: "dev.auth0.com", IsSecret: true},
+				{Name: "AUTH0_CLIENT_ID", Value: "abc123", IsSecret: true},
+				{Name: "ORDERS_URL", Value: "http://orders:5000", IsSecret: false},
+			},
+		},
+	}
+
+	entries := detectUserSecrets(dses)
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 secret entries, got %d", len(entries))
+	}
+	if entries[0].EnvVarName != "AUTH0_DOMAIN" {
+		t.Errorf("first entry should be AUTH0_DOMAIN, got %s", entries[0].EnvVarName)
+	}
+	if entries[0].DepType != "secret" {
+		t.Errorf("dep type should be 'secret', got %s", entries[0].DepType)
+	}
+	if entries[0].DevValue != "dev.auth0.com" {
+		t.Errorf("dev value should be carried over, got %s", entries[0].DevValue)
+	}
+}
+
+func TestDetectUserSecrets_NoSecrets(t *testing.T) {
+	dses := []snapshotDSE{
+		{Name: "ui", Env: []snapshotEnvVar{{Name: "FOO", Value: "bar"}}},
+	}
+	entries := detectUserSecrets(dses)
+	if len(entries) != 0 {
+		t.Errorf("expected 0 entries, got %d", len(entries))
+	}
+}
+
+func TestDetectUserSecrets_DeduplicatesAcrossServices(t *testing.T) {
+	dses := []snapshotDSE{
+		{Name: "gateway", Env: []snapshotEnvVar{{Name: "SECRET_KEY", Value: "v1", IsSecret: true}}},
+		{Name: "api", Env: []snapshotEnvVar{{Name: "SECRET_KEY", Value: "v1", IsSecret: true}}},
+	}
+	entries := detectUserSecrets(dses)
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 deduplicated entry, got %d", len(entries))
+	}
+	if len(entries[0].Services) != 2 {
+		t.Errorf("expected 2 services, got %d", len(entries[0].Services))
+	}
+}
+
+// ════════════════════════════════════════════════════════════════
+// buildOverrideMap with secrets
+// ════════════════════════════════════════════════════════════════
+
+func TestBuildOverrideMap_WithSecrets(t *testing.T) {
+	entries := []prodCredEntry{
+		{DepType: "postgres", EnvVarName: "DATABASE_URL", Services: []string{"gateway"}},
+		{DepType: "secret", EnvVarName: "AUTH0_DOMAIN", Services: []string{"gateway"}},
+	}
+	dses := []snapshotDSE{
+		{
+			Name: "gateway",
+			Deps: []snapshotDep{{Type: "postgres"}},
+			Env:  []snapshotEnvVar{{Name: "AUTH0_DOMAIN", Value: "dev.auth0.com", IsSecret: true}},
+		},
+	}
+	creds := map[string]string{
+		"DATABASE_URL": "postgres://prod@db:5432/app",
+		"AUTH0_DOMAIN": "prod.auth0.com",
+	}
+
+	result := buildOverrideMap(entries, dses, creds)
+
+	vk := helmValuesKey("gateway")
+	if result[vk]["DATABASE_URL"].IsSecret {
+		t.Error("DATABASE_URL should not be marked as secret")
+	}
+	if !result[vk]["AUTH0_DOMAIN"].IsSecret {
+		t.Error("AUTH0_DOMAIN should be marked as secret")
+	}
+	if result[vk]["AUTH0_DOMAIN"].Value != "prod.auth0.com" {
+		t.Errorf("AUTH0_DOMAIN value = %q, want %q", result[vk]["AUTH0_DOMAIN"].Value, "prod.auth0.com")
+	}
+}
+
+// ════════════════════════════════════════════════════════════════
+// writeCredsOverrideFile with secrets section
+// ════════════════════════════════════════════════════════════════
+
+func TestWriteCredsOverrideFile_SecretsSection(t *testing.T) {
+	overrides := map[string]map[string]credOverride{
+		"gateway": {
+			"DATABASE_URL": {Value: "postgres://prod@db:5432/app", IsSecret: false},
+			"AUTH0_DOMAIN": {Value: "prod.auth0.com", IsSecret: true},
+		},
+	}
+	path, err := writeCredsOverrideFile(overrides)
+	if err != nil {
+		t.Fatalf("writeCredsOverrideFile failed: %v", err)
+	}
+	defer os.Remove(path)
+
+	content, _ := os.ReadFile(path)
+	s := string(content)
+
+	if !strings.Contains(s, "env:") {
+		t.Error("should contain env: section for DATABASE_URL")
+	}
+	if !strings.Contains(s, "secrets:") {
+		t.Error("should contain secrets: section for AUTH0_DOMAIN")
 	}
 }
 

@@ -703,7 +703,12 @@ func buildGeneratePrompt(ctx *repoContext, provider ci.Provider) (system, user s
 		b.WriteString("The following environment variables were detected in source code.\n")
 		b.WriteString("Apply the dev staging philosophy from the system prompt to decide how to handle each:\n")
 		b.WriteString("- If it is an app-level secret (SECRET_KEY, JWT_SECRET, etc.), set a random hex dev value\n")
-		b.WriteString("- If it is an optional integration (AWS, Datadog, SMTP, OAuth), OMIT it entirely\n")
+		b.WriteString("- If it is an optional integration (AWS, Datadog, SMTP), OMIT it entirely\n")
+		if !ctx.needsPublicExpose {
+			b.WriteString("- If it is an OAuth provider secret (AUTH0_*, OKTA_*, etc.), OMIT it entirely\n")
+		} else {
+			b.WriteString("- If it is an OAuth provider secret, see the OAuth section below for secretKeyRef instructions\n")
+		}
 		b.WriteString("- If it is truly required AND external, use secretKeyRef with name kindling-secret-<name>\n\n")
 		for _, name := range ctx.externalSecrets {
 			b.WriteString(fmt.Sprintf("- %s\n", name))
@@ -718,8 +723,19 @@ func buildGeneratePrompt(ctx *repoContext, provider ci.Provider) (system, user s
 		for _, hint := range ctx.oauthHints {
 			b.WriteString(fmt.Sprintf("- %s\n", hint))
 		}
-		b.WriteString("\nThe user may not have a public URL yet. Add a YAML comment noting that\n")
-		b.WriteString("`kindling expose` should be run if OAuth callbacks need to reach the cluster.\n\n")
+		b.WriteString("\n**IMPORTANT — OVERRIDE:** Because OAuth/OIDC is actively used in this repo,\n")
+		b.WriteString("OAuth-related secrets are NOT optional — they are REQUIRED for the app to function.\n")
+		b.WriteString("Wire the following as secretKeyRef entries on the service that handles OAuth callbacks:\n\n")
+
+		oauthSecrets := filterOAuthSecrets(ctx.externalSecrets)
+		for _, name := range oauthSecrets {
+			kebab := toKebabCase(name)
+			b.WriteString(fmt.Sprintf("- name: %s\n  valueFrom:\n    secretKeyRef:\n      name: kindling-secret-%s\n      key: %s\n", name, kebab, name))
+		}
+		if len(oauthSecrets) == 0 {
+			b.WriteString("(No specific OAuth env vars detected — check source code for required auth config)\n")
+		}
+		b.WriteString("\nAlso add a YAML comment noting that `kindling expose` should be run for OAuth callbacks.\n\n")
 	}
 
 	// Multi-agent architecture context — directive instructions
@@ -1061,6 +1077,44 @@ func isExternalCredential(name string) bool {
 		}
 	}
 	return false
+}
+
+// oauthEnvPrefixes are env var prefixes that indicate OAuth/OIDC secrets.
+var oauthEnvPrefixes = []string{
+	"AUTH0_", "OKTA_", "GOOGLE_CLIENT_", "GITHUB_CLIENT_",
+	"SLACK_CLIENT_", "NEXTAUTH_", "FIREBASE_",
+}
+
+// oauthCompanionNames are env vars commonly required alongside OAuth.
+var oauthCompanionNames = map[string]bool{
+	"SESSION_SECRET":       true,
+	"PUBLIC_URL":           true,
+	"STRIPE_WEBHOOK_SECRET": true,
+}
+
+// filterOAuthSecrets returns the subset of detected secrets that are OAuth-related
+// or commonly required companions (session secrets, public URL, webhook secrets).
+func filterOAuthSecrets(secrets []string) []string {
+	var out []string
+	for _, name := range secrets {
+		upper := strings.ToUpper(name)
+		if oauthCompanionNames[upper] {
+			out = append(out, name)
+			continue
+		}
+		for _, prefix := range oauthEnvPrefixes {
+			if strings.HasPrefix(upper, prefix) {
+				out = append(out, name)
+				break
+			}
+		}
+	}
+	return out
+}
+
+// toKebabCase converts UPPER_SNAKE_CASE to lower-kebab-case.
+func toKebabCase(s string) string {
+	return strings.ToLower(strings.ReplaceAll(s, "_", "-"))
 }
 
 // ── OAuth / OIDC detection ──────────────────────────────────────

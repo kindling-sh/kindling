@@ -92,6 +92,44 @@ func detectDevCredentials(chartName string, dses []snapshotDSE) []prodCredEntry 
 	return result
 }
 
+// detectUserSecrets scans DSEs for env vars that are sourced from K8s
+// secrets (secretKeyRef). These need production values because the dev
+// cluster secrets won't exist in production.
+func detectUserSecrets(dses []snapshotDSE) []prodCredEntry {
+	type key struct {
+		name string
+	}
+	seen := make(map[key]*prodCredEntry)
+	var order []key
+
+	for _, dse := range dses {
+		for _, e := range dse.Env {
+			if !e.IsSecret {
+				continue
+			}
+			k := key{e.Name}
+			if entry, exists := seen[k]; exists {
+				entry.Services = append(entry.Services, dse.Name)
+			} else {
+				entry := &prodCredEntry{
+					DepType:    "secret",
+					EnvVarName: e.Name,
+					DevValue:   e.Value,
+					Services:   []string{dse.Name},
+				}
+				seen[k] = entry
+				order = append(order, k)
+			}
+		}
+	}
+
+	var result []prodCredEntry
+	for _, k := range order {
+		result = append(result, *seen[k])
+	}
+	return result
+}
+
 // ── Encrypted cache ─────────────────────────────────────────────
 
 func credsCacheDir() string {
@@ -202,16 +240,25 @@ func clearCredCache(context string) {
 //   - error if the user cancels or something fails
 //
 // If the user chooses to skip, overrides is nil (deploy with dev creds).
-func resolveProductionCredentials(chartName, context string, dses []snapshotDSE) (map[string]map[string]string, error) {
+func resolveProductionCredentials(chartName, context string, dses []snapshotDSE) (map[string]map[string]credOverride, error) {
 	entries := detectDevCredentials(chartName, dses)
+	secretEntries := detectUserSecrets(dses)
+	entries = append(entries, secretEntries...)
 	if len(entries) == 0 {
 		return nil, nil
 	}
 
 	// Show what we found
 	fmt.Fprintln(os.Stderr)
-	step("🔐", fmt.Sprintf("Found %d %s with dev credentials",
-		len(entries), pluralize(len(entries), "dependency", "dependencies")))
+	depCount := len(entries) - len(secretEntries)
+	if depCount > 0 {
+		step("🔐", fmt.Sprintf("Found %d %s with dev credentials",
+			depCount, pluralize(depCount, "dependency", "dependencies")))
+	}
+	if len(secretEntries) > 0 {
+		step("🔑", fmt.Sprintf("Found %d %s from K8s secrets",
+			len(secretEntries), pluralize(len(secretEntries), "env var", "env vars")))
+	}
 	for _, e := range entries {
 		depLabel := strings.ToUpper(e.DepType[:1]) + e.DepType[1:]
 		fmt.Fprintf(os.Stderr, "       %s%s%s → %s (used by %s)\n",
@@ -345,8 +392,15 @@ func promptCredentialValues(entries []prodCredEntry, cached *prodCredCache) (map
 
 // buildOverrideMap converts a flat credential map into the nested structure
 // needed for Helm values overrides: valuesKey → envVarName → value.
+// credOverride holds a production credential value and whether it's a
+// secret (goes into secrets: section) or a plain env var (goes into env:).
+type credOverride struct {
+	Value    string
+	IsSecret bool
+}
+
 // Each service that uses a given dependency gets the same credential.
-func buildOverrideMap(entries []prodCredEntry, dses []snapshotDSE, creds map[string]string) map[string]map[string]string {
+func buildOverrideMap(entries []prodCredEntry, dses []snapshotDSE, creds map[string]string) map[string]map[string]credOverride {
 	if len(creds) == 0 {
 		return nil
 	}
@@ -354,12 +408,23 @@ func buildOverrideMap(entries []prodCredEntry, dses []snapshotDSE, creds map[str
 	// Map dep type → envVarName for lookup
 	depEnvMap := make(map[string]string) // depType → envVarName
 	for _, e := range entries {
-		depEnvMap[e.DepType] = e.EnvVarName
+		if e.DepType != "secret" {
+			depEnvMap[e.DepType] = e.EnvVarName
+		}
 	}
 
-	result := make(map[string]map[string]string)
+	// Build a set of secret env var names for direct matching
+	secretEnvVars := make(map[string]bool)
+	for _, e := range entries {
+		if e.DepType == "secret" {
+			secretEnvVars[e.EnvVarName] = true
+		}
+	}
+
+	result := make(map[string]map[string]credOverride)
 	for _, dse := range dses {
 		vk := helmValuesKey(dse.Name)
+		// Dependency connection strings → env:
 		for _, dep := range dse.Deps {
 			envVar, ok := depEnvMap[dep.Type]
 			if !ok {
@@ -370,9 +435,26 @@ func buildOverrideMap(entries []prodCredEntry, dses []snapshotDSE, creds map[str
 				continue
 			}
 			if result[vk] == nil {
-				result[vk] = make(map[string]string)
+				result[vk] = make(map[string]credOverride)
 			}
-			result[vk][envVar] = prodVal
+			result[vk][envVar] = credOverride{Value: prodVal, IsSecret: false}
+		}
+		// User secrets → secrets:
+		for _, e := range dse.Env {
+			if !e.IsSecret {
+				continue
+			}
+			if !secretEnvVars[e.Name] {
+				continue
+			}
+			prodVal, ok := creds[e.Name]
+			if !ok || prodVal == "" {
+				continue
+			}
+			if result[vk] == nil {
+				result[vk] = make(map[string]credOverride)
+			}
+			result[vk][e.Name] = credOverride{Value: prodVal, IsSecret: true}
 		}
 	}
 
@@ -383,18 +465,37 @@ func buildOverrideMap(entries []prodCredEntry, dses []snapshotDSE, creds map[str
 // production credential overrides. Using a file avoids shell escaping
 // issues with special characters in connection URLs (commas, @, etc.).
 // Returns the path to the temp file (caller should defer os.Remove).
-func writeCredsOverrideFile(overrides map[string]map[string]string) (string, error) {
+func writeCredsOverrideFile(overrides map[string]map[string]credOverride) (string, error) {
 	var buf strings.Builder
 	buf.WriteString("# Auto-generated production credential overrides\n")
 	buf.WriteString("# This file is ephemeral and deleted after deploy.\n\n")
 
-	for vk, envs := range overrides {
-		buf.WriteString(fmt.Sprintf("%s:\n  env:\n", vk))
-		for envVar, value := range envs {
-			// YAML-escape the value: wrap in double quotes, escape internal quotes
-			escaped := strings.ReplaceAll(value, `\`, `\\`)
+	for vk, creds := range overrides {
+		// Split into env and secrets sections
+		var envEntries, secretEntries []struct{ k, v string }
+		for envVar, co := range creds {
+			escaped := strings.ReplaceAll(co.Value, `\`, `\\`)
 			escaped = strings.ReplaceAll(escaped, `"`, `\"`)
-			buf.WriteString(fmt.Sprintf("    %s: \"%s\"\n", envVar, escaped))
+			entry := struct{ k, v string }{envVar, escaped}
+			if co.IsSecret {
+				secretEntries = append(secretEntries, entry)
+			} else {
+				envEntries = append(envEntries, entry)
+			}
+		}
+
+		buf.WriteString(fmt.Sprintf("%s:\n", vk))
+		if len(envEntries) > 0 {
+			buf.WriteString("  env:\n")
+			for _, e := range envEntries {
+				buf.WriteString(fmt.Sprintf("    %s: \"%s\"\n", e.k, e.v))
+			}
+		}
+		if len(secretEntries) > 0 {
+			buf.WriteString("  secrets:\n")
+			for _, e := range secretEntries {
+				buf.WriteString(fmt.Sprintf("    %s: \"%s\"\n", e.k, e.v))
+			}
 		}
 		buf.WriteString("\n")
 	}

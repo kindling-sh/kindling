@@ -79,6 +79,8 @@ func handleProdSnapshotCredentials(w http.ResponseWriter, r *http.Request) {
 	stripDSEPrefix(dses)
 
 	entries := detectDevCredentials(chartName, dses)
+	secretEntries := detectUserSecrets(dses)
+	entries = append(entries, secretEntries...)
 
 	// Check for cached values
 	var cachedCreds map[string]string
@@ -242,9 +244,11 @@ func handleProdSnapshotDeploy(w http.ResponseWriter, r *http.Request) {
 	send("step", fmt.Sprintf("Deploying to %s (namespace: %s)", prodContext, ns))
 
 	// Build credential overrides from user-supplied production values
-	var credOverrides map[string]map[string]string
+	var credOverrides map[string]map[string]credOverride
 	if len(body.Credentials) > 0 {
 		entries := detectDevCredentials(chartName, dses)
+		secretEntries := detectUserSecrets(dses)
+		entries = append(entries, secretEntries...)
 		credOverrides = buildOverrideMap(entries, dses, body.Credentials)
 		send("step", fmt.Sprintf("Applying %d production credential override(s)", len(body.Credentials)))
 		// Cache for future deploys
@@ -254,6 +258,8 @@ func handleProdSnapshotDeploy(w http.ResponseWriter, r *http.Request) {
 		cached := loadCredCache(prodContext)
 		if cached != nil && len(cached.Creds) > 0 {
 			entries := detectDevCredentials(chartName, dses)
+			secretEntries := detectUserSecrets(dses)
+			entries = append(entries, secretEntries...)
 			credOverrides = buildOverrideMap(entries, dses, cached.Creds)
 			send("step", fmt.Sprintf("Using %d cached production credential(s)", len(cached.Creds)))
 		}
@@ -277,6 +283,109 @@ func handleProdSnapshotDeploy(w http.ResponseWriter, r *http.Request) {
 	send("step", "Deploy complete")
 
 	send("done", "Deployed to production cluster")
+}
+
+// ── /api/prod/snapshot/secrets/update — patch secrets post-deploy ─
+
+func handleProdSnapshotSecretsUpdate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, "method not allowed", 405)
+		return
+	}
+	if prodContext == "" {
+		jsonError(w, "no production context configured", 400)
+		return
+	}
+
+	var body struct {
+		Namespace   string            `json:"namespace"`
+		Credentials map[string]string `json:"credentials"` // envVarName → new value
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		jsonError(w, "invalid request body", 400)
+		return
+	}
+	if len(body.Credentials) == 0 {
+		jsonError(w, "no credentials provided", 400)
+		return
+	}
+
+	ns := body.Namespace
+	if ns == "" {
+		ns = "default"
+	}
+
+	// Discover which K8s Secrets contain these keys by listing secrets
+	// in the namespace that match our naming convention (<release>-*-secrets).
+	out, err := prodKubectlJSON("get", "secrets", "-n", ns, "-o", "json")
+	if err != nil {
+		jsonError(w, "failed to list secrets: "+err.Error(), 500)
+		return
+	}
+
+	var secretList struct {
+		Items []struct {
+			Metadata struct {
+				Name string `json:"name"`
+			} `json:"metadata"`
+			Data map[string]string `json:"data"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(out), &secretList); err != nil {
+		jsonError(w, "failed to parse secrets: "+err.Error(), 500)
+		return
+	}
+
+	// Find secrets that end in "-secrets" and contain the requested keys
+	updated := 0
+	restartSet := make(map[string]bool) // deployment names to restart
+
+	for envVar, newValue := range body.Credentials {
+		for _, secret := range secretList.Items {
+			if !strings.HasSuffix(secret.Metadata.Name, "-secrets") {
+				continue
+			}
+			if _, hasKey := secret.Data[envVar]; !hasKey {
+				continue
+			}
+			// Patch this secret with the new value using strategic merge
+			patchJSON, _ := json.Marshal(map[string]interface{}{
+				"stringData": map[string]string{envVar: newValue},
+			})
+			_, patchErr := prodKubectlJSON("patch", "secret", secret.Metadata.Name,
+				"-n", ns, "--type", "strategic", "-p", string(patchJSON))
+			if patchErr != nil {
+				jsonError(w, fmt.Sprintf("failed to patch secret %s: %s", secret.Metadata.Name, patchErr.Error()), 500)
+				return
+			}
+			updated++
+
+			// Derive the deployment name from the secret name
+			// Convention: <release>-<svc>-secrets → restart <release>-<svc>
+			depName := strings.TrimSuffix(secret.Metadata.Name, "-secrets")
+			restartSet[depName] = true
+			break // each env var should only be in one secret
+		}
+	}
+
+	// Restart deployments that reference the updated secrets
+	var restarted []string
+	for depName := range restartSet {
+		_, err := prodKubectlJSON("rollout", "restart", "deployment/"+depName, "-n", ns)
+		if err == nil {
+			restarted = append(restarted, depName)
+		}
+	}
+
+	// Cache the updated credentials
+	chartName := "kindling-snapshot"
+	_ = saveCredCache(prodContext, chartName, body.Credentials)
+
+	jsonResponse(w, map[string]interface{}{
+		"ok":        true,
+		"updated":   updated,
+		"restarted": restarted,
+	})
 }
 
 // ── /api/prod/tls/status — cert-manager + TLS status ────────────

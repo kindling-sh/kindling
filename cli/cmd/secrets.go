@@ -120,6 +120,12 @@ func runSecretsSet(cmd *cobra.Command, args []string) error {
 
 	success(fmt.Sprintf("Secret %s created in cluster", k8sName))
 
+	// Restart any deployments that reference this secret
+	restarted, _ := core.RestartSecretConsumers(clusterName, k8sName, secretsNamespace)
+	for _, dep := range restarted {
+		success(fmt.Sprintf("Restarted deployment %s to pick up new value", dep))
+	}
+
 	// Persist to local file
 	if err := saveSecretLocally(name, value); err != nil {
 		warn(fmt.Sprintf("Could not save to local backup: %v", err))
@@ -233,6 +239,13 @@ func runSecretsRestore(cmd *cobra.Command, args []string) error {
 			warn(fmt.Sprintf("Failed to restore %s: %v", name, err))
 			continue
 		}
+
+		// Restart any deployments that reference this secret
+		restarted, _ := core.RestartSecretConsumers(clusterName, k8sName, secretsNamespace)
+		for _, dep := range restarted {
+			success(fmt.Sprintf("Restarted deployment %s to pick up restored %s", dep, name))
+		}
+
 		restored++
 	}
 

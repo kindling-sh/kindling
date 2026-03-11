@@ -104,9 +104,8 @@ body { margin: 0; overflow-x: hidden; }
   padding: 20px 20px 18px;
 }
 
-.brand-icon {
-  font-size: 22px;
-  line-height: 1;
+.brand-icon-svg {
+  flex-shrink: 0;
 }
 
 .brand-text {
@@ -626,6 +625,9 @@ body { margin: 0; overflow-x: hidden; }
   font-weight: 700;
   letter-spacing: -0.5px;
   margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 .home-subtitle {
@@ -746,6 +748,7 @@ body { margin: 0; overflow-x: hidden; }
 .path-tile-icon {
   font-size: 22px;
   line-height: 1;
+  color: var(--path-color);
 }
 
 .path-tile-title {
@@ -941,6 +944,8 @@ body { margin: 0; overflow-x: hidden; }
 .card-icon {
   font-size: 16px;
   line-height: 1;
+  color: var(--text-primary);
+  opacity: 0.85;
 }
 
 .card-body {

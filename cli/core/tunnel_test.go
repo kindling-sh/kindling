@@ -3,7 +3,9 @@ package core
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -256,5 +258,188 @@ func TestCleanupTunnel_RemovesTunnelFile(t *testing.T) {
 
 	if _, err := os.Stat(tunnelFile); err == nil {
 		t.Error("tunnel.yaml should have been removed")
+	}
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// SaveTunnelInfo → ReadTunnelInfo round-trip
+// ────────────────────────────────────────────────────────────────────────────
+
+func TestSaveTunnelInfo_RoundTrip(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	os.Chdir(tmpDir)
+	defer os.Chdir(origDir)
+
+	// SaveTunnelInfo writes .kindling/tunnel.yaml (kubectl calls fail silently)
+	SaveTunnelInfo("nonexistent", "https://test-round-trip.trycloudflare.com", "cloudflared", 42)
+
+	info, err := ReadTunnelInfo()
+	if err != nil {
+		t.Fatalf("ReadTunnelInfo() error = %v", err)
+	}
+	if info.Provider != "cloudflared" {
+		t.Errorf("Provider = %q, want %q", info.Provider, "cloudflared")
+	}
+	if info.URL != "https://test-round-trip.trycloudflare.com" {
+		t.Errorf("URL = %q, want %q", info.URL, "https://test-round-trip.trycloudflare.com")
+	}
+	if info.PID != 42 {
+		t.Errorf("PID = %d, want %d", info.PID, 42)
+	}
+}
+
+func TestSaveTunnelInfo_CreatesKindlingDir(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	os.Chdir(tmpDir)
+	defer os.Chdir(origDir)
+
+	SaveTunnelInfo("nonexistent", "https://test.trycloudflare.com", "cloudflared", 1)
+
+	if _, err := os.Stat(filepath.Join(tmpDir, ".kindling", "tunnel.yaml")); err != nil {
+		t.Errorf("expected .kindling/tunnel.yaml to exist: %v", err)
+	}
+}
+
+func TestSaveTunnelInfo_GitignoresKindlingDir(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	os.Chdir(tmpDir)
+	defer os.Chdir(origDir)
+
+	SaveTunnelInfo("nonexistent", "https://test.trycloudflare.com", "cloudflared", 1)
+
+	data, err := os.ReadFile(filepath.Join(tmpDir, ".gitignore"))
+	if err != nil {
+		t.Fatalf("expected .gitignore to exist: %v", err)
+	}
+	if !strings.Contains(string(data), ".kindling/") {
+		t.Errorf(".gitignore should contain .kindling/, got %q", string(data))
+	}
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// StableTunnelConfig save/read round-trip
+// ────────────────────────────────────────────────────────────────────────────
+
+func TestStableTunnelConfig_RoundTrip(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	os.Chdir(tmpDir)
+	defer os.Chdir(origDir)
+
+	cfg := &StableTunnelConfig{
+		Domain: "dev.myapp.com",
+		Routes: map[string]string{
+			"/auth":     "gateway",
+			"/webhooks": "gateway",
+			"/":         "ui",
+		},
+	}
+
+	if err := SaveStableTunnelConfig(cfg); err != nil {
+		t.Fatalf("SaveStableTunnelConfig() error = %v", err)
+	}
+
+	loaded, err := ReadStableTunnelConfig()
+	if err != nil {
+		t.Fatalf("ReadStableTunnelConfig() error = %v", err)
+	}
+	if loaded.Domain != "dev.myapp.com" {
+		t.Errorf("Domain = %q, want %q", loaded.Domain, "dev.myapp.com")
+	}
+	if len(loaded.Routes) != 3 {
+		t.Fatalf("Routes count = %d, want 3", len(loaded.Routes))
+	}
+	for path, svc := range cfg.Routes {
+		if loaded.Routes[path] != svc {
+			t.Errorf("Route[%q] = %q, want %q", path, loaded.Routes[path], svc)
+		}
+	}
+}
+
+func TestStableTunnelConfig_NoRoutes(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	os.Chdir(tmpDir)
+	defer os.Chdir(origDir)
+
+	cfg := &StableTunnelConfig{Domain: "test.example.com"}
+	SaveStableTunnelConfig(cfg)
+
+	loaded, err := ReadStableTunnelConfig()
+	if err != nil {
+		t.Fatalf("ReadStableTunnelConfig() error = %v", err)
+	}
+	if loaded.Domain != "test.example.com" {
+		t.Errorf("Domain = %q, want %q", loaded.Domain, "test.example.com")
+	}
+	if len(loaded.Routes) != 0 {
+		t.Errorf("Routes = %v, want empty", loaded.Routes)
+	}
+}
+
+func TestReadStableTunnelConfig_MissingFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	os.Chdir(tmpDir)
+	defer os.Chdir(origDir)
+
+	cfg, err := ReadStableTunnelConfig()
+	if err == nil && cfg != nil {
+		t.Error("expected error or nil for missing tunnel-config.yaml")
+	}
+}
+
+func TestStableTunnelConfig_OverwriteRoutes(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	os.Chdir(tmpDir)
+	defer os.Chdir(origDir)
+
+	// Save initial config
+	cfg := &StableTunnelConfig{
+		Domain: "dev.myapp.com",
+		Routes: map[string]string{"/auth": "gateway"},
+	}
+	SaveStableTunnelConfig(cfg)
+
+	// Overwrite with merged routes
+	cfg.Routes["/webhooks"] = "gateway"
+	cfg.Routes["/"] = "ui"
+	SaveStableTunnelConfig(cfg)
+
+	loaded, _ := ReadStableTunnelConfig()
+	if len(loaded.Routes) != 3 {
+		t.Errorf("Routes count = %d, want 3", len(loaded.Routes))
+	}
+	if loaded.Routes["/webhooks"] != "gateway" {
+		t.Errorf("Route[/webhooks] = %q, want %q", loaded.Routes["/webhooks"], "gateway")
+	}
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// CallbackRoute struct
+// ────────────────────────────────────────────────────────────────────────────
+
+func TestCallbackRouteZeroValue(t *testing.T) {
+	var route CallbackRoute
+	if route.Service != "" || route.Port != 0 {
+		t.Error("zero-value CallbackRoute should have empty fields")
+	}
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// publicDNSResolver construction
+// ────────────────────────────────────────────────────────────────────────────
+
+func TestPublicDNSResolver_NotNil(t *testing.T) {
+	r := publicDNSResolver(2 * time.Second)
+	if r == nil {
+		t.Error("publicDNSResolver should return a non-nil resolver")
+	}
+	if !r.PreferGo {
+		t.Error("resolver should use the Go DNS resolver (PreferGo = true)")
 	}
 }

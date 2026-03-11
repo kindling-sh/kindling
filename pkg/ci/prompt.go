@@ -327,6 +327,9 @@ to start and be usable with ZERO manual secret setup. Follow these rules:
    - Monitoring/APM (DD_API_KEY, SENTRY_DSN, NEW_RELIC_*, DATADOG_*)
    - Email/SMS (SMTP_*, SENDGRID_*, TWILIO_*, MAILGUN_*)
    - OAuth providers (SLACK_CLIENT_*, GOOGLE_CLIENT_*, GITHUB_CLIENT_*, AUTH0_*)
+     EXCEPTION: If the user prompt includes a "Detected OAuth / OIDC indicators"
+     section, OAuth secrets ARE required and MUST be wired as secretKeyRef.
+     Follow the explicit instructions in the user prompt for these.
    - Analytics (SEGMENT_*, MIXPANEL_*, AMPLITUDE_*)
    Instead, if the app has a config option to disable these features, set it.
    For example: FILE_STORAGE=local instead of FILE_STORAGE=s3.

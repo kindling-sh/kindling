@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -26,10 +27,13 @@ func (c *LoadConfig) namespace() string {
 	return c.Namespace
 }
 
-// LoadImageTag returns a deterministic image name:tag for the service.
+var tagCounter uint64
+
+// LoadImageTag returns a unique image name:tag for the service.
 func LoadImageTag(service string) string {
-	ts := time.Now().Unix()
-	return fmt.Sprintf("%s:%d", service, ts)
+	ts := time.Now().UnixNano()
+	seq := atomic.AddUint64(&tagCounter, 1)
+	return fmt.Sprintf("%s:%d-%d", service, ts, seq)
 }
 
 // BuildAndLoad builds a Docker image, loads it into Kind, and optionally

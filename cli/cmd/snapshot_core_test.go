@@ -450,8 +450,8 @@ func TestDeployOpts_CredOverrides(t *testing.T) {
 		Namespace: "default",
 		Format:    "helm",
 		ChartName: "test",
-		CredOverrides: map[string]map[string]string{
-			"orders": {"DATABASE_URL": "postgres://prod@db:5432/app"},
+		CredOverrides: map[string]map[string]credOverride{
+			"orders": {"DATABASE_URL": {Value: "postgres://prod@db:5432/app", IsSecret: false}},
 		},
 	}
 
@@ -459,7 +459,7 @@ func TestDeployOpts_CredOverrides(t *testing.T) {
 	if len(opts.CredOverrides) != 1 {
 		t.Errorf("expected 1 cred override, got %d", len(opts.CredOverrides))
 	}
-	if opts.CredOverrides["orders"]["DATABASE_URL"] != "postgres://prod@db:5432/app" {
+	if opts.CredOverrides["orders"]["DATABASE_URL"].Value != "postgres://prod@db:5432/app" {
 		t.Error("CredOverrides should hold the correct value")
 	}
 }

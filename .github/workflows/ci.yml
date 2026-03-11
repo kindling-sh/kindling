@@ -144,7 +144,7 @@ jobs:
       - name: Pre-pull dependency images
         run: |
           # Pull lightweight dep images in parallel to speed up e2e
-          for img in registry.k8s.io/kubebuilder/kube-rbac-proxy:v0.14.1 \
+          for img in quay.io/brancz/kube-rbac-proxy:v0.18.1 \
                      mysql mongo rabbitmq:3-management nats memcached \
                      hashicorp/consul hashicorp/vault minio/minio influxdb \
                      jaegertracing/all-in-one:latest; do

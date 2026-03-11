@@ -77,8 +77,8 @@ func runDashboard(cmd *cobra.Command, args []string) error {
 	mux.HandleFunc("/api/env/set", handleEnvSet)
 	mux.HandleFunc("/api/env/unset", handleEnvUnset)
 	mux.HandleFunc("/api/env/list/", handleEnvList)   // GET /api/env/list/{ns}/{dep}
-	mux.HandleFunc("/api/expose", handleExposeAction) // POST=start, DELETE=stop
-	mux.HandleFunc("/api/expose/status", handleExposeStatus)
+	mux.HandleFunc("/api/expose", handleExposeAction)           // POST=start, DELETE=stop
+	mux.HandleFunc("/api/expose/status", handleExposeStatus)       // GET
 	mux.HandleFunc("/api/cluster/destroy", handleDestroyCluster)
 	mux.HandleFunc("/api/init", handleInitCluster)
 	mux.HandleFunc("/api/restart/", handleRestartDeployment)
@@ -163,6 +163,7 @@ func runDashboard(cmd *cobra.Command, args []string) error {
 		mux.HandleFunc("/api/prod/snapshot/status", handleProdSnapshotStatus)
 		mux.HandleFunc("/api/prod/snapshot/credentials", handleProdSnapshotCredentials)
 		mux.HandleFunc("/api/prod/snapshot/deploy", handleProdSnapshotDeploy)
+		mux.HandleFunc("/api/prod/snapshot/secrets/update", handleProdSnapshotSecretsUpdate)
 
 		// TLS management
 		mux.HandleFunc("/api/prod/tls/status", handleProdTLSStatus)

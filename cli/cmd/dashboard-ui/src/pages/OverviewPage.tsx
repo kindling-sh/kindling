@@ -124,7 +124,27 @@ export function OverviewPage() {
       {/* ── Header ─────────────────────────── */}
       <div className="home-header">
         <div className="home-header-text">
-          <h1 className="home-title">◆ kindling</h1>
+          <h1 className="home-title">
+            <svg className="home-logo" viewBox="0 0 64 64" width="28" height="28">
+              <defs>
+                <linearGradient id="hp-fo" x1="0%" y1="100%" x2="50%" y2="0%">
+                  <stop offset="0%" stopColor="#FF6B35"/><stop offset="50%" stopColor="#F7931E"/><stop offset="100%" stopColor="#FFD23F"/>
+                </linearGradient>
+                <linearGradient id="hp-fi" x1="0%" y1="100%" x2="50%" y2="0%">
+                  <stop offset="0%" stopColor="#FFD23F"/><stop offset="100%" stopColor="#FFF5CC"/>
+                </linearGradient>
+                <linearGradient id="hp-lg" x1="0%" y1="0%" x2="0%" y2="100%">
+                  <stop offset="0%" stopColor="#8B5E3C"/><stop offset="100%" stopColor="#5C3A1E"/>
+                </linearGradient>
+              </defs>
+              <rect x="14" y="50" width="36" height="5" rx="2.5" fill="url(#hp-lg)" transform="rotate(-8 32 52)"/>
+              <rect x="14" y="50" width="36" height="5" rx="2.5" fill="url(#hp-lg)" transform="rotate(8 32 52)"/>
+              <path d="M32 4C32 4 14 24 14 36C14 46 22 54 32 54C42 54 50 46 50 36C50 24 32 4 32 4Z" fill="url(#hp-fo)" opacity="0.95"/>
+              <path d="M32 14C32 14 20 28 20 37C20 44 25 49 32 49C39 49 44 44 44 37C44 28 32 14 32 14Z" fill="#FFAD33" opacity="0.85"/>
+              <path d="M32 24C32 24 25 33 25 38C25 42 28 46 32 46C36 46 39 42 39 38C39 33 32 24 32 24Z" fill="url(#hp-fi)" opacity="0.95"/>
+            </svg>
+            kindling
+          </h1>
           <p className="home-subtitle">Your laptop is your staging environment. Where would you like to go?</p>
         </div>
         {!cluster.exists && (

@@ -207,7 +207,16 @@ func resolveProjectDir() (string, error) {
 			_ = runDir(cachedDir, "git", "remote", "set-url", "origin",
 				"https://github.com/kindling-sh/kindling.git")
 		}
-		_ = runDir(cachedDir, "git", "pull", "--ff-only", "-q")
+		// Unshallow if needed so ff-only pull works on grafted clones
+		if _, err := os.Stat(filepath.Join(cachedDir, ".git", "shallow")); err == nil {
+			_ = runDir(cachedDir, "git", "fetch", "--unshallow", "-q")
+		}
+		if err := runDir(cachedDir, "git", "pull", "--ff-only", "-q"); err != nil {
+			// ff-only failed — force reset to origin/main
+			warn("Cached ~/.kindling diverged — resetting to latest")
+			_ = runDir(cachedDir, "git", "fetch", "origin", "-q")
+			_ = runDir(cachedDir, "git", "reset", "--hard", "origin/main")
+		}
 		return cachedDir, nil
 	}
 

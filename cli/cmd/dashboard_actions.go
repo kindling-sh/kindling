@@ -304,73 +304,39 @@ func handleExposeAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if already running — same check the CLI uses.
-	if info, _ := core.ReadTunnelInfo(); info != nil && info.PID > 0 {
-		if core.ProcessAlive(info.PID) {
-			actionErr(w, "tunnel already running — stop it first", http.StatusConflict)
-			return
-		}
-		// Stale PID — clean up before starting fresh.
-		core.CleanupTunnel(clusterName)
-		restoreIngresses()
+	// Reuse the shared running-tunnel check.
+	if reused := checkRunningTunnel(); reused {
+		actionErr(w, "tunnel already running — stop it first", http.StatusConflict)
+		return
 	}
 
 	// Parse optional fields from body.
 	var body struct {
 		Service string `json:"service"`
-		Domain  string `json:"domain"`
 	}
 	if r.Body != nil {
 		json.NewDecoder(r.Body).Decode(&body)
 	}
 	exposeService = body.Service
 
-	// Resolve domain: explicit > stored config
-	domain := body.Domain
-	if domain == "" {
-		if cfg, err := core.ReadStableTunnelConfig(); err == nil && cfg != nil && cfg.Domain != "" {
-			domain = cfg.Domain
-		}
-	}
-
-	// Save domain for future runs if provided explicitly
-	if body.Domain != "" {
-		_ = core.SaveStableTunnelConfig(&core.StableTunnelConfig{Domain: body.Domain})
-	}
-
-	// Use stable ngrok tunnel if domain is set
-	if domain != "" {
-		if !core.CommandExists("ngrok") {
-			actionErr(w, "ngrok is not installed — required for stable domains. Install with: brew install ngrok/ngrok/ngrok", http.StatusUnprocessableEntity)
-			return
-		}
-		result, err := core.StartStableNgrokTunnel(exposePort, domain)
-		if err != nil {
-			actionErr(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		core.SaveTunnelInfo(clusterName, result.PublicURL, "ngrok", result.PID)
-		patchIngressesForTunnel(result.PublicURL)
-		actionOK(w, "Tunnel started (stable): "+result.PublicURL)
+	// Detect provider and start a quick tunnel.
+	provider := core.DetectTunnelProvider()
+	if provider == "" {
+		actionErr(w, "No tunnel provider found. Install cloudflared or ngrok.", http.StatusUnprocessableEntity)
 		return
 	}
 
-	// Fall back to cloudflared quick tunnel
-	if !core.CommandExists("cloudflared") {
-		actionErr(w, "cloudflared is not installed. Install it with: brew install cloudflared", http.StatusUnprocessableEntity)
-		return
-	}
-
-	result, err := core.StartCloudflaredTunnel(exposePort, 15, false)
-	if err != nil {
+	if err := startQuickTunnel(provider); err != nil {
 		actionErr(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	core.SaveTunnelInfo(clusterName, result.PublicURL, "cloudflared", result.PID)
-	patchIngressesForTunnel(result.PublicURL)
-
-	actionOK(w, "Tunnel started: "+result.PublicURL)
+	info, _ := core.ReadTunnelInfo()
+	url := ""
+	if info != nil {
+		url = info.URL
+	}
+	actionOK(w, "Tunnel started: "+url)
 }
 
 // ── DELETE /api/expose ──────────────────────────────────────────

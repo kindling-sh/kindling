@@ -215,7 +215,7 @@ function CommandMenu({ onClose, onAction }: {
   );
 }
 
-// ── Expose Modal (ingress picker) ───────────────────────────────
+// ── Expose Modal (quick tunnel) ──────────────────────────────────
 
 function ExposeModal({ running, onStart, onStop, onClose }: {
   running: boolean;
@@ -223,54 +223,61 @@ function ExposeModal({ running, onStart, onStop, onClose }: {
   onStop: () => void;
   onClose: () => void;
 }) {
-  const { data } = useApi<K8sList<K8sIngress>>('/api/ingresses');
+  const { data: ingressData } = useApi<K8sList<K8sIngress>>('/api/ingresses');
   const [selected, setSelected] = useState('');
-
-  const ingresses = (data?.items || []).filter(
+  const ingresses = (ingressData?.items || []).filter(
     (i) => i.metadata.namespace !== 'kube-system' && i.metadata.namespace !== 'traefik'
   );
 
-  if (running) {
-    return (
-      <ActionModal title="Stop Tunnel" submitLabel="Stop Tunnel" onSubmit={onStop} onClose={onClose}>
-        <p style={{ color: 'var(--text-secondary)', fontSize: 13 }}>
-          A tunnel is currently active. Stopping it will restore the original ingress hosts.
-        </p>
-      </ActionModal>
-    );
-  }
-
   return (
-    <ActionModal
-      title="Expose / Tunnel"
-      submitLabel="Start Tunnel"
-      onSubmit={() => onStart(selected || undefined)}
-      onClose={onClose}
-    >
-      <p style={{ color: 'var(--text-secondary)', fontSize: 13, marginBottom: 12 }}>
-        Creates a public HTTPS tunnel via Cloudflare and patches the selected ingress host to route through it.
-      </p>
-      <label className="form-label">Target Ingress</label>
-      {ingresses.length === 0 ? (
-        <p style={{ color: 'var(--text-tertiary)', fontSize: 12 }}>
-          No ingresses found — the tunnel will start but no ingress will be patched.
-        </p>
-      ) : (
-        <select
-          className="form-input"
-          value={selected}
-          onChange={(e) => setSelected(e.target.value)}
-        >
-          <option value="">All ingresses (first match)</option>
-          {ingresses.map((ing) => (
-            <option key={`${ing.metadata.namespace}/${ing.metadata.name}`} value={ing.metadata.name}>
-              {ing.metadata.name}
-              {ing.spec.rules?.[0]?.host ? ` (${ing.spec.rules[0].host})` : ''}
-            </option>
-          ))}
-        </select>
-      )}
-    </ActionModal>
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal modal-wide" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 520 }}>
+        <div className="modal-header">
+          <h3>Expose / Tunnel</h3>
+          <button className="btn btn-sm btn-ghost" onClick={onClose}>✕</button>
+        </div>
+
+        <div className="modal-body">
+          {running ? (
+            <>
+              <p style={{ color: 'var(--text-secondary)', fontSize: 13 }}>
+                A tunnel is currently active. Stopping it will restore the original ingress hosts.
+              </p>
+              <div className="modal-footer" style={{ borderTop: 'none', padding: '12px 0 0' }}>
+                <button className="btn" onClick={onClose}>Cancel</button>
+                <button className="btn btn-primary" style={{ background: 'var(--danger)' }} onClick={onStop}>Stop Tunnel</button>
+              </div>
+            </>
+          ) : (
+            <>
+              <p style={{ color: 'var(--text-secondary)', fontSize: 13, marginBottom: 12 }}>
+                Creates a public HTTPS tunnel via Cloudflare and patches the selected ingress host to route through it.
+              </p>
+              <label className="form-label">Target Ingress</label>
+              {ingresses.length === 0 ? (
+                <p style={{ color: 'var(--text-tertiary)', fontSize: 12 }}>
+                  No ingresses found — the tunnel will start but no ingress will be patched.
+                </p>
+              ) : (
+                <select className="form-input" value={selected} onChange={(e) => setSelected(e.target.value)}>
+                  <option value="">All ingresses (first match)</option>
+                  {ingresses.map((ing) => (
+                    <option key={`${ing.metadata.namespace}/${ing.metadata.name}`} value={ing.metadata.name}>
+                      {ing.metadata.name}
+                      {ing.spec.rules?.[0]?.host ? ` (${ing.spec.rules[0].host})` : ''}
+                    </option>
+                  ))}
+                </select>
+              )}
+              <div className="modal-footer" style={{ borderTop: 'none', padding: '12px 0 0' }}>
+                <button className="btn" onClick={onClose}>Cancel</button>
+                <button className="btn btn-primary" onClick={() => onStart(selected || undefined)}>Start Tunnel</button>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -487,7 +494,24 @@ function AppSidebar({ activePage, setActivePage }: { activePage: Page; setActive
   return (
     <aside className="sidebar">
       <div className="sidebar-brand">
-        <span className="brand-icon">◆</span>
+        <svg className="brand-icon-svg" viewBox="0 0 64 64" width="22" height="22">
+          <defs>
+            <linearGradient id="sb-fo" x1="0%" y1="100%" x2="50%" y2="0%">
+              <stop offset="0%" stopColor="#FF6B35"/><stop offset="50%" stopColor="#F7931E"/><stop offset="100%" stopColor="#FFD23F"/>
+            </linearGradient>
+            <linearGradient id="sb-fi" x1="0%" y1="100%" x2="50%" y2="0%">
+              <stop offset="0%" stopColor="#FFD23F"/><stop offset="100%" stopColor="#FFF5CC"/>
+            </linearGradient>
+            <linearGradient id="sb-lg" x1="0%" y1="0%" x2="0%" y2="100%">
+              <stop offset="0%" stopColor="#8B5E3C"/><stop offset="100%" stopColor="#5C3A1E"/>
+            </linearGradient>
+          </defs>
+          <rect x="14" y="50" width="36" height="5" rx="2.5" fill="url(#sb-lg)" transform="rotate(-8 32 52)"/>
+          <rect x="14" y="50" width="36" height="5" rx="2.5" fill="url(#sb-lg)" transform="rotate(8 32 52)"/>
+          <path d="M32 4C32 4 14 24 14 36C14 46 22 54 32 54C42 54 50 46 50 36C50 24 32 4 32 4Z" fill="url(#sb-fo)" opacity="0.95"/>
+          <path d="M32 14C32 14 20 28 20 37C20 44 25 49 32 49C39 49 44 44 44 37C44 28 32 14 32 14Z" fill="#FFAD33" opacity="0.85"/>
+          <path d="M32 24C32 24 25 33 25 38C25 42 28 46 32 46C36 46 39 42 39 38C39 33 32 24 32 24Z" fill="url(#sb-fi)" opacity="0.95"/>
+        </svg>
         <span className="brand-text">kindling</span>
       </div>
 
