@@ -16,6 +16,10 @@ metadata:
     app.kubernetes.io/managed-by: kindling
 spec:
   replicas: 1
+  # Recreate strategy is required because the registry uses hostNetwork —
+  # only one pod can bind port 5000 on the node at a time.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: registry
@@ -37,7 +41,28 @@ spec:
               mountPath: /var/lib/registry
       volumes:
         - name: registry-data
-          emptyDir: {}
+          persistentVolumeClaim:
+            claimName: registry-data
+---
+# PVC for registry persistence across pod restarts.
+# Kind ships with local-path-provisioner so dynamic provisioning
+# works out of the box. Without this, all Kaniko-pushed images
+# are lost when the registry pod restarts (e.g. laptop sleep/reboot).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: registry-data
+  namespace: default
+  labels:
+    app.kubernetes.io/name: registry
+    app.kubernetes.io/component: image-registry
+    app.kubernetes.io/managed-by: kindling
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
 ---
 # ClusterIP Service so that Kaniko pods (which don't use hostNetwork)
 # can push to "registry:5000" via normal K8s DNS resolution.
