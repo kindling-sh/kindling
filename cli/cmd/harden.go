@@ -103,7 +103,8 @@ Examples:
   kindling harden --strict            # override to strict for this run
   kindling harden --category security # run only security checks
   kindling harden --init              # create default .kindling/harden.yaml
-  kindling harden --fix               # show copy-pasteable fix commands`,
+  kindling harden --fix               # show copy-pasteable fix commands
+  kindling harden --agent -k <key>    # AI-powered remediation for each finding`,
 	RunE: runHarden,
 }
 
@@ -114,6 +115,10 @@ var (
 	hardenCategoryFlag string
 	hardenInit         bool
 	hardenFix          bool
+	hardenAgent        bool
+	hardenAPIKey       string
+	hardenProvider     string
+	hardenModel        string
 )
 
 func init() {
@@ -123,6 +128,10 @@ func init() {
 	hardenCmd.Flags().StringVar(&hardenCategoryFlag, "category", "", "Run only a specific category (security, containers, scalability, performance, observability, ci-hygiene)")
 	hardenCmd.Flags().BoolVar(&hardenInit, "init", false, "Create a default .kindling/harden.yaml config file")
 	hardenCmd.Flags().BoolVar(&hardenFix, "fix", false, "Show copy-pasteable fix commands for each finding")
+	hardenCmd.Flags().BoolVar(&hardenAgent, "agent", false, "Use AI to generate a contextual remediation plan for findings")
+	hardenCmd.Flags().StringVarP(&hardenAPIKey, "api-key", "k", "", "GenAI API key (required for --agent)")
+	hardenCmd.Flags().StringVar(&hardenProvider, "ai-provider", "openai", "AI provider: openai or anthropic")
+	hardenCmd.Flags().StringVar(&hardenModel, "model", "", "Model name (default: o3 for openai, claude-sonnet-4-20250514 for anthropic)")
 	rootCmd.AddCommand(hardenCmd)
 }
 
@@ -186,6 +195,22 @@ func runHarden(cmd *cobra.Command, args []string) error {
 
 	// Print results
 	printHardenResults(findings, cfg)
+
+	// Agent mode: send findings to AI for contextual remediation
+	if hardenAgent {
+		if hardenAPIKey == "" {
+			return fmt.Errorf("--agent requires --api-key (-k)")
+		}
+		if hardenModel == "" {
+			switch hardenProvider {
+			case "anthropic":
+				hardenModel = "claude-sonnet-4-20250514"
+			default:
+				hardenModel = "o3"
+			}
+		}
+		return runHardenAgent(repoPath, findings, repoCtx, hardenAPIKey, hardenProvider, hardenModel)
+	}
 
 	return nil
 }
