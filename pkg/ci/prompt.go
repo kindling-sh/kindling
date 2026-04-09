@@ -76,7 +76,25 @@ CRITICAL — build context and Dockerfile COPY paths:
 
   When examining a Dockerfile, check every COPY and ADD instruction. If ANY path
   references a directory or file that is not inside the Dockerfile's parent directory,
-  set context to the repo root and set dockerfile accordingly.`
+  set context to the repo root and set dockerfile accordingly.
+
+  Go monorepo pattern — shared/ package:
+  Go services in a monorepo often import from a shared/ package at the repo root.
+  Their Dockerfiles will contain lines like "COPY shared/ ./shared/" or
+  "COPY go.work go.work.sum ./". If Kaniko's build context is set to the service
+  subdirectory (e.g. analytics/), these COPY instructions fail because shared/ is
+  outside that context. ALL Go services that import from shared/ MUST use the repo
+  root as context:
+
+    # WRONG — analytics/ context cannot reach ../shared/
+    context: ${{ github.workspace }}/analytics
+    # RIGHT — repo root context, Dockerfile path set explicitly
+    context: ${{ github.workspace }}
+    dockerfile: analytics/Dockerfile
+
+  Non-Go services (e.g. cdn, compute, docs, rag-ingest) that have fully
+  self-contained Dockerfiles with no shared/ dependency may keep their
+  subdirectory as context.`
 
 // PromptHealthChecks is shared guidance on health check configuration.
 const PromptHealthChecks = `Health check guidance:
