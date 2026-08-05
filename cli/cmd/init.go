@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -147,6 +148,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 
 	// ── Get the operator image ───────────────────────────────────
 	imgTag := "controller:latest"
+	platform := fmt.Sprintf("linux/%s", runtime.GOARCH)
 
 	if buildOperator {
 		// Build from source — requires Go, Make, and the project checkout
@@ -167,8 +169,8 @@ func runInit(cmd *cobra.Command, args []string) error {
 		// Pull the pre-built image from GHCR
 		header("Pulling kindling operator image")
 
-		step("⬇️ ", fmt.Sprintf("docker pull %s", operatorImage))
-		if err := run("docker", "pull", operatorImage); err != nil {
+		step("⬇️ ", fmt.Sprintf("docker pull --platform %s %s", platform, operatorImage))
+		if err := run("docker", "pull", "--platform", platform, operatorImage); err != nil {
 			return fmt.Errorf("failed to pull operator image %s: %w\n\nTo build from source instead, run: kindling init --build", operatorImage, err)
 		}
 
@@ -187,11 +189,19 @@ func runInit(cmd *cobra.Command, args []string) error {
 	success("Image loaded")
 
 	// ── Load kube-rbac-proxy sidecar into Kind ──────────────────
-	rbacProxyImg := "registry.k8s.io/kubebuilder/kube-rbac-proxy:v0.16.0"
+	// `docker pull` + `kind load docker-image` fails on Docker Desktop's
+	// containerd image store: docker save emits the full multi-platform
+	// manifest list, and `ctr import --all-platforms` then errors because
+	// only the local platform's blobs are present locally. Building a new
+	// image from a one-line Dockerfile forces a single-platform manifest
+	// into the local store, which kind can import cleanly.
+	rbacProxyImg := "quay.io/brancz/kube-rbac-proxy:v0.18.1"
+	rbacProxyLocal := "kube-rbac-proxy-kindling:v0.18.1"
 	step("📦", "Loading kube-rbac-proxy sidecar image")
-	if err := run("docker", "pull", rbacProxyImg); err != nil {
-		warn("Failed to pull kube-rbac-proxy image — operator may not start")
-	} else if err := run("kind", "load", "docker-image", rbacProxyImg, "--name", clusterName); err != nil {
+	if err := runStdin("FROM "+rbacProxyImg+"\n", "docker", "build",
+		"--platform", platform, "-t", rbacProxyLocal, "-"); err != nil {
+		warn("Failed to build single-platform kube-rbac-proxy image — operator may not start")
+	} else if err := run("kind", "load", "docker-image", rbacProxyLocal, "--name", clusterName); err != nil {
 		warn("Failed to load kube-rbac-proxy into Kind")
 	} else {
 		success("kube-rbac-proxy sidecar loaded")
