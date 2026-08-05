@@ -23,7 +23,8 @@ SHELL = /usr/bin/env bash -o pipefail
 .SHELLFLAGS = -ec
 
 .PHONY: all
-all: build
+all: build cli
+	install -m 755 bin/kindling /opt/homebrew/bin/kindling
 
 ##@ General
 
@@ -80,8 +81,12 @@ build: manifests generate fmt vet ## Build manager binary.
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 
+.PHONY: ui
+ui: ## Build the dashboard UI (required before building the CLI).
+	cd cli/cmd/dashboard-ui && npm ci --silent && npm run build
+
 .PHONY: cli
-cli: ## Build the kindling CLI binary.
+cli: ui ## Build the kindling CLI binary.
 	cd cli && go build -ldflags "-s -w -X github.com/jeffvincent/kindling/cli/cmd.Version=$(VERSION)" -o ../bin/kindling .
 	@echo "✅ bin/kindling $(VERSION) built — run: ./bin/kindling --help"
 

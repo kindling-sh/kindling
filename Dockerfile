@@ -1,5 +1,5 @@
 # Build the manager binary
-FROM golang:1.25 as builder
+FROM golang:1.25 AS builder
 
 LABEL org.opencontainers.image.source="https://github.com/kindling-sh/kindling"
 LABEL org.opencontainers.image.description="Kindling operator – local Kubernetes dev environments"
