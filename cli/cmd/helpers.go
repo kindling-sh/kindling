@@ -236,6 +236,21 @@ func resolveProjectDir() (string, error) {
 	}
 
 	// Clone
+	//
+	// At this point cachedDir doesn't contain a valid checkout (the
+	// "already cloned" branch above already returned if it did) — but it
+	// may still exist as a stale/incomplete directory (e.g. left over from
+	// an older kindling version's clone layout, a previous interrupted
+	// clone, or unrelated leftover files). `git clone` refuses to write
+	// into a non-empty directory, so wipe it first rather than failing
+	// with a confusing "destination path already exists" error.
+	if info, statErr := os.Stat(cachedDir); statErr == nil && info.IsDir() {
+		warn(fmt.Sprintf("%s exists but isn't a valid checkout — recreating it", cachedDir))
+		if err := os.RemoveAll(cachedDir); err != nil {
+			return "", fmt.Errorf("cannot remove stale %s: %w", cachedDir, err)
+		}
+	}
+
 	step("📥", fmt.Sprintf("Cloning kindling project (%s) to ~/.kindling", ref))
 	if err := run("git", "clone", "--depth=1", "--branch", ref,
 		"https://github.com/kindling-sh/kindling.git", cachedDir); err != nil {
@@ -245,6 +260,11 @@ func resolveProjectDir() (string, error) {
 		// Tag might not exist yet (e.g. a release still propagating) —
 		// fall back to main so init still works, rather than hard-failing.
 		warn(fmt.Sprintf("Could not clone tag %s — falling back to main", ref))
+		// The failed attempt above may have left a partial directory
+		// behind (git creates the destination before it starts
+		// networking) — remove it so the retry doesn't hit the same
+		// "already exists" error regardless of the real failure cause.
+		_ = os.RemoveAll(cachedDir)
 		if err := run("git", "clone", "--depth=1",
 			"https://github.com/kindling-sh/kindling.git", cachedDir); err != nil {
 			return "", fmt.Errorf("failed to clone kindling repo to %s: %w", cachedDir, err)

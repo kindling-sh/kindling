@@ -192,9 +192,17 @@ func runInit(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("failed to pull operator image %s: %w\n\nTo build from source instead, run: kindling init --build", operatorImage, err)
 		}
 
-		// Tag as controller:latest so kustomize config works as-is
-		if err := run("docker", "tag", operatorImage, imgTag); err != nil {
-			return fmt.Errorf("failed to tag operator image: %w", err)
+		// Re-package as a single-platform image before tagging. On Docker
+		// Desktop's containerd image store, `docker pull --platform X`
+		// still leaves the local tag referencing the full multi-platform
+		// manifest list; `kind load docker-image` (docker save + ctr
+		// import) then fails with "content digest ... not found" because
+		// only the requested platform's blobs are present locally.
+		// Building a new image from a one-line Dockerfile forces a real
+		// single-platform manifest into the local store, which kind can
+		// import cleanly (same fix used for kube-rbac-proxy below).
+		if err := buildSinglePlatformImage(operatorImage, platform, imgTag); err != nil {
+			return fmt.Errorf("failed to create single-platform operator image: %w", err)
 		}
 		success(fmt.Sprintf("Operator image ready (%s)", operatorImage))
 	}
@@ -216,8 +224,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 	rbacProxyImg := "quay.io/brancz/kube-rbac-proxy:v0.18.1"
 	rbacProxyLocal := "kube-rbac-proxy-kindling:v0.18.1"
 	step("📦", "Loading kube-rbac-proxy sidecar image")
-	if err := runStdin("FROM "+rbacProxyImg+"\n", "docker", "build",
-		"--platform", platform, "-t", rbacProxyLocal, "-"); err != nil {
+	if err := buildSinglePlatformImage(rbacProxyImg, platform, rbacProxyLocal); err != nil {
 		warn("Failed to build single-platform kube-rbac-proxy image — operator may not start")
 	} else if err := run("kind", "load", "docker-image", rbacProxyLocal, "--name", clusterName); err != nil {
 		warn("Failed to load kube-rbac-proxy into Kind")
@@ -288,4 +295,21 @@ func runInit(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+// buildSinglePlatformImage re-packages a pulled image as a single-platform
+// image tagged localTag, by building a one-line "FROM <srcImage>" Dockerfile
+// for the given platform.
+//
+// This works around a Docker Desktop containerd-image-store issue: even
+// after `docker pull --platform X <srcImage>`, the local tag can still
+// reference the full multi-platform manifest list. `kind load docker-image`
+// (which does `docker save` + `ctr import`) then fails with
+// "content digest ... not found" because only the requested platform's
+// blobs are actually present locally. Building a new image forces Docker to
+// materialize a real single-platform manifest, which kind can import
+// cleanly.
+func buildSinglePlatformImage(srcImage, platform, localTag string) error {
+	return runStdin("FROM "+srcImage+"\n", "docker", "build",
+		"--platform", platform, "-t", localTag, "-")
 }
