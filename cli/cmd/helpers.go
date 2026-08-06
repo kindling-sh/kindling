@@ -199,32 +199,56 @@ func resolveProjectDir() (string, error) {
 	}
 	cachedDir := filepath.Join(home, ".kindling")
 
+	// Pin the auto-cloned checkout to this CLI binary's own release tag.
+	// DefaultOperatorImage is pinned to the same version at release time
+	// (see .goreleaser.yml), so the operator image that gets pulled by
+	// default must be matched with CRDs/kustomize manifests from that same
+	// tag — not whatever main happens to be at, which drifts constantly on
+	// an actively developed repo and can introduce CRD/controller schema
+	// mismatches that only "--build" (which builds from the same checkout)
+	// papers over. Unreleased/dev builds (Version == "dev") have no
+	// matching tag, so they fall back to main as before.
+	ref := "main"
+	if Version != "dev" {
+		ref = "v" + Version
+	}
+
 	if _, err := os.Stat(filepath.Join(cachedDir, "kind-config.yaml")); err == nil {
-		// Already cloned — fix remote if pointing to old org, then pull latest
+		// Already cloned — fix remote if pointing to old org, then sync to
+		// the ref matching this CLI's version.
 		step("📂", fmt.Sprintf("Using cached project at %s", cachedDir))
 		remote, _ := runCapture("git", "-C", cachedDir, "remote", "get-url", "origin")
 		if strings.Contains(remote, "jeff-vincent/kindling") {
 			_ = runDir(cachedDir, "git", "remote", "set-url", "origin",
 				"https://github.com/kindling-sh/kindling.git")
 		}
-		// Unshallow if needed so ff-only pull works on grafted clones
+		// Unshallow if needed so fetching an arbitrary tag/branch works on
+		// grafted clones
 		if _, err := os.Stat(filepath.Join(cachedDir, ".git", "shallow")); err == nil {
 			_ = runDir(cachedDir, "git", "fetch", "--unshallow", "-q")
 		}
-		if err := runDir(cachedDir, "git", "pull", "--ff-only", "-q"); err != nil {
-			// ff-only failed — force reset to origin/main
-			warn("Cached ~/.kindling diverged — resetting to latest")
-			_ = runDir(cachedDir, "git", "fetch", "origin", "-q")
-			_ = runDir(cachedDir, "git", "reset", "--hard", "origin/main")
+		if err := runDir(cachedDir, "git", "fetch", "origin", ref, "-q"); err != nil {
+			warn(fmt.Sprintf("Could not fetch %s — using existing cached checkout", ref))
+		} else if err := runDir(cachedDir, "git", "checkout", "-q", "FETCH_HEAD"); err != nil {
+			warn(fmt.Sprintf("Could not check out %s — using existing cached checkout", ref))
 		}
 		return cachedDir, nil
 	}
 
 	// Clone
-	step("📥", "Cloning kindling project to ~/.kindling")
-	if err := run("git", "clone", "--depth=1",
+	step("📥", fmt.Sprintf("Cloning kindling project (%s) to ~/.kindling", ref))
+	if err := run("git", "clone", "--depth=1", "--branch", ref,
 		"https://github.com/kindling-sh/kindling.git", cachedDir); err != nil {
-		return "", fmt.Errorf("failed to clone kindling repo to %s: %w", cachedDir, err)
+		if ref == "main" {
+			return "", fmt.Errorf("failed to clone kindling repo to %s: %w", cachedDir, err)
+		}
+		// Tag might not exist yet (e.g. a release still propagating) —
+		// fall back to main so init still works, rather than hard-failing.
+		warn(fmt.Sprintf("Could not clone tag %s — falling back to main", ref))
+		if err := run("git", "clone", "--depth=1",
+			"https://github.com/kindling-sh/kindling.git", cachedDir); err != nil {
+			return "", fmt.Errorf("failed to clone kindling repo to %s: %w", cachedDir, err)
+		}
 	}
 	return cachedDir, nil
 }

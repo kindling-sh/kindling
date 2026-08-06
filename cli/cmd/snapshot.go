@@ -417,6 +417,13 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Fail fast on missing tools before reading cluster state or prompting
+	// for registry credentials — cheaper to catch here than deep inside
+	// the push step after the user has already typed a password.
+	if snapshotRegistry != "" && !commandExists("crane") {
+		return fmt.Errorf("crane is required for --registry (brew install crane) — run 'kindling init' to check for this and other optional tools")
+	}
+
 	header("Exporting cluster snapshot")
 
 	step("📡", "Reading DevStagingEnvironments from cluster")
@@ -475,12 +482,7 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 		}
 
 		if err := craneCopyImages(dses, snapshotRegistry, tag, userPrefix, regUser, regPass); err != nil {
-			warn(fmt.Sprintf("Could not push images: %v", err))
-			warn("Falling back to image references only (no push)")
-			// Still rewrite image refs so the chart targets the right registry
-			for i := range dses {
-				dses[i].Image = registryImage(dses[i].Name, snapshotRegistry, tag)
-			}
+			return fmt.Errorf("image push failed: %w", err)
 		}
 	}
 
@@ -1878,18 +1880,20 @@ func craneCopyImages(dses []snapshotDSE, registry, tag, userPrefix, regUser, reg
 		if !pushed {
 			warn(fmt.Sprintf("Could not push %s — not in registry or Docker daemon", dses[i].Name))
 			failed = append(failed, dses[i].Name)
+			// Do NOT rewrite the image ref on failure — leaving it pointed
+			// at the production destination tag would make the deploy
+			// silently reuse whatever image already happens to exist there
+			// (stale or wrong-arch), instead of surfacing the failure.
+			continue
 		}
 
-		// Always rewrite image ref to target the production registry
+		// Only rewrite the image ref once the push has actually succeeded.
 		dses[i].Image = dst
 	}
 
-	if len(failed) == len(seen) {
-		return fmt.Errorf("all image pushes failed — check registry credentials and source images")
-	}
 	if len(failed) > 0 {
-		warn(fmt.Sprintf("%d/%d images could not be pushed: %s",
-			len(failed), len(seen), strings.Join(failed, ", ")))
+		return fmt.Errorf("%d/%d image(s) could not be pushed: %s — refusing to deploy, since the destination tag(s) may already reference a stale or wrong-architecture image",
+			len(failed), len(seen), strings.Join(failed, ", "))
 	}
 
 	success("Images pushed to registry")
