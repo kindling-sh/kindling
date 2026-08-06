@@ -307,33 +307,60 @@ Override with: `make docker-build IMG=myregistry/kindling:v1.0.0`
 
 ## Release process
 
-### Version bump
+Releases are fully automated by GoReleaser (`.goreleaser.yml`) and the
+`release` GitHub Actions workflow (`.github/workflows/release.yml`) — there
+is no manual version bump in source. `Version` and the default operator
+image tag (`DefaultOperatorImage`) are both injected via ldflags from the
+git tag at release time (see the `builds.ldflags` section of
+`.goreleaser.yml`).
 
-1. Update `version` in `cli/cmd/version.go`
-2. Update `CHANGELOG.md`
-3. Run tests: `make test`
-4. Build: `make cli`
-5. Tag: `git tag v0.9.0`
-6. Push: `git push origin v0.9.0`
+`main` is protected — direct pushes/merges are blocked. Releases always go
+**PR → merge → tag → push tag**, in that order. Tagging before the merge
+would ship a release from a commit that was never actually reviewed onto
+`main`, and — since `resolveProjectDir`'s `~/.kindling` auto-clone is pinned
+to `v<Version>` — would check out CRDs/manifests that don't match what's on
+`main`.
 
-### Binary distribution
+1. **Open a PR** from your branch into `main`:
+   ```bash
+   git push -u origin <branch>
+   gh pr create --base main --head <branch> --title "..." --body "..."
+   ```
+2. **Wait for CI** (`ci.yml` runs on PRs to `main`) to pass, then get the PR
+   reviewed and merged on GitHub through the normal flow — branch
+   protection requires it, there's no way around it (and shouldn't be).
+3. **Tag the resulting `main` commit** with the next version (semver —
+   patch for fixes, minor for user-facing features, major for breaking
+   changes):
+   ```bash
+   git checkout main && git pull --ff-only
+   git tag v0.11.1
+   git push origin v0.11.1
+   ```
+4. Pushing the tag triggers `release.yml`, which:
+   - Builds & publishes CLI binaries for `linux`/`darwin` × `amd64`/`arm64`
+     via GoReleaser
+   - Updates the `kindling-sh/homebrew-tap` formula
+   - Builds & pushes the multi-arch (`linux/amd64,linux/arm64`) operator
+     image to `ghcr.io/kindling-sh/kindling-operator`, tagged with the
+     version, `<major>.<minor>`, `latest`, and the commit SHA
+   - Creates a GitHub Release with changelog + binaries
 
-The CLI binary is the primary distribution artifact:
+Note: git tags are independent refs — `release.yml` triggers on any `v*`
+tag push regardless of which branch contains that commit. Still, always tag
+`main` (after merging), never a feature branch, so the released version
+matches what's actually shipped.
 
+### Manual/ad-hoc operator image builds
+
+For a one-off test image (not a real release — e.g. testing an operator
+change against a prod cluster before it's merged), use the manual workflow
+instead of tagging:
 ```bash
-# Build for multiple platforms
-GOOS=darwin GOARCH=arm64 go build -o kindling-darwin-arm64 ./cli
-GOOS=darwin GOARCH=amd64 go build -o kindling-darwin-amd64 ./cli
-GOOS=linux GOARCH=amd64  go build -o kindling-linux-amd64  ./cli
-GOOS=linux GOARCH=arm64  go build -o kindling-linux-arm64  ./cli
+gh workflow run publish-operator.yml -f tag=edge
 ```
-
-### Operator image
-
-```bash
-make docker-build IMG=ghcr.io/jeffvincent/kindling:v0.9.0
-make docker-push  IMG=ghcr.io/jeffvincent/kindling:v0.9.0
-```
+This pushes `ghcr.io/kindling-sh/kindling-operator:edge` without touching
+CLI binaries, Homebrew, or GitHub Releases.
 
 ---
 
