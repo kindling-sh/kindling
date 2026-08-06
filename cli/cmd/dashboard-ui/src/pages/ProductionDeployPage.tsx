@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
-import { fetchSnapshotStatus, fetchSnapshotCredentials, streamSnapshotDeploy, updateProdSecrets } from '../api';
-import type { SnapshotStatus, SnapshotService } from '../types';
+import { fetchSnapshotStatus, fetchSnapshotCredentials, streamSnapshotDeploy, updateProdSecrets, fetchProdIngressController } from '../api';
+import type { SnapshotStatus, SnapshotService, IngressControllerInfo } from '../types';
 import type { SnapshotCredential } from '../api';
 import { StatusBadge, EmptyState } from './shared';
 
@@ -35,6 +35,11 @@ export function ProductionDeployPage() {
   const [postDeploySecretValues, setPostDeploySecretValues] = useState<Record<string, string>>({});
   const [secretUpdateStatus, setSecretUpdateStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [secretUpdateMsg, setSecretUpdateMsg] = useState('');
+
+  // Post-deploy external IP lookup — the ingress controller's cloud LB
+  // can take a minute or two to provision, so poll until it shows up.
+  const [ingressInfo, setIngressInfo] = useState<IngressControllerInfo | null>(null);
+  const [ingressLookupFailed, setIngressLookupFailed] = useState(false);
 
   useEffect(() => {
     Promise.all([
@@ -71,6 +76,36 @@ export function ProductionDeployPage() {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
   }, [logs]);
 
+  // Once the deploy finishes successfully, look up the ingress controller's
+  // external address so the user can point DNS at it right away. Poll for
+  // a couple of minutes in case a cloud load balancer is still provisioning.
+  useEffect(() => {
+    if (step !== 'done' || logs.some(l => l.type === 'error')) return;
+    let cancelled = false;
+    let attempts = 0;
+    setIngressLookupFailed(false);
+
+    const poll = () => {
+      fetchProdIngressController()
+        .then(info => {
+          if (cancelled) return;
+          setIngressInfo(info);
+          attempts += 1;
+          if (!info.external_ip && attempts < 24) {
+            setTimeout(poll, 5000);
+          } else if (!info.external_ip) {
+            setIngressLookupFailed(true);
+          }
+        })
+        .catch(() => {
+          if (!cancelled) setIngressLookupFailed(true);
+        });
+    };
+    poll();
+
+    return () => { cancelled = true; };
+  }, [step, logs]);
+
   function toggleIngress(name: string) {
     setSelectedIngress(prev => {
       const next = new Set(prev);
@@ -84,6 +119,8 @@ export function ProductionDeployPage() {
     if (!registry) return;
     setStep('deploying');
     setLogs([]);
+    setIngressInfo(null);
+    setIngressLookupFailed(false);
 
     // Build credentials map — only include non-empty values
     const credentials: Record<string, string> = {};
@@ -111,6 +148,8 @@ export function ProductionDeployPage() {
     if (cancelRef.current) cancelRef.current();
     setStep('configure');
     setLogs([]);
+    setIngressInfo(null);
+    setIngressLookupFailed(false);
     fetchSnapshotStatus().then(s => setStatus(s)).catch(() => {});
   }
 
@@ -424,6 +463,54 @@ export function ProductionDeployPage() {
               </button>
             </div>
           )}
+        </div>
+      )}
+
+      {/* External access — the ingress controller's address for DNS/TLS setup */}
+      {step === 'done' && !logs.some(l => l.type === 'error') && (
+        <div className="card" style={{ marginTop: 16 }}>
+          <div className="card-header">
+            <span className="card-icon">🌐</span>
+            <h3>External Access</h3>
+          </div>
+          <div className="card-body">
+            {!ingressInfo?.external_ip && !ingressLookupFailed && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }} className="text-dim">
+                <span className="deploy-log-icon deploy-log-spinner">◌</span>
+                Waiting for the ingress controller's external IP (cloud load balancers can take a minute or two to provision)…
+              </div>
+            )}
+
+            {!ingressInfo?.external_ip && ingressLookupFailed && (
+              <div style={{ padding: '8px 12px', background: 'var(--bg-elevated)', borderRadius: 6, border: '1px solid var(--error-border, #cc444444)', fontSize: 13 }}>
+                ✗ Could not determine an external IP yet. Run <code>kubectl get svc -n traefik --context {status?.context}</code> from
+                the CLI, or click Refresh below once the ingress controller has an address.
+                <div style={{ marginTop: 8 }}>
+                  <button className="btn btn-secondary" onClick={() => { setIngressLookupFailed(false); fetchProdIngressController().then(setIngressInfo).catch(() => setIngressLookupFailed(true)); }}>
+                    Refresh
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {ingressInfo?.external_ip && (
+              <>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 8 }}>
+                  <span className="mono" style={{ fontSize: 16, fontWeight: 600 }}>{ingressInfo.external_ip}</span>
+                  <span className="tag" style={{ fontSize: 10 }}>load balancer</span>
+                </div>
+                <div style={{ marginBottom: 12, padding: '8px 12px', background: 'var(--bg-elevated)', borderRadius: 6, border: '1px solid var(--info-border, #4488cc44)', fontSize: 13 }}>
+                  Create a DNS A record pointing your domain at this address, then configure TLS:
+                  <pre className="prod-code-block" style={{ marginTop: 8 }}>
+{`<your-domain>  →  ${ingressInfo.external_ip}
+
+kindling production tls --context ${status?.context} \\
+  --domain <your-domain> --email <you@example.com>`}
+                  </pre>
+                </div>
+              </>
+            )}
+          </div>
         </div>
       )}
 

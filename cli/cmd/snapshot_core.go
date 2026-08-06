@@ -43,28 +43,24 @@ func stripDSEPrefix(dses []snapshotDSE) string {
 
 // pushSnapshotImages pushes images from the local Kind cluster to a
 // remote registry via crane/docker, then rewrites dse[i].Image to
-// point at the destination. On total failure the image refs are still
-// rewritten so the generated chart references the correct registry.
+// point at the destination. If any image fails to push, it returns an
+// error instead of silently leaving the chart pointed at whatever
+// image already happens to exist at the destination tag.
 //
 // progress is an optional callback for streaming status messages.
-func pushSnapshotImages(dses []snapshotDSE, registry, tag, userPrefix, regUser, regPass string, progress func(string)) {
+func pushSnapshotImages(dses []snapshotDSE, registry, tag, userPrefix, regUser, regPass string, progress func(string)) error {
 	if progress == nil {
 		progress = func(string) {}
 	}
 
 	progress(fmt.Sprintf("Pushing images to %s (tag: %s)", registry, tag))
 
-	err := craneCopyImages(dses, registry, tag, userPrefix, regUser, regPass)
-	if err != nil {
-		progress(fmt.Sprintf("Image push encountered errors: %v — falling back to ref-only rewrite", err))
-		// Fallback: rewrite image refs so the chart targets the right
-		// registry even though the push didn't succeed for everything.
-		for i := range dses {
-			dses[i].Image = registryImage(dses[i].Name, registry, tag)
-		}
-	} else {
-		progress("Images pushed to registry")
+	if err := craneCopyImages(dses, registry, tag, userPrefix, regUser, regPass); err != nil {
+		return err
 	}
+
+	progress("Images pushed to registry")
+	return nil
 }
 
 // ── 3. Export chart ─────────────────────────────────────────────

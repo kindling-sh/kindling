@@ -25,3 +25,18 @@ kindling-snapshot/
 
 # kindling secrets (do not commit)
 .kindling/secrets.yaml
+
+# Agentic coding-assistant context files — deliberately removed from the repo
+# (see "remove sloppy agentic context files") and regenerated locally by
+# `kindling intel`. Never commit these back.
+.github/copilot-instructions.md
+CLAUDE.md
+CONTEXT.md
+TODO.md
+.cursor/
+.windsurfrules
+cli/.github/copilot-instructions.md
+cli/CLAUDE.md
+cli/.cursor/
+cli/.windsurfrules
+

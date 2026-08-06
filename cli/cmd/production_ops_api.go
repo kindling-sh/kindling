@@ -199,9 +199,12 @@ func handleProdSnapshotDeploy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// ── Push images (shared pipeline) ──────────────────────────
-	pushSnapshotImages(dses, body.Registry, tag, userPrefix, body.RegistryUser, body.RegistryPass, func(msg string) {
+	if err := pushSnapshotImages(dses, body.Registry, tag, userPrefix, body.RegistryUser, body.RegistryPass, func(msg string) {
 		send("step", msg)
-	})
+	}); err != nil {
+		send("error", "Image push failed: "+err.Error())
+		return
+	}
 
 	// ── Generate chart (shared pipeline) ────────────────────────
 	chartName := "kindling-snapshot"
