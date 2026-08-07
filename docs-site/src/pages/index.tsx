@@ -240,9 +240,9 @@ const features: FeatureItem[] = [
   },
   {
     icon: <IconBrain />,
-    title: "Agent Intel",
+    title: "Explain On-Demand",
     description:
-      "Auto-configures GitHub Copilot, Claude Code, Cursor, and Windsurf with full project context. Activates on any command, restores originals when you're done.",
+      "kindling explain gives your coding agent concise, always-current workflow guidance (hot reload, dependencies, builds, secrets) — pulled on demand, not injected into every session.",
   },
   {
     icon: <IconGlobe />,

@@ -90,7 +90,6 @@ func runDashboard(cmd *cobra.Command, args []string) error {
 	mux.HandleFunc("/api/runtime/", handleRuntimeDetect)               // GET /api/runtime/{ns}/{dep}
 	mux.HandleFunc("/api/load", handleLoadAction)                      // POST — build + load + rollout
 	mux.HandleFunc("/api/load-context", handleLoadContext)             // GET — discover service dirs
-	mux.HandleFunc("/api/intel", handleIntel)                          // GET=status, POST=activate, DELETE=deactivate
 	mux.HandleFunc("/api/analyze", handleAnalyze)                      // POST — repo readiness analysis
 	mux.HandleFunc("/api/generate", handleGenerate)                    // POST — AI workflow generation (ndjson)
 	mux.HandleFunc("/api/git/commit-and-push", handleGitCommitAndPush) // POST — commit + push (ndjson)

@@ -20,7 +20,7 @@ description: Complete reference for all kindling CLI commands. Structured for LL
 |---|---|---|
 | `kindling init` | Setup | Bootstrap Kind cluster + operator |
 | `kindling runners` | Setup | Register CI runner pool (GitHub/GitLab) |
-| `kindling intel` | Setup | Toggle AI assistant context files |
+| `kindling explain` | Setup | On-demand kindling concepts/workflow guidance |
 | `kindling analyze` | Setup | Check project readiness |
 | `kindling generate` | Setup | AI-generate CI workflow |
 | `kindling deploy` | Develop | Apply DSE from YAML file |
@@ -130,11 +130,16 @@ kindling runners --ci-provider gitlab -u myuser -r mygroup/myproject -t glpat_xx
 
 ---
 
-### `kindling intel`
+### `kindling explain`
 
-**Synopsis:** `kindling intel on|off`
+**Synopsis:** `kindling explain [topic]`
 
-Toggle agent context files for AI coding assistants (GitHub Copilot, Claude Code, Cursor, Windsurf). Generates `.github/copilot-instructions.md`, `CLAUDE.md`, `.cursor/rules/`, and `.windsurfrules` with full project context.
+Prints short, current guidance on kindling concepts and workflows (e.g. debugging/hot-reload, dependency auto-injection, Kaniko build constraints, secrets flow, production graduation) — pulled on demand instead of injected into every coding-agent session. Run with no arguments to list topics.
+
+```bash
+kindling explain
+kindling explain debugging
+```
 
 ---
 

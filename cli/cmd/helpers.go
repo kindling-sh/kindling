@@ -273,6 +273,77 @@ func resolveProjectDir() (string, error) {
 	return cachedDir, nil
 }
 
+// findRepoRoot returns the project directory for commands that operate on
+// the user's repo (analyze, generate, dashboard actions), independent of
+// the Kind-project resolution in resolveProjectDir.
+//
+// Resolution order:
+//  1. Explicit --project-dir / -p flag
+//  2. cwd if it has .git
+//  3. cwd if it has common project-root indicators
+//  4. Walk up to nearest .git
+//  5. Fall back to cwd
+func findRepoRoot() (string, error) {
+	// 1. Honour the global --project-dir flag
+	if projectDir != "" {
+		abs, err := filepath.Abs(projectDir)
+		if err != nil {
+			return "", fmt.Errorf("cannot resolve --project-dir: %w", err)
+		}
+		return abs, nil
+	}
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("cannot determine working directory: %w", err)
+	}
+
+	// 2. If cwd has .git, it's definitely the root
+	if _, err := os.Stat(filepath.Join(cwd, ".git")); err == nil {
+		return cwd, nil
+	}
+
+	// 3. If cwd has common project-root indicators, treat it as root even
+	// without .git
+	if looksLikeProjectRoot(cwd) {
+		return cwd, nil
+	}
+
+	// 4. Walk up looking for .git
+	dir := cwd
+	for {
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			// 5. Reached filesystem root — fall back to cwd
+			return cwd, nil
+		}
+		dir = parent
+		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+			return dir, nil
+		}
+	}
+}
+
+// looksLikeProjectRoot returns true if the directory contains any common
+// project-root indicators.
+func looksLikeProjectRoot(dir string) bool {
+	indicators := []string{
+		".kindling",
+		"go.mod",
+		"package.json",
+		"Makefile",
+		"requirements.txt",
+		"pyproject.toml",
+		"Cargo.toml",
+	}
+	for _, f := range indicators {
+		if _, err := os.Stat(filepath.Join(dir, f)); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
 // clusterExists checks whether a Kind cluster with the given name exists.
 func clusterExists(name string) bool {
 	out, err := runCapture("kind", "get", "clusters")

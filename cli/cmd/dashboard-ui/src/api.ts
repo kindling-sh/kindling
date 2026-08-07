@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import type { RuntimeInfo, SyncStatus, ServiceDir, IntelStatus, TopologyGraph, TopologyStatusMap, TopologyNodeDetail, TopologyLogs, ProdClusterInfo, NodeMetric, PodMetric, RolloutRevision, PrometheusStatus, PromQueryResult, CertificateItem, ClusterIssuerItem, AdvisorResponse, SnapshotStatus, TLSStatus, MetricsStackStatus, IngressControllerInfo } from './types';
+import type { RuntimeInfo, SyncStatus, ServiceDir, TopologyGraph, TopologyStatusMap, TopologyNodeDetail, TopologyLogs, ProdClusterInfo, NodeMetric, PodMetric, RolloutRevision, PrometheusStatus, PromQueryResult, CertificateItem, ClusterIssuerItem, AdvisorResponse, SnapshotStatus, TLSStatus, MetricsStackStatus, IngressControllerInfo } from './types';
 
 const API_BASE = '';
 
@@ -118,19 +118,6 @@ export async function fetchServiceDirs(): Promise<ServiceDir[]> {
   return apiFetch<ServiceDir[]>('/api/load-context');
 }
 
-// ── Intel helpers ────────────────────────────────────────────────
-
-export async function fetchIntelStatus(): Promise<IntelStatus> {
-  return apiFetch<IntelStatus>('/api/intel');
-}
-
-export async function activateIntel(): Promise<ActionResult> {
-  return apiPost('/api/intel');
-}
-
-export async function deactivateIntel(): Promise<ActionResult> {
-  return apiDelete('/api/intel');
-}
 
 // ── Generate helper (ndjson stream) ──────────────────────────────
 

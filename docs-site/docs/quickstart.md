@@ -133,7 +133,6 @@ Every `git push` rebuilds and redeploys. `kindling sync` gives you sub-second it
 
 | Want to... | Guide |
 |---|---|
-| Give your coding agent kindling context | [Agent Intel](intel.md) |
 | Manage API keys and secrets | [Secrets Management](secrets.md) |
 | Set up OAuth callbacks | [OAuth & Tunnels](oauth-tunnels.md) |
 | Deploy without GitHub Actions | [Manual Deploy](guides/manual-deploy.md) |

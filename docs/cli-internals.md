@@ -27,21 +27,10 @@ Build: `cd cli && go build -o kindling .` (or `make cli`)
 - `--project-dir` — override project directory resolution
 - `--kubeconfig` — override kubeconfig path (default `~/.kube/config`)
 
-**PersistentPreRun: `autoIntel()`**
-
-Every command (except `intel`, `version`, `help`, `completion`) triggers
-automatic agent context management:
-
-```
-1. Read .kindling/context.md — if missing, skip
-2. If intel explicitly disabled (marker file), skip
-3. If stale (>1 hour since last interaction), restore
-4. If not active, activate
-5. Touch interaction timestamp
-```
-
-This ensures the `.github/copilot-instructions.md` context file stays
-current without manual intervention.
+The root command's `Long` description carries a short "philosophy" blurb
+(idioms like `kindling deploy` over raw `kubectl apply`, Kaniko over
+`docker build`) and points to `kindling explain` for deeper topics — this
+replaced the old always-on `intel.go` context-file generation (removed).
 
 **`resolveProjectDir()`**
 
@@ -775,46 +764,26 @@ constructs the CIRunnerPool CR YAML and applies it.
 
 ---
 
-## intel.go — Agent context management (729 lines)
+## explain.go — On-demand concept/workflow guidance
 
-**Command:** `kindling intel [on|off]`
+**Command:** `kindling explain [topic]`
 
 **What it does:**
-- `on` — scans the project, generates context files, enables auto-lifecycle
-- `off` — removes context files, disables auto-lifecycle
-- (no subcommand) — shows current status
+- (no argument) — lists available topics with a one-line summary each
+- `<topic>` — prints that topic's guidance (overview, debugging,
+  dependencies, builds, secrets, production)
 
-**Context files generated:**
-- `.kindling/context.md` — canonical context (this repo's details)
-- `.github/copilot-instructions.md` — GitHub Copilot context (symlink or copy)
-
-**Project scanning:**
-
-```go
-func scanProject() ProjectInfo {
-    // Detect languages (Go, Python, Node, Ruby, Java, etc.)
-    languages := detectLanguages()
-
-    // Find Dockerfiles
-    dockerfiles := findDockerfiles()
-
-    // Check for existing CI workflow
-    ciWorkflow := detectCIWorkflow()
-
-    // Check for dependencies in DSE YAML
-    dependencies := parseDSEDependencies()
-
-    return ProjectInfo{Languages, Dockerfiles, CIWorkflow, Dependencies}
-}
-```
-
-**Auto-lifecycle (PersistentPreRun):**
-
-The auto-lifecycle hook ensures context files stay current:
-- Regenerates if project structure changes
-- Cleans up if intel was disabled
-- Tracks last interaction timestamp for staleness detection
-- Skips non-interactive commands (version, help, completion)
+Content is a small, hardcoded `[]explainTopic` table shipped inside the
+binary — always in sync with the installed CLI version, no repo
+footprint, no per-agent file duplication. This replaced `intel.go`
+(removed), which used to write static context files
+(`.github/copilot-instructions.md`, `CLAUDE.md`, `.cursor/rules/*.mdc`,
+`.windsurfrules`) into the user's repo on every command and manage a
+backup/restore/staleness lifecycle for them. The problems with that
+approach: always-loaded token cost regardless of relevance, repo
+pollution across 4+ file formats, and static content that drifts from
+the actual CLI/CRD behavior over releases. `kindling explain` is pulled
+on demand instead, at whatever granularity the agent actually needs.
 
 ---
 
