@@ -26,8 +26,8 @@ Agent writes code ──► file saved ──► kindling sync ──► app res
        └──── agent tests endpoint ◄── result in <2 seconds ─┘
 ```
 
-With `kindling intel` feeding your agent the project context and
-`kindling sync` hot-reloading every change, the agent can iterate
+With `kindling sync` hot-reloading every change and `kindling explain`
+available for on-demand workflow guidance, the agent can iterate
 autonomously: write code → see it running → fix issues → repeat.
 No human in the loop for the build-deploy cycle.
 

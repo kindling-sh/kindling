@@ -384,37 +384,30 @@ Developer runs `kindling destroy` and needs to rebuild.
 
 ---
 
-## Flow 8: Agent context lifecycle
+## Flow 8: On-demand agent guidance
 
 ### Scenario
-Developer uses GitHub Copilot and wants persistent project context.
+A coding agent working in a user's repo needs to understand a kindling
+workflow (e.g. "how do I debug this") without a maintainer front-loading
+context into every session.
 
 ### Steps
 
 ```
-1. kindling intel on
+1. Agent runs `kindling --help`
    │
-   ├─ Scan project: languages, Dockerfiles, deps, CI status
-   ├─ Generate .kindling/context.md (canonical)
-   ├─ Generate .github/copilot-instructions.md (Copilot)
-   └─ Output: 🔥 kindling intel active
+   └─ Root command's Long description carries a short philosophy blurb
+      (deploy with `kindling deploy`, builds via Kaniko, etc.) and points
+      to `kindling explain` for deeper topics.
 
-2. Developer uses any kindling command
+2. Agent runs `kindling explain` (no args)
    │
-   └─ PersistentPreRun → autoIntel():
-       ├─ Check staleness (>1 hour?)
-       ├─ If stale, regenerate context
-       └─ Touch interaction timestamp
+   └─ Lists topics: overview, debugging, dependencies, builds, secrets,
+      production.
 
-3. Developer adds new service or dependency
+3. Agent runs `kindling explain debugging`
    │
-   └─ Next kindling command:
-       ├─ autoIntel() detects project change
-       └─ Regenerates context files
-
-4. kindling intel off
-   │
-   ├─ Remove .github/copilot-instructions.md
-   ├─ Create .kindling/intel-disabled marker
-   └─ Output: Intel disabled
+   └─ Prints guidance on the sync/hot-reload loop, on demand — no repo
+      files written, no per-agent-format duplication, content ships
+      with the binary so it's always in sync with the installed version.
 ```

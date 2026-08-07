@@ -363,14 +363,6 @@ export interface ServiceDir {
   warning: string;
 }
 
-// ── Intel Status ────────────────────────────────────────────────
-
-export interface IntelStatus {
-  status: 'active' | 'disabled' | 'inactive';
-  files?: string[];
-  last_interaction?: string;
-  timeout: string;
-}
 
 // ── Topology Editor ─────────────────────────────────────────────
 

@@ -217,18 +217,19 @@ kindling sync -d <user>-my-app --restart
 
 ---
 
-## Agent Intel — AI Coding Agents as a First-Class Interface
+## Agent-Friendly by Design
 
 Your AI coding agent (Copilot, Claude Code, Cursor, Windsurf) is a
-legitimate place to run kindling. `kindling intel` teaches the agent
-your full dev environment — CLI commands, dependencies, secrets,
-build protocol — so it can suggest the right one-liner for whatever
-you're doing. A few tokens in, full dev workflow out.
+legitimate place to run kindling. `kindling --help` and `kindling
+explain <topic>` teach the agent your dev environment — CLI commands,
+dependencies, secrets, build protocol, hot-reload debugging — on
+demand, not injected into every session. A few tokens in, full dev
+workflow out.
 
 ```bash
-kindling intel on                        # activate now
-kindling intel status                    # check what's active
-kindling intel off                       # restore originals
+kindling explain                         # list topics
+kindling explain debugging               # hot-reload / sync workflow
+kindling explain dependencies            # auto-injection env vars
 ```
 
 The agent knows every command. You describe what you want, the agent
@@ -436,7 +437,7 @@ sudo mv bin/kindling /usr/local/bin/
 | **Setup** | |
 | `kindling init` | Bootstrap Kind cluster + operator + registry + ingress |
 | `kindling runners` | Register a CI runner (GitHub Actions or GitLab CI) |
-| `kindling intel` | Auto-configure coding agents with project context |
+| `kindling explain` | On-demand kindling concepts/workflow guidance |
 | **Onboarding** | |
 | `kindling analyze` | Check project readiness — git, Dockerfiles, secrets, cluster |
 | `kindling generate` | AI-generate a CI workflow |
@@ -473,7 +474,7 @@ sudo mv bin/kindling /usr/local/bin/
 - [x] `kindling sync` — live file sync with 30+ language-aware restart strategies
 - [x] `kindling dashboard` — web UI with topology map, sync/load, runtime detection
 - [x] `kindling snapshot` — export Helm charts or Kustomize overlays from running cluster
-- [x] `kindling intel` — auto-configure coding agents with project context
+- [x] `kindling explain` — on-demand kindling concepts/workflow guidance for coding agents
 - [x] Secrets management with local backup across cluster rebuilds
 - [x] Public HTTPS tunnels for OAuth
 - [ ] `kindling scaffold` — opinionated project structure with service templates

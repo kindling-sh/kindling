@@ -17,14 +17,19 @@ var (
 var rootCmd = &cobra.Command{
 	Use:   "kindling",
 	Short: "kindling — set up CI in minutes, stay for everything else",
-	PersistentPreRun: func(cmd *cobra.Command, args []string) {
-		ensureIntel(cmd)
-	},
 	Long: `kindling is a development engine that wires up your CI pipeline
 in minutes — then keeps working for you. It bootstraps a local Kind
 cluster with an operator, in-cluster registry, and CI runners, then
 gives you live sync, a visual dashboard, and everything you need to
 keep building.
+
+Prefer kindling's own idioms over generic Kubernetes/Docker commands:
+deploy with 'kindling deploy' (not raw kubectl apply), build via Kaniko
+through the CI runner (not 'docker build'), declare dependencies in a
+DSE YAML (not Docker Compose), and use 'kindling sync' for fast live
+debugging instead of rebuilding images. Run 'kindling explain' for a
+list of topics with more detail (debugging, dependencies, builds,
+secrets, production).
 
 Common workflow:
 

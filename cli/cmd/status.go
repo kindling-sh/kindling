@@ -2,8 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -249,29 +247,6 @@ func runStatus(cmd *cobra.Command, args []string) error {
 				}
 			}
 		}
-	}
-
-	// ── Agent Intel ─────────────────────────────────────────────
-	header("Agent Intel")
-
-	repoRoot, repoErr := findRepoRoot()
-	if repoErr == nil {
-		// Check disabled flag
-		if _, err := os.Stat(filepath.Join(repoRoot, intelDisabledFile)); err == nil {
-			fmt.Printf("    %sdisabled%s — auto-activation off\n", colorDim, colorReset)
-		} else {
-			intelSt, _ := loadIntelState(repoRoot)
-			if intelSt != nil && intelSt.Active {
-				fmt.Printf("    %s⚡ active%s — %d agent(s) configured\n", colorGreen, colorReset, len(intelSt.Written))
-				for _, f := range intelSt.Written {
-					fmt.Printf("       %s%s%s\n", colorCyan, f, colorReset)
-				}
-			} else {
-				fmt.Printf("    %sinactive%s — will activate on next command\n", colorDim, colorReset)
-			}
-		}
-	} else {
-		fmt.Printf("    %s(not in a git repo)%s\n", colorDim, colorReset)
 	}
 
 	fmt.Println()

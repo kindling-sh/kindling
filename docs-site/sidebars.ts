@@ -11,7 +11,7 @@ const sidebars: SidebarsConfig = {
       type: "category",
       label: "Getting Started",
       collapsed: false,
-      items: ["analyze", "intel", "generate", "runners"],
+      items: ["analyze", "generate", "runners"],
     },
     {
       type: "category",
