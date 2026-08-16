@@ -232,6 +232,28 @@ function DSECard({ dse, onDelete }: { dse: DSE; onDelete: (ns: string, name: str
                   <a href={s.externalURL} target="_blank" className="value link">{s.externalURL}</a>
                 </div>
               )}
+              {dse.spec.ingress.routes && dse.spec.ingress.routes.length > 0 && (
+                <div style={{ marginTop: 8 }}>
+                  <span className="label" style={{ display: 'block', marginBottom: 4 }}>Routes</span>
+                  <div className="table-wrap">
+                    <table className="data-table" style={{ fontSize: 12 }}>
+                      <thead>
+                        <tr><th>Path</th><th>Service</th><th>Port</th><th>Type</th></tr>
+                      </thead>
+                      <tbody>
+                        {dse.spec.ingress.routes.map((r, i) => (
+                          <tr key={i}>
+                            <td className="mono">{r.path}</td>
+                            <td className="mono">{r.service}</td>
+                            <td className="mono">{r.port}</td>
+                            <td className="mono">{r.pathType || 'Prefix'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>

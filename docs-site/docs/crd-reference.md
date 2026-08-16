@@ -66,6 +66,14 @@ spec:
       secretName: "tls-secret"
       hosts:
         - "app.localhost"
+    routes:
+      - path: "/orders"
+        service: "my-orders-svc"
+        port: 5000
+      - path: "/inventory"
+        pathType: "Exact"
+        service: "my-inventory-svc"
+        port: 3000
 
   dependencies:
     - type: postgres
@@ -111,11 +119,44 @@ spec:
 |---|---|---|---|---|
 | `enabled` | bool | ✅ | `false` | Whether to create an Ingress |
 | `host` | string | ❌ | — | Hostname for the Ingress rule |
-| `path` | string | ❌ | `"/"` | URL path prefix |
+| `path` | string | ❌ | `"/"` | URL path prefix for the primary route |
 | `pathType` | string | ❌ | `"Prefix"` | `Prefix`, `Exact`, `ImplementationSpecific` |
 | `ingressClassName` | *string | ❌ | — | IngressClass name (e.g. `"traefik"`) |
 | `annotations` | map[string]string | ❌ | — | Extra Ingress annotations |
 | `tls` | *IngressTLSSpec | ❌ | — | TLS configuration |
+| `routes` | []IngressRouteSpec | ❌ | — | Extra path -> service routes merged onto this same Ingress (see below) |
+
+##### `spec.ingress.routes[]`
+
+Additional path -> service routes merged onto the **same** Ingress
+object/host as the primary route above — useful for a frontend (e.g. an
+SPA) that calls several backend services via same-origin path prefixes
+(`/orgs`, `/auth`, `/billing`, ...) under one shared host, without a
+second, unmanaged Ingress object.
+
+| Field | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `path` | string | ✅ | — | URL path to match, e.g. `"/orders"` |
+| `pathType` | string | ❌ | `"Prefix"` | `Prefix`, `Exact`, `ImplementationSpecific` |
+| `service` | string | ✅ | — | Kubernetes Service name to route to |
+| `port` | int32 | ✅ | — | Service port to route to |
+
+Manage routes without editing YAML directly via `kindling ingress`:
+
+```bash
+# Patch the live DSE's Ingress with a new route
+kindling ingress add-route my-app --path /orders --service my-orders-svc --port 5000
+
+# See the primary route + all extra routes
+kindling ingress list my-app
+
+# Remove a route
+kindling ingress remove-route my-app --path /orders
+
+# Once confirmed working, persist it into the DSE YAML so it's applied
+# on every future deploy
+kindling ingress save my-app -f dev-environment.yaml
+```
 
 #### `spec.dependencies[]`
 

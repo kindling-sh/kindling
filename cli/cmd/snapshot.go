@@ -100,6 +100,16 @@ type snapshotIngress struct {
 	PathType         string
 	IngressClassName string
 	TLSSecretName    string
+	Routes           []snapshotRoute
+}
+
+// snapshotRoute is an additional path -> service route merged onto the
+// same Ingress alongside the primary Host/Path route (spec.ingress.routes).
+type snapshotRoute struct {
+	Path     string
+	PathType string
+	Service  string
+	Port     int
 }
 
 func readClusterDSEs() ([]snapshotDSE, error) {
@@ -149,6 +159,12 @@ func readClusterDSEs() ([]snapshotDSE, error) {
 						SecretName string `json:"secretName"`
 					} `json:"tls,omitempty"`
 					Annotations map[string]string `json:"annotations,omitempty"`
+					Routes      []struct {
+						Path     string `json:"path"`
+						PathType string `json:"pathType,omitempty"`
+						Service  string `json:"service"`
+						Port     int    `json:"port"`
+					} `json:"routes,omitempty"`
 				} `json:"ingress,omitempty"`
 			} `json:"spec"`
 		} `json:"items"`
@@ -217,6 +233,18 @@ func readClusterDSEs() ([]snapshotDSE, error) {
 			}
 			if item.Spec.Ingress.TLS != nil {
 				ing.TLSSecretName = item.Spec.Ingress.TLS.SecretName
+			}
+			for _, route := range item.Spec.Ingress.Routes {
+				rPathType := route.PathType
+				if rPathType == "" {
+					rPathType = "Prefix"
+				}
+				ing.Routes = append(ing.Routes, snapshotRoute{
+					Path:     route.Path,
+					PathType: rPathType,
+					Service:  route.Service,
+					Port:     route.Port,
+				})
 			}
 			dses[i].Ingress = ing
 		}
@@ -871,12 +899,24 @@ func buildValuesYAML(chartName string, dses []snapshotDSE, depsSeen map[string]b
 				buf.WriteString("    tls:\n")
 				buf.WriteString(fmt.Sprintf("      secretName: \"%s\"\n", dse.Ingress.TLSSecretName))
 			}
+			if len(dse.Ingress.Routes) > 0 {
+				buf.WriteString("    routes:\n")
+				for _, route := range dse.Ingress.Routes {
+					buf.WriteString(fmt.Sprintf("    - path: \"%s\"\n", route.Path))
+					buf.WriteString(fmt.Sprintf("      pathType: \"%s\"\n", route.PathType))
+					buf.WriteString(fmt.Sprintf("      service: \"%s\"\n", route.Service))
+					buf.WriteString(fmt.Sprintf("      port: %d\n", route.Port))
+				}
+			} else {
+				buf.WriteString("    routes: []\n")
+			}
 			buf.WriteString("    annotations: {}\n")
 		} else {
 			buf.WriteString("    enabled: false\n")
 			buf.WriteString("    host: \"\"\n")
 			buf.WriteString("    path: \"/\"\n")
 			buf.WriteString("    pathType: \"Prefix\"\n")
+			buf.WriteString("    routes: []\n")
 			buf.WriteString("    annotations: {}\n")
 		}
 
@@ -1211,8 +1251,17 @@ spec:
             name: {{ .Release.Name }}-%s
             port:
               number: {{ .Values.%s.port }}
+      {{- range .Values.%s.ingress.routes }}
+      - path: {{ .path }}
+        pathType: {{ .pathType }}
+        backend:
+          service:
+            name: {{ .service }}
+            port:
+              number: {{ .port }}
+      {{- end }}
 {{- end }}
-`, vk, safe, safe, chartName, vk, vk, vk, tlsBlock, vk, vk, vk, safe, vk)
+`, vk, safe, safe, chartName, vk, vk, vk, tlsBlock, vk, vk, vk, safe, vk, vk)
 }
 
 func helmDepDeploymentTemplate(depType string, def depDefaults) string {
@@ -1456,6 +1505,18 @@ func kustomizeIngress(dse snapshotDSE) string {
 		host = dse.Name + ".example.com  # TODO: set your production hostname"
 	}
 
+	var extraPaths strings.Builder
+	for _, route := range ing.Routes {
+		extraPaths.WriteString(fmt.Sprintf(`      - path: %s
+        pathType: %s
+        backend:
+          service:
+            name: %s
+            port:
+              number: %d
+`, route.Path, route.PathType, route.Service, route.Port))
+	}
+
 	return fmt.Sprintf(`apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -1472,7 +1533,7 @@ spec:
             name: %s
             port:
               number: %d
-`, dse.Name, classLine, tlsBlock, host, ing.Path, ing.PathType, dse.Name, dse.Port)
+%s`, dse.Name, classLine, tlsBlock, host, ing.Path, ing.PathType, dse.Name, dse.Port, extraPaths.String())
 }
 
 func kustomizeDepDeployment(depType string, def depDefaults, version string) string {

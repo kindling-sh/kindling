@@ -162,6 +162,15 @@ type IngressSpec struct {
 	// Annotations are additional annotations to set on the Ingress resource.
 	//+optional
 	Annotations map[string]string `json:"annotations,omitempty"`
+
+	// Routes are additional path -> service routes merged onto this DSE's
+	// managed Ingress, alongside the primary Host/Path/Service route.
+	// Useful for a frontend (e.g. an SPA) that calls several backend
+	// services via same-origin path prefixes (/orgs, /auth, /billing, ...)
+	// under one shared host, without hand-rolling a second, unmanaged
+	// Ingress object.
+	//+optional
+	Routes []IngressRouteSpec `json:"routes,omitempty"`
 }
 
 // IngressTLSSpec configures TLS for the Ingress.
@@ -172,6 +181,34 @@ type IngressTLSSpec struct {
 	// Hosts is the list of hosts covered by the TLS certificate.
 	//+optional
 	Hosts []string `json:"hosts,omitempty"`
+}
+
+// IngressRouteSpec defines an additional path -> service route merged onto
+// a DSE's managed Ingress (same host, additional path). Unlike a second,
+// unmanaged Ingress object, routes declared here share the DSE's own
+// Ingress lifecycle — they get the same tunnel-host rewriting kindling
+// expose applies, and they don't compete with the primary route on
+// controller-specific router-priority heuristics since they're paths on
+// one Ingress rule rather than separate Ingress objects.
+type IngressRouteSpec struct {
+	// Path is the URL path (prefix) to match, e.g. "/orgs".
+	//+kubebuilder:validation:MinLength=1
+	Path string `json:"path"`
+
+	// PathType determines how Path is matched.
+	//+kubebuilder:validation:Enum=Prefix;Exact;ImplementationSpecific
+	//+kubebuilder:default="Prefix"
+	PathType string `json:"pathType,omitempty"`
+
+	// Service is the name of the Kubernetes Service this route sends
+	// traffic to (typically another DSE's Service in the same namespace).
+	//+kubebuilder:validation:MinLength=1
+	Service string `json:"service"`
+
+	// Port is the Service port to route to.
+	//+kubebuilder:validation:Minimum=1
+	//+kubebuilder:validation:Maximum=65535
+	Port int32 `json:"port"`
 }
 
 // DependencyType represents a well-known service dependency.

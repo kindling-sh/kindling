@@ -66,6 +66,20 @@ inputs:
     description: "Route tunnel traffic to this service (set to 'true' to use the active kindling tunnel hostname as the ingress host)"
     required: false
     default: ""
+  extra-paths:
+    description: |
+      Extra path -> service routes merged onto this DSE's own Ingress,
+      alongside the primary route. YAML block, one entry per line:
+        - path: /orders
+          service: my-orders-svc
+          port: 5000
+        - path: /inventory
+          service: my-inventory-svc
+          port: 3000
+          pathType: Exact
+      Requires ingress-host to be set (routes live on the same Ingress).
+    required: false
+    default: ""
 
 runs:
   using: "composite"
@@ -88,6 +102,7 @@ runs:
         DSE_WAIT: ${{ inputs.wait }}
         DSE_WAIT_TIMEOUT: ${{ inputs.wait-timeout }}
         DSE_TUNNEL: ${{ inputs.tunnel }}
+        DSE_EXTRA_PATHS: ${{ inputs.extra-paths }}
       run: |
         echo "🚀 Deploying ${DSE_NAME}"
 
@@ -166,6 +181,11 @@ runs:
             host: ${DSE_INGRESS_HOST}
             ingressClassName: ${DSE_INGRESS_CLASS}
         INGEOF
+          # Extra path -> service routes merged onto this same Ingress.
+          if [ -n "${DSE_EXTRA_PATHS}" ]; then
+            echo "    routes:" >> "${YAML_FILE}"
+            echo "${DSE_EXTRA_PATHS}" | sed 's/^/    /' >> "${YAML_FILE}"
+          fi
         fi
 
         # Append dependencies if provided

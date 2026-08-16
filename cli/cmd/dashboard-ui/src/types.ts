@@ -226,6 +226,12 @@ export interface DSE {
       enabled?: boolean;
       host?: string;
       path?: string;
+      routes?: {
+        path: string;
+        pathType?: string;
+        service: string;
+        port: number;
+      }[];
     };
     dependencies?: {
       type: string;

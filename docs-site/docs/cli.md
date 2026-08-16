@@ -33,6 +33,7 @@ description: Complete reference for all kindling CLI commands. Structured for LL
 | `kindling expose` | Develop | Public HTTPS tunnel to cluster |
 | `kindling env` | Develop | Manage deployment env vars |
 | `kindling secrets` | Develop | Manage external credentials |
+| `kindling ingress` | Develop | Manage extra Ingress routes on a DSE |
 | `kindling status` | Develop | Cluster + environment status |
 | `kindling logs` | Develop | Tail controller logs |
 | `kindling snapshot` | Production | Export Helm/Kustomize + deploy |
@@ -391,6 +392,35 @@ Manage external credentials as Kubernetes Secrets with local backup.
 | `list` | `kindling secrets list` | List all kindling-managed secrets |
 | `delete` | `kindling secrets delete <name>` | Remove from cluster and backup |
 | `restore` | `kindling secrets restore` | Re-create secrets from backup after cluster rebuild |
+
+---
+
+### `kindling ingress`
+
+**Synopsis:** `kindling ingress <subcommand>`
+
+Manage extra path -> service routes on a DevStagingEnvironment's managed
+Ingress (`spec.ingress.routes`) — additional paths merged onto the same
+host/Ingress alongside the DSE's primary route. Useful for a frontend that
+calls several backend services via same-origin path prefixes (`/orgs`,
+`/auth`, `/billing`, ...) under one shared host.
+
+| Subcommand | Synopsis | Description |
+|---|---|---|
+| `list` | `kindling ingress list <dse>` | Show the primary route + all extra routes |
+| `add-route` | `kindling ingress add-route <dse> --path P --service S --port N` | Patch a route onto the live Ingress |
+| `remove-route` | `kindling ingress remove-route <dse> --path P` | Remove a route from the live Ingress |
+| `save` | `kindling ingress save <dse> -f <file>` | Write the live extra routes into a DSE YAML file |
+
+**Workflow:** patch a route with `add-route`, confirm it works, then run
+`save` to persist the same routes into the DSE's YAML file so they're
+applied on every future deploy — not just this session's live patch.
+
+```bash
+kindling ingress add-route jeff-vincent-gateway --path /orders --service jeff-vincent-orders --port 5000
+kindling ingress list jeff-vincent-gateway
+kindling ingress save jeff-vincent-gateway -f dev-environment.yaml
+```
 
 ---
 
