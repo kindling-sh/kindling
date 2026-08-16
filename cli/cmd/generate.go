@@ -45,6 +45,7 @@ var (
 	genBranch     string
 	genDryRun     bool
 	genCIProvider string
+	genSharedDeps string
 )
 
 func init() {
@@ -56,6 +57,7 @@ func init() {
 	generateCmd.Flags().StringVarP(&genBranch, "branch", "b", "", "Branch to trigger on (default: auto-detect from git, fallback to 'main')")
 	generateCmd.Flags().BoolVar(&genDryRun, "dry-run", false, "Print the generated workflow to stdout instead of writing a file")
 	generateCmd.Flags().StringVar(&genCIProvider, "ci-provider", "", "CI platform to generate for (github, gitlab; default: github)")
+	generateCmd.Flags().StringVar(&genSharedDeps, "shared-deps", "", "Comma-separated dependency types (e.g. redis,postgres) to mark as shared: true across all detected services, instead of one dedicated instance per service")
 	_ = generateCmd.MarkFlagRequired("api-key")
 	rootCmd.AddCommand(generateCmd)
 }
@@ -623,6 +625,22 @@ func prioritizeSourceFiles(files []string, envVarFiles map[string]bool) []string
 	return files
 }
 
+// parseSharedDepsFlag splits and normalizes the --shared-deps flag value
+// (comma-separated dependency types) into a clean list.
+func parseSharedDepsFlag(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	var types []string
+	for _, t := range strings.Split(raw, ",") {
+		t = strings.ToLower(strings.TrimSpace(t))
+		if t != "" {
+			types = append(types, t)
+		}
+	}
+	return types
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // Prompt Builder
 // ────────────────────────────────────────────────────────────────────────────
@@ -643,6 +661,13 @@ func buildGeneratePrompt(ctx *repoContext, provider ci.Provider) (system, user s
 	b.WriteString(fmt.Sprintf("Generate a kindling dev-deploy.yml %s %s for this repository named %q.\n\n", pctx.PlatformName, pctx.WorkflowNoun, ctx.name))
 	b.WriteString(fmt.Sprintf("Default branch: %s (use this in the 'on: push: branches:' trigger)\n\n", ctx.branch))
 	b.WriteString(fmt.Sprintf("Target architecture: %s (use this in all Kaniko Dockerfile patches)\n\n", ctx.hostArch))
+
+	// Shared dependencies: instead of one dedicated instance per service,
+	// mark matching dependency types as shared: true so every service
+	// that declares one converges on a single instance.
+	if sharedTypes := parseSharedDepsFlag(genSharedDeps); len(sharedTypes) > 0 {
+		b.WriteString(fmt.Sprintf("## Shared dependencies\n\nFor any dependency of type %s declared by ANY service, add `shared: true` to that dependency's entry in the DSE dependencies: block (alongside `type:`), so all services that declare it converge on one shared instance instead of each getting its own dedicated pod. Leave dependencies of other types as dedicated (no shared: true).\n\n", strings.Join(sharedTypes, ", ")))
+	}
 
 	// Directory tree
 	b.WriteString("## Repository structure\n```\n")

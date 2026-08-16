@@ -30,6 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/kubernetes/scheme"
 
 	appsv1alpha1 "github.com/jeffvincent/kindling/api/v1alpha1"
 )
@@ -82,6 +83,26 @@ var _ = Describe("buildConnectionURL", func() {
 		defaults := dependencyRegistry[appsv1alpha1.DependencyPostgres]
 		url := buildConnectionURL("myapp", dep, defaults)
 		Expect(url).To(ContainSubstring("custom:secret@"))
+	})
+
+	It("uses DB index 0 for a dedicated (non-shared) redis", func() {
+		dep := appsv1alpha1.DependencySpec{Type: appsv1alpha1.DependencyRedis}
+		defaults := dependencyRegistry[appsv1alpha1.DependencyRedis]
+		url := buildConnectionURL("myapp", dep, defaults)
+		Expect(url).To(Equal("redis://myapp-redis:6379/0"))
+	})
+
+	It("uses a deterministic per-DSE DB index for a shared redis", func() {
+		dep := appsv1alpha1.DependencySpec{Type: appsv1alpha1.DependencyRedis, Shared: true}
+		defaults := dependencyRegistry[appsv1alpha1.DependencyRedis]
+
+		urlA := buildConnectionURL("service-a", dep, defaults)
+		urlB := buildConnectionURL("service-b", dep, defaults)
+		urlARepeat := buildConnectionURL("service-a", dep, defaults)
+
+		Expect(urlA).To(HavePrefix("redis://shared-redis:6379/"))
+		Expect(urlA).To(Equal(urlARepeat), "DB index must be deterministic for the same DSE name")
+		Expect(urlA).NotTo(Equal(urlB), "different DSEs should typically land on different DB indexes")
 	})
 })
 
@@ -188,6 +209,73 @@ var _ = Describe("dependencyName", func() {
 	It("returns crName-depType", func() {
 		Expect(dependencyName("myapp", appsv1alpha1.DependencyPostgres)).To(Equal("myapp-postgres"))
 		Expect(dependencyName("myapp", appsv1alpha1.DependencyRedis)).To(Equal("myapp-redis"))
+	})
+})
+
+var _ = Describe("dependencyResourceName", func() {
+	It("returns the dedicated per-DSE name when not shared", func() {
+		dep := appsv1alpha1.DependencySpec{Type: appsv1alpha1.DependencyRedis}
+		Expect(dependencyResourceName("myapp", dep)).To(Equal("myapp-redis"))
+	})
+
+	It("returns a name keyed by type when shared with no SharedKey", func() {
+		dep := appsv1alpha1.DependencySpec{Type: appsv1alpha1.DependencyRedis, Shared: true}
+		Expect(dependencyResourceName("myapp", dep)).To(Equal("shared-redis"))
+	})
+
+	It("returns a name keyed by SharedKey when shared and set", func() {
+		dep := appsv1alpha1.DependencySpec{Type: appsv1alpha1.DependencyRedis, Shared: true, SharedKey: "billing-group"}
+		Expect(dependencyResourceName("myapp", dep)).To(Equal("shared-billing-group"))
+	})
+
+	It("converges different DSEs on the same shared name", func() {
+		dep := appsv1alpha1.DependencySpec{Type: appsv1alpha1.DependencyRedis, Shared: true}
+		Expect(dependencyResourceName("service-a", dep)).To(Equal(dependencyResourceName("service-b", dep)))
+	})
+})
+
+var _ = Describe("labelsForDependency", func() {
+	It("uses this DSE's name as part-of when not shared", func() {
+		cr := newTestDSE("myapp")
+		dep := appsv1alpha1.DependencySpec{Type: appsv1alpha1.DependencyRedis}
+		labels := labelsForDependency(cr, dep)
+		Expect(labels["app.kubernetes.io/part-of"]).To(Equal("myapp"))
+		Expect(labels).NotTo(HaveKey("kindling.dev/shared-key"))
+	})
+
+	It("uses a fixed part-of and records the shared key when shared", func() {
+		cr := newTestDSE("myapp")
+		dep := appsv1alpha1.DependencySpec{Type: appsv1alpha1.DependencyRedis, Shared: true}
+		labels := labelsForDependency(cr, dep)
+		Expect(labels["app.kubernetes.io/part-of"]).To(Equal("shared"))
+		Expect(labels["kindling.dev/shared-key"]).To(Equal("redis"))
+	})
+
+	It("computes identical labels for different DSEs sharing the same dependency", func() {
+		dep := appsv1alpha1.DependencySpec{Type: appsv1alpha1.DependencyRedis, Shared: true}
+		a := labelsForDependency(newTestDSE("service-a"), dep)
+		b := labelsForDependency(newTestDSE("service-b"), dep)
+		Expect(a).To(Equal(b))
+	})
+})
+
+var _ = Describe("setDependencyOwnerRef", func() {
+	It("sets a controller owner reference when not shared", func() {
+		cr := newTestDSE("myapp")
+		dep := appsv1alpha1.DependencySpec{Type: appsv1alpha1.DependencyRedis}
+		obj := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "myapp-redis-credentials", Namespace: "default"}}
+		Expect(setDependencyOwnerRef(cr, obj, scheme.Scheme, dep)).To(Succeed())
+		Expect(obj.OwnerReferences).To(HaveLen(1))
+		Expect(obj.OwnerReferences[0].Controller).NotTo(BeNil())
+		Expect(*obj.OwnerReferences[0].Controller).To(BeTrue())
+	})
+
+	It("leaves the resource unowned when shared", func() {
+		cr := newTestDSE("myapp")
+		dep := appsv1alpha1.DependencySpec{Type: appsv1alpha1.DependencyRedis, Shared: true}
+		obj := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "shared-redis-credentials", Namespace: "default"}}
+		Expect(setDependencyOwnerRef(cr, obj, scheme.Scheme, dep)).To(Succeed())
+		Expect(obj.OwnerReferences).To(BeEmpty())
 	})
 })
 

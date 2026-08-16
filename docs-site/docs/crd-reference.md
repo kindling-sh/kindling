@@ -88,6 +88,9 @@ spec:
       resources:
         cpuRequest: "100m"
         memoryLimit: "512Mi"
+    - type: redis
+      shared: true
+      sharedKey: "billing"
 ```
 
 ### Spec fields
@@ -170,6 +173,8 @@ kindling ingress save my-app -f dev-environment.yaml
 | `storageSize` | *Quantity | ❌ | `"1Gi"` | PVC size for stateful deps |
 | `env` | []EnvVar | ❌ | — | Override dependency container env vars |
 | `resources` | *ResourceRequirements | ❌ | — | CPU/memory for dependency container |
+| `shared` | bool | ❌ | `false` | Converge with other DSEs on one instance per type/sharedKey instead of a dedicated instance per DSE (see [Dependencies](dependencies.md#shared-dependencies)) |
+| `sharedKey` | string | ❌ | dependency Type | Groups shared instances into separate instances within the namespace |
 
 **Supported dependency types:**
 

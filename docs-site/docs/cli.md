@@ -34,6 +34,7 @@ description: Complete reference for all kindling CLI commands. Structured for LL
 | `kindling env` | Develop | Manage deployment env vars |
 | `kindling secrets` | Develop | Manage external credentials |
 | `kindling ingress` | Develop | Manage extra Ingress routes on a DSE |
+| `kindling deps` | Develop | Manage shared dependency resources |
 | `kindling status` | Develop | Cluster + environment status |
 | `kindling logs` | Develop | Tail controller logs |
 | `kindling snapshot` | Production | Export Helm/Kustomize + deploy |
@@ -180,6 +181,7 @@ AI-generate a CI workflow for any repository. Scans for Dockerfiles, dependencie
 | `--ingress-all` | | `false` | Wire every service with an ingress |
 | `--no-helm` | | `false` | Skip Helm/Kustomize rendering |
 | `--ci-provider` | | `github` | `github` or `gitlab` |
+| `--shared-deps` | | — | Comma-separated dependency types (e.g. `redis,postgres`) to mark `shared: true` across all detected services |
 
 **Examples:**
 
@@ -189,6 +191,7 @@ kindling generate -k sk-... -r . --dry-run
 kindling generate -k sk-ant-... -r . --ai-provider anthropic
 kindling generate -k sk-... -r . --ci-provider gitlab
 kindling generate -k sk-... -r . --ingress-all
+kindling generate -k sk-... -r . --shared-deps redis,postgres
 ```
 
 ---
@@ -420,6 +423,27 @@ applied on every future deploy — not just this session's live patch.
 kindling ingress add-route jeff-vincent-gateway --path /orders --service jeff-vincent-orders --port 5000
 kindling ingress list jeff-vincent-gateway
 kindling ingress save jeff-vincent-gateway -f dev-environment.yaml
+```
+
+---
+
+### `kindling deps`
+
+**Synopsis:** `kindling deps <subcommand>`
+
+Manage shared dependency instances (`spec.dependencies[].shared`) — see
+[Shared dependencies](dependencies.md#shared-dependencies). Shared
+instances aren't owned by any single DSE and aren't deleted automatically
+once unused, so use these to find and clean them up.
+
+| Subcommand | Synopsis | Description |
+|---|---|---|
+| `list-shared` | `kindling deps list-shared` | List shared dependency instances and which DSEs reference them |
+| `prune-shared` | `kindling deps prune-shared` | Delete shared instances no DSE references anymore |
+
+```bash
+kindling deps list-shared
+kindling deps prune-shared
 ```
 
 ---

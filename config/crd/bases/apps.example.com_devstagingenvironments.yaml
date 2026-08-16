@@ -277,6 +277,31 @@ spec:
                           pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                           x-kubernetes-int-or-string: true
                       type: object
+                    shared:
+                      description: |-
+                        Shared, when true, provisions (or reuses) one shared instance of this
+                        dependency per namespace instead of a dedicated instance for this DSE
+                        alone. Every DSE with Shared: true for the same Type (and the same
+                        SharedKey, if set) converges on one underlying Deployment/Service,
+                        instead of each DSE getting its own dedicated pod — useful when many
+                        services only need a cheap, ephemeral cache/session store and don't
+                        need strict isolation from each other.
+
+                        Shared dependency resources are intentionally NOT owned by any single
+                        DSE (so deleting one DSE doesn't take the shared instance down for
+                        the others) and are not automatically deleted once unused — run
+                        `kindling deps prune-shared` to clean up shared instances that no
+                        DSE references anymore.
+                      type: boolean
+                    sharedKey:
+                      description: |-
+                        SharedKey groups shared dependencies into separate instances within
+                        the same namespace, instead of one instance per Type across the
+                        whole namespace (e.g. a "billing" group and an "analytics" group
+                        each get their own shared Redis instead of sharing one cluster-wide
+                        instance). Only used when Shared is true. Defaults to the
+                        dependency Type itself.
+                      type: string
                     storageSize:
                       anyOf:
                       - type: integer
