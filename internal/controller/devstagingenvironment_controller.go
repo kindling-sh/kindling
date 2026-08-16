@@ -21,6 +21,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"hash/crc32"
 	"math/rand"
 	"strings"
 	"time"
@@ -551,7 +552,7 @@ func (r *DevStagingEnvironmentReconciler) updateStatus(ctx context.Context, cr *
 	depsReady := true
 	for _, dep := range cr.Spec.Dependencies {
 		depDeploy := &appsv1.Deployment{}
-		depName := dependencyName(cr.Name, dep.Type)
+		depName := dependencyResourceName(cr.Name, dep)
 		if err := r.Get(ctx, types.NamespacedName{Name: depName, Namespace: cr.Namespace}, depDeploy); err != nil {
 			depsReady = false
 			break
@@ -875,9 +876,25 @@ var dependencyRegistry = map[appsv1alpha1.DependencyType]dependencyDefaults{
 	},
 }
 
-// dependencyName returns the child resource name for a given dependency.
+// dependencyName returns the dedicated (non-shared) child resource name for
+// a given dependency, scoped to this one DSE.
 func dependencyName(crName string, depType appsv1alpha1.DependencyType) string {
 	return fmt.Sprintf("%s-%s", safeName(crName), string(depType))
+}
+
+// dependencyResourceName returns the child resource name for a dependency,
+// accounting for shared instances: a dedicated per-DSE name normally, or a
+// name converged across every DSE with the same Type (and SharedKey, if
+// set) when dep.Shared is true.
+func dependencyResourceName(crName string, dep appsv1alpha1.DependencySpec) string {
+	if dep.Shared {
+		key := dep.SharedKey
+		if key == "" {
+			key = string(dep.Type)
+		}
+		return fmt.Sprintf("shared-%s", safeName(key))
+	}
+	return dependencyName(crName, dep.Type)
 }
 
 // buildDependencyWaitInitContainers creates one init container per dependency
@@ -896,7 +913,7 @@ func buildDependencyWaitInitContainers(cr *appsv1alpha1.DevStagingEnvironment) [
 			continue
 		}
 
-		svcName := dependencyName(cr.Name, dep.Type)
+		svcName := dependencyResourceName(cr.Name, dep)
 		port := defaults.Port
 		if dep.Port != nil {
 			port = *dep.Port
@@ -952,7 +969,7 @@ func (r *DevStagingEnvironmentReconciler) reconcileDependencies(ctx context.Cont
 			return fmt.Errorf("dependency %s service: %w", dep.Type, err)
 		}
 
-		logger.Info("Dependency reconciled", "type", dep.Type, "name", dependencyName(cr.Name, dep.Type))
+		logger.Info("Dependency reconciled", "type", dep.Type, "name", dependencyResourceName(cr.Name, dep), "shared", dep.Shared)
 	}
 
 	// 4. Prune stale dependencies — if a dep was removed from the spec,
@@ -1031,8 +1048,8 @@ func (r *DevStagingEnvironmentReconciler) pruneOrphanedDependencies(ctx context.
 // reconcileDependencySecret creates a Secret containing the dependency credentials.
 // These are used both by the dependency container and by the app via env var injection.
 func (r *DevStagingEnvironmentReconciler) reconcileDependencySecret(ctx context.Context, cr *appsv1alpha1.DevStagingEnvironment, dep appsv1alpha1.DependencySpec, defaults dependencyDefaults) error {
-	name := dependencyName(cr.Name, dep.Type) + "-credentials"
-	labels := labelsForDependency(cr, dep.Type)
+	name := dependencyResourceName(cr.Name, dep) + "-credentials"
+	labels := labelsForDependency(cr, dep)
 
 	// Build the data map from defaults, allowing user overrides via dep.Env
 	data := make(map[string][]byte)
@@ -1057,7 +1074,7 @@ func (r *DevStagingEnvironmentReconciler) reconcileDependencySecret(ctx context.
 		Data: data,
 	}
 
-	if err := controllerutil.SetControllerReference(cr, desired, r.Scheme); err != nil {
+	if err := setDependencyOwnerRef(cr, desired, r.Scheme, dep); err != nil {
 		return err
 	}
 
@@ -1085,8 +1102,8 @@ func (r *DevStagingEnvironmentReconciler) reconcileDependencySecret(ctx context.
 
 // reconcileDependencyDeployment creates a Deployment for the dependency service.
 func (r *DevStagingEnvironmentReconciler) reconcileDependencyDeployment(ctx context.Context, cr *appsv1alpha1.DevStagingEnvironment, dep appsv1alpha1.DependencySpec, defaults dependencyDefaults) error {
-	name := dependencyName(cr.Name, dep.Type)
-	labels := labelsForDependency(cr, dep.Type)
+	name := dependencyResourceName(cr.Name, dep)
+	labels := labelsForDependency(cr, dep)
 
 	// Resolve image
 	image := defaults.Image
@@ -1198,7 +1215,7 @@ func (r *DevStagingEnvironmentReconciler) reconcileDependencyDeployment(ctx cont
 		},
 	}
 
-	if err := controllerutil.SetControllerReference(cr, desired, r.Scheme); err != nil {
+	if err := setDependencyOwnerRef(cr, desired, r.Scheme, dep); err != nil {
 		return err
 	}
 
@@ -1226,8 +1243,8 @@ func (r *DevStagingEnvironmentReconciler) reconcileDependencyDeployment(ctx cont
 
 // reconcileDependencyService creates a ClusterIP Service for the dependency.
 func (r *DevStagingEnvironmentReconciler) reconcileDependencyService(ctx context.Context, cr *appsv1alpha1.DevStagingEnvironment, dep appsv1alpha1.DependencySpec, defaults dependencyDefaults) error {
-	name := dependencyName(cr.Name, dep.Type)
-	labels := labelsForDependency(cr, dep.Type)
+	name := dependencyResourceName(cr.Name, dep)
+	labels := labelsForDependency(cr, dep)
 
 	port := defaults.Port
 	if dep.Port != nil {
@@ -1255,7 +1272,7 @@ func (r *DevStagingEnvironmentReconciler) reconcileDependencyService(ctx context
 		},
 	}
 
-	if err := controllerutil.SetControllerReference(cr, desired, r.Scheme); err != nil {
+	if err := setDependencyOwnerRef(cr, desired, r.Scheme, dep); err != nil {
 		return err
 	}
 
@@ -1287,19 +1304,43 @@ func (r *DevStagingEnvironmentReconciler) reconcileDependencyService(ctx context
 // ────────────────────────────────────────────────────────────────────────────
 
 // labelsForDependency returns labels for a dependency's child resources.
-func labelsForDependency(cr *appsv1alpha1.DevStagingEnvironment, depType appsv1alpha1.DependencyType) map[string]string {
-	return map[string]string{
-		"app.kubernetes.io/name":       dependencyName(cr.Name, depType),
-		"app.kubernetes.io/component":  string(depType),
-		"app.kubernetes.io/part-of":    cr.Name,
+func labelsForDependency(cr *appsv1alpha1.DevStagingEnvironment, dep appsv1alpha1.DependencySpec) map[string]string {
+	partOf := cr.Name
+	if dep.Shared {
+		partOf = "shared"
+	}
+	labels := map[string]string{
+		"app.kubernetes.io/name":       dependencyResourceName(cr.Name, dep),
+		"app.kubernetes.io/component":  string(dep.Type),
+		"app.kubernetes.io/part-of":    partOf,
 		"app.kubernetes.io/managed-by": "devstagingenvironment-operator",
 	}
+	if dep.Shared {
+		key := dep.SharedKey
+		if key == "" {
+			key = string(dep.Type)
+		}
+		labels["kindling.dev/shared-key"] = safeName(key)
+	}
+	return labels
+}
+
+// setDependencyOwnerRef sets an owning controller reference for a dependency's
+// child resource, except for shared dependencies, which are intentionally
+// left unowned so deleting any one referencing DSE doesn't take the shared
+// instance down for the others. Shared instances are cleaned up explicitly
+// via kindling deps prune-shared once no DSE references them anymore.
+func setDependencyOwnerRef(cr *appsv1alpha1.DevStagingEnvironment, obj client.Object, scheme *runtime.Scheme, dep appsv1alpha1.DependencySpec) error {
+	if dep.Shared {
+		return nil
+	}
+	return controllerutil.SetControllerReference(cr, obj, scheme)
 }
 
 // buildConnectionURL constructs the connection string for a dependency using
 // the in-cluster DNS name of the dependency Service.
 func buildConnectionURL(crName string, dep appsv1alpha1.DependencySpec, defaults dependencyDefaults) string {
-	svcName := dependencyName(crName, dep.Type)
+	svcName := dependencyResourceName(crName, dep)
 
 	port := defaults.Port
 	if dep.Port != nil {
@@ -1318,7 +1359,13 @@ func buildConnectionURL(crName string, dep appsv1alpha1.DependencySpec, defaults
 		db := envMap["POSTGRES_DB"]
 		return fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=disable", user, pass, svcName, port, db)
 	case appsv1alpha1.DependencyRedis:
-		return fmt.Sprintf("redis://%s:%d/0", svcName, port)
+		// On a shared instance, give each DSE its own logical Redis DB
+		// index (0-15) for basic isolation without extra infrastructure.
+		db := 0
+		if dep.Shared {
+			db = int(crc32.ChecksumIEEE([]byte(crName))) % 16
+		}
+		return fmt.Sprintf("redis://%s:%d/%d", svcName, port, db)
 	case appsv1alpha1.DependencyMySQL:
 		user := envMap["MYSQL_USER"]
 		pass := envMap["MYSQL_PASSWORD"]
@@ -1415,7 +1462,7 @@ func buildDependencyConnectionEnvVars(crName string, dep appsv1alpha1.Dependency
 
 	// For Jaeger, inject the OTLP collector endpoint (gRPC port 4317).
 	if dep.Type == appsv1alpha1.DependencyJaeger {
-		svcName := dependencyName(crName, dep.Type)
+		svcName := dependencyResourceName(crName, dep)
 		envVars = append(envVars,
 			corev1.EnvVar{Name: "OTEL_EXPORTER_OTLP_ENDPOINT", Value: fmt.Sprintf("http://%s:4317", svcName)},
 		)

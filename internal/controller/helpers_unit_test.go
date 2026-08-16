@@ -518,7 +518,7 @@ func TestLabelsForDependency(t *testing.T) {
 	cr := &appsv1alpha1.DevStagingEnvironment{
 		ObjectMeta: metav1.ObjectMeta{Name: "myapp"},
 	}
-	labels := labelsForDependency(cr, appsv1alpha1.DependencyRedis)
+	labels := labelsForDependency(cr, appsv1alpha1.DependencySpec{Type: appsv1alpha1.DependencyRedis})
 
 	if labels["app.kubernetes.io/name"] != "myapp-redis" {
 		t.Errorf("name label = %q", labels["app.kubernetes.io/name"])

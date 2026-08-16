@@ -270,6 +270,31 @@ type DependencySpec struct {
 	// Resources defines CPU/memory requests and limits for the dependency container.
 	//+optional
 	Resources *ResourceRequirements `json:"resources,omitempty"`
+
+	// Shared, when true, provisions (or reuses) one shared instance of this
+	// dependency per namespace instead of a dedicated instance for this DSE
+	// alone. Every DSE with Shared: true for the same Type (and the same
+	// SharedKey, if set) converges on one underlying Deployment/Service,
+	// instead of each DSE getting its own dedicated pod — useful when many
+	// services only need a cheap, ephemeral cache/session store and don't
+	// need strict isolation from each other.
+	//
+	// Shared dependency resources are intentionally NOT owned by any single
+	// DSE (so deleting one DSE doesn't take the shared instance down for
+	// the others) and are not automatically deleted once unused — run
+	// `kindling deps prune-shared` to clean up shared instances that no
+	// DSE references anymore.
+	//+optional
+	Shared bool `json:"shared,omitempty"`
+
+	// SharedKey groups shared dependencies into separate instances within
+	// the same namespace, instead of one instance per Type across the
+	// whole namespace (e.g. a "billing" group and an "analytics" group
+	// each get their own shared Redis instead of sharing one cluster-wide
+	// instance). Only used when Shared is true. Defaults to the
+	// dependency Type itself.
+	//+optional
+	SharedKey string `json:"sharedKey,omitempty"`
 }
 
 // DevStagingEnvironmentSpec defines the desired state of DevStagingEnvironment

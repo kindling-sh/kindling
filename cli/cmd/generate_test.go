@@ -3,6 +3,7 @@ package cmd
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -20,6 +21,40 @@ func TestCleanYAMLResponse_StripsFences(t *testing.T) {
 	want := "name: test\nkey: value"
 	if got != want {
 		t.Errorf("cleanYAMLResponse() = %q, want %q", got, want)
+	}
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// parseSharedDepsFlag
+// ────────────────────────────────────────────────────────────────────────────
+
+func TestParseSharedDepsFlag_Empty(t *testing.T) {
+	if got := parseSharedDepsFlag(""); got != nil {
+		t.Errorf("parseSharedDepsFlag(\"\") = %v, want nil", got)
+	}
+}
+
+func TestParseSharedDepsFlag_Single(t *testing.T) {
+	got := parseSharedDepsFlag("redis")
+	want := []string{"redis"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("parseSharedDepsFlag(%q) = %v, want %v", "redis", got, want)
+	}
+}
+
+func TestParseSharedDepsFlag_MultipleWithSpacesAndCase(t *testing.T) {
+	got := parseSharedDepsFlag(" Redis, Postgres ,mongodb")
+	want := []string{"redis", "postgres", "mongodb"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("parseSharedDepsFlag() = %v, want %v", got, want)
+	}
+}
+
+func TestParseSharedDepsFlag_SkipsEmptyEntries(t *testing.T) {
+	got := parseSharedDepsFlag("redis,,postgres,")
+	want := []string{"redis", "postgres"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("parseSharedDepsFlag() = %v, want %v", got, want)
 	}
 }
 

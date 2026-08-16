@@ -94,7 +94,77 @@ dependencies:
       cpuLimit: "500m"
       memoryRequest: "256Mi"
       memoryLimit: "1Gi"
+    shared: false              # See "Shared dependencies" below
+    sharedKey: ""               # Groups shared instances (defaults to type)
 ```
+
+---
+
+## Shared dependencies
+
+By default, **every DSE gets its own dedicated instance** of each dependency
+it declares (`<dse-name>-redis`, `<dse-name>-postgres`, etc.). If several
+services in the same project each just need a cheap, ephemeral
+cache/session-store (a very common pattern — five services each declaring
+`redis` for the same kind of workload), that means five separate Redis
+pods running locally for no real isolation benefit.
+
+Set `shared: true` on a dependency to converge it with every other DSE
+that also sets `shared: true` for the same `type` (and the same
+`sharedKey`, if set) — instead of five dedicated Redis pods, you get one:
+
+```yaml
+dependencies:
+  - type: redis
+    shared: true
+```
+
+All services with `shared: true` for `redis` connect to the **same**
+Redis instance (`shared-redis`). Redis specifically gets a small bonus:
+each DSE is assigned its own logical Redis DB index (0-15, derived from
+the DSE name) so keys don't collide between services even though they
+share the same instance — no code changes needed, it's baked into the
+injected `REDIS_URL` (`redis://shared-redis:6379/<n>`). Other dependency
+types don't get automatic per-tenant isolation — if that matters for a
+non-Redis dependency, use separate `sharedKey` groups instead.
+
+Use `sharedKey` to split shared instances into separate groups instead of
+one cluster-wide instance per type — e.g. a `billing` group and an
+`analytics` group each get their own shared Redis:
+
+```yaml
+# billing service
+dependencies:
+  - type: redis
+    shared: true
+    sharedKey: billing
+
+# analytics service
+dependencies:
+  - type: redis
+    shared: true
+    sharedKey: analytics
+```
+
+Shared instances are **not** owned by any single DSE — deleting one DSE
+that references a shared dependency doesn't take it down for the others.
+They're also not deleted automatically once nothing references them
+anymore; clean those up explicitly:
+
+```bash
+kindling deps list-shared    # see shared instances + who references them
+kindling deps prune-shared   # delete shared instances nothing references
+```
+
+`kindling generate --shared-deps redis,postgres` marks matching
+dependency types as `shared: true` across every detected service in the
+AI-generated workflow, instead of editing each service's YAML by hand.
+
+> Note: this only affects the **local Kind dev cluster** (where the
+> operator provisions a dedicated dependency per DSE). `kindling snapshot`'s
+> production Helm/Kustomize export already deduplicates dependencies by
+> type across the whole chart, so a graduated production deployment always
+> shares one instance per type regardless of this setting.
 
 ---
 
