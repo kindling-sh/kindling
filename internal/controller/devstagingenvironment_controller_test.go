@@ -387,6 +387,58 @@ var _ = Describe("buildIngress", func() {
 		Expect(ing.Annotations).To(HaveKey("custom-annotation"))
 		Expect(ing.Annotations).To(HaveKey(specHashAnnotation))
 	})
+
+	It("merges extra routes onto the same Ingress rule alongside the primary route", func() {
+		cr := newTestDSE("test-app")
+		cr.Spec.Ingress = &appsv1alpha1.IngressSpec{
+			Enabled: true,
+			Host:    "test-app.localhost",
+			Path:    "/",
+			Routes: []appsv1alpha1.IngressRouteSpec{
+				{Path: "/orders", Service: "orders", Port: 5000},
+				{Path: "/inventory", PathType: "Exact", Service: "inventory", Port: 3000},
+			},
+		}
+		ing := r.buildIngress(cr)
+
+		// One rule, one host — routes are additional paths, not separate rules.
+		Expect(ing.Spec.Rules).To(HaveLen(1))
+		Expect(ing.Spec.Rules[0].Host).To(Equal("test-app.localhost"))
+
+		paths := ing.Spec.Rules[0].HTTP.Paths
+		Expect(paths).To(HaveLen(3))
+
+		// Primary route still targets the DSE's own Service.
+		Expect(paths[0].Path).To(Equal("/"))
+		Expect(paths[0].Backend.Service.Name).To(Equal("test-app"))
+
+		// Extra routes target their declared Service/Port.
+		Expect(paths[1].Path).To(Equal("/orders"))
+		Expect(paths[1].Backend.Service.Name).To(Equal("orders"))
+		Expect(paths[1].Backend.Service.Port.Number).To(Equal(int32(5000)))
+		Expect(*paths[1].PathType).To(Equal(networkingv1.PathTypePrefix))
+
+		Expect(paths[2].Path).To(Equal("/inventory"))
+		Expect(paths[2].Backend.Service.Name).To(Equal("inventory"))
+		Expect(paths[2].Backend.Service.Port.Number).To(Equal(int32(3000)))
+		Expect(*paths[2].PathType).To(Equal(networkingv1.PathTypeExact))
+	})
+
+	It("recomputes the spec hash when routes change", func() {
+		cr := newTestDSE("test-app")
+		cr.Spec.Ingress = &appsv1alpha1.IngressSpec{
+			Enabled: true,
+			Host:    "test-app.localhost",
+		}
+		without := r.buildIngress(cr)
+
+		cr.Spec.Ingress.Routes = []appsv1alpha1.IngressRouteSpec{
+			{Path: "/orders", Service: "orders", Port: 5000},
+		}
+		with := r.buildIngress(cr)
+
+		Expect(with.Annotations[specHashAnnotation]).NotTo(Equal(without.Annotations[specHashAnnotation]))
+	})
 })
 
 // ────────────────────────────────────────────────────────────────────────────

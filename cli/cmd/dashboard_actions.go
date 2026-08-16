@@ -2735,6 +2735,12 @@ func existingDSEIngressYAML(dseName string) string {
 				PathType         string            `json:"pathType,omitempty"`
 				IngressClassName string            `json:"ingressClassName,omitempty"`
 				Annotations      map[string]string `json:"annotations,omitempty"`
+				Routes           []struct {
+					Path     string `json:"path"`
+					PathType string `json:"pathType,omitempty"`
+					Service  string `json:"service"`
+					Port     int    `json:"port"`
+				} `json:"routes,omitempty"`
 			} `json:"ingress,omitempty"`
 		} `json:"spec"`
 	}
@@ -2761,6 +2767,17 @@ func existingDSEIngressYAML(dseName string) string {
 		sb.WriteString("    annotations:\n")
 		for k, v := range ing.Annotations {
 			sb.WriteString(fmt.Sprintf("      %s: \"%s\"\n", k, v))
+		}
+	}
+	if len(ing.Routes) > 0 {
+		sb.WriteString("    routes:\n")
+		for _, r := range ing.Routes {
+			sb.WriteString(fmt.Sprintf("    - path: %s\n", r.Path))
+			if r.PathType != "" {
+				sb.WriteString(fmt.Sprintf("      pathType: %s\n", r.PathType))
+			}
+			sb.WriteString(fmt.Sprintf("      service: %s\n", r.Service))
+			sb.WriteString(fmt.Sprintf("      port: %d\n", r.Port))
 		}
 	}
 	return sb.String()

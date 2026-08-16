@@ -431,6 +431,46 @@ func (r *DevStagingEnvironmentReconciler) buildIngress(cr *appsv1alpha1.DevStagi
 	}
 	annotations[specHashAnnotation] = computeSpecHash(cr.Spec.Ingress)
 
+	// Primary route: this DSE's own Service.
+	paths := []networkingv1.HTTPIngressPath{{
+		Path:     path,
+		PathType: &pathType,
+		Backend: networkingv1.IngressBackend{
+			Service: &networkingv1.IngressServiceBackend{
+				Name: safeName(cr.Name),
+				Port: networkingv1.ServiceBackendPort{
+					Number: cr.Spec.Service.Port,
+				},
+			},
+		},
+	}}
+
+	// Extra routes: additional path -> service entries merged onto the
+	// same Ingress rule/host, so e.g. an SPA frontend can route several
+	// backend path prefixes under one shared host without a second,
+	// unmanaged Ingress object.
+	for _, route := range spec.Routes {
+		routePathType := networkingv1.PathTypePrefix
+		switch route.PathType {
+		case "Exact":
+			routePathType = networkingv1.PathTypeExact
+		case "ImplementationSpecific":
+			routePathType = networkingv1.PathTypeImplementationSpecific
+		}
+		paths = append(paths, networkingv1.HTTPIngressPath{
+			Path:     route.Path,
+			PathType: &routePathType,
+			Backend: networkingv1.IngressBackend{
+				Service: &networkingv1.IngressServiceBackend{
+					Name: route.Service,
+					Port: networkingv1.ServiceBackendPort{
+						Number: route.Port,
+					},
+				},
+			},
+		})
+	}
+
 	ingress := &networkingv1.Ingress{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        safeName(cr.Name),
@@ -444,18 +484,7 @@ func (r *DevStagingEnvironmentReconciler) buildIngress(cr *appsv1alpha1.DevStagi
 				Host: spec.Host,
 				IngressRuleValue: networkingv1.IngressRuleValue{
 					HTTP: &networkingv1.HTTPIngressRuleValue{
-						Paths: []networkingv1.HTTPIngressPath{{
-							Path:     path,
-							PathType: &pathType,
-							Backend: networkingv1.IngressBackend{
-								Service: &networkingv1.IngressServiceBackend{
-									Name: safeName(cr.Name),
-									Port: networkingv1.ServiceBackendPort{
-										Number: cr.Spec.Service.Port,
-									},
-								},
-							},
-						}},
+						Paths: paths,
 					},
 				},
 			}},
