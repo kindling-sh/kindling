@@ -102,6 +102,7 @@ Deploy a DevStagingEnvironment CR via the build-agent sidecar.
 | `dependencies` | ❌ | `""` | Dependencies as YAML block |
 | `ingress-host` | ❌ | `""` | Ingress hostname (omit to skip ingress) |
 | `ingress-class` | ❌ | `traefik` | Ingress class name |
+| `routes` | ❌ | `""` | Extra path → service routes merged onto this DSE's Ingress, as a YAML block (requires `ingress-host`) |
 | `health-check-path` | ❌ | `/healthz` | HTTP health check path |
 | `replicas` | ❌ | `1` | Number of replicas |
 | `service-type` | ❌ | `ClusterIP` | Service type |
@@ -160,6 +161,30 @@ Deploy a DevStagingEnvironment CR via the build-agent sidecar.
         value: "http://${{ github.actor }}-my-api:8080"
       - name: NODE_ENV
         value: "development"
+```
+
+### With extra ingress routes
+
+Route additional paths on the same Ingress to other services — useful for
+a frontend that needs `/api` and `/auth` proxied to backend services
+without standing up separate Ingresses:
+
+```yaml
+- name: Deploy frontend
+  uses: kindling-sh/kindling/.github/actions/kindling-deploy@main
+  with:
+    name: "${{ github.actor }}-frontend"
+    image: "registry:5000/frontend:${{ github.sha }}"
+    port: "80"
+    ingress-host: "${{ github.actor }}-frontend.localhost"
+    routes: |
+      - path: /api
+        service: "${{ github.actor }}-my-api"
+        port: 8080
+      - path: /auth
+        service: "${{ github.actor }}-auth"
+        port: 8081
+        pathType: Exact
 ```
 
 ---
