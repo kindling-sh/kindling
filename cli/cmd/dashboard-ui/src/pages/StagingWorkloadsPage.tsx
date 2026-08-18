@@ -1,16 +1,16 @@
 import { useState } from 'react';
-import { useApi, prodRestart, prodScale, prodDeletePod, prodRollback, prodExec, fetchProdLogs, fetchProdRolloutHistory } from '../api';
+import { useApi, stagingRestart, stagingScale, stagingDeletePod, stagingRollback, stagingExec, fetchStagingLogs, fetchStagingRolloutHistory } from '../api';
 import type { K8sList, K8sDeployment, K8sPod, K8sStatefulSet, K8sDaemonSet, RolloutRevision } from '../types';
 import { StatusBadge, TimeAgo, EmptyState } from './shared';
 import { ActionButton, ActionModal, ConfirmDialog, useToast } from './actions';
 
 type WorkloadTab = 'deployments' | 'statefulsets' | 'daemonsets';
 
-export function ProductionWorkloadsPage() {
-  const { data: deps, loading, refresh } = useApi<K8sList<K8sDeployment>>('/api/prod/deployments');
-  const { data: podsData } = useApi<K8sList<K8sPod>>('/api/prod/pods');
-  const { data: stsData } = useApi<K8sList<K8sStatefulSet>>('/api/prod/statefulsets');
-  const { data: dsData } = useApi<K8sList<K8sDaemonSet>>('/api/prod/daemonsets');
+export function StagingWorkloadsPage() {
+  const { data: deps, loading, refresh } = useApi<K8sList<K8sDeployment>>('/api/staging/deployments');
+  const { data: podsData } = useApi<K8sList<K8sPod>>('/api/staging/pods');
+  const { data: stsData } = useApi<K8sList<K8sStatefulSet>>('/api/staging/statefulsets');
+  const { data: dsData } = useApi<K8sList<K8sDaemonSet>>('/api/staging/daemonsets');
   const { toast } = useToast();
 
   const [selected, setSelected] = useState<K8sDeployment | null>(null);
@@ -41,14 +41,14 @@ export function ProductionWorkloadsPage() {
   async function handleRestart() {
     if (!restartTarget) return;
     setRestartTarget(null);
-    const r = await prodRestart(restartTarget.ns, restartTarget.name);
+    const r = await stagingRestart(restartTarget.ns, restartTarget.name);
     if (r.ok) { toast(`Restarted ${restartTarget.name}`, 'success'); refresh(); }
     else toast(r.error || 'Restart failed', 'error');
   }
 
   async function handleScale() {
     if (!scaleTarget) return;
-    const r = await prodScale(scaleTarget.ns, scaleTarget.name, scaleCount);
+    const r = await stagingScale(scaleTarget.ns, scaleTarget.name, scaleCount);
     if (r.ok) { toast(`Scaled to ${scaleCount}`, 'success'); setScaleTarget(null); refresh(); }
     else toast(r.error || 'Scale failed', 'error');
   }
@@ -57,7 +57,7 @@ export function ProductionWorkloadsPage() {
     setRollbackTarget({ ns, name });
     setRollbackLoading(true);
     try {
-      const h = await fetchProdRolloutHistory(ns, name);
+      const h = await fetchStagingRolloutHistory(ns, name);
       setRollbackHistory(h.items || []);
     } catch { setRollbackHistory([]); }
     setRollbackLoading(false);
@@ -65,7 +65,7 @@ export function ProductionWorkloadsPage() {
 
   async function handleRollback() {
     if (!rollbackTarget) return;
-    const r = await prodRollback(rollbackTarget.ns, rollbackTarget.name, rollbackRev || undefined);
+    const r = await stagingRollback(rollbackTarget.ns, rollbackTarget.name, rollbackRev || undefined);
     if (r.ok) { toast(r.output || 'Rollback initiated', 'success'); setRollbackTarget(null); refresh(); }
     else toast(r.error || 'Rollback failed', 'error');
   }
@@ -73,7 +73,7 @@ export function ProductionWorkloadsPage() {
   async function handleExec() {
     if (!execTarget || !execCmd) return;
     setExecRunning(true);
-    const r = await prodExec(execTarget.ns, execTarget.pod, execCmd);
+    const r = await stagingExec(execTarget.ns, execTarget.pod, execCmd);
     setExecOutput(r.output || r.error || '(no output)');
     setExecRunning(false);
   }
@@ -82,7 +82,7 @@ export function ProductionWorkloadsPage() {
     setLogsTarget({ ns, pod });
     setLogs('Loading...');
     try {
-      const l = await fetchProdLogs(ns, pod);
+      const l = await fetchStagingLogs(ns, pod);
       setLogs(l || '(no logs)');
     } catch (e) { setLogs('Failed to fetch logs'); }
   }
@@ -90,12 +90,12 @@ export function ProductionWorkloadsPage() {
   async function handleDeletePod() {
     if (!deleteTarget) return;
     setDeleteTarget(null);
-    const r = await prodDeletePod(deleteTarget.ns, deleteTarget.pod);
+    const r = await stagingDeletePod(deleteTarget.ns, deleteTarget.pod);
     if (r.ok) { toast(`Deleted ${deleteTarget.pod}`, 'success'); refresh(); }
     else toast(r.error || 'Delete failed', 'error');
   }
 
-  if (loading) return <div className="loading">Loading production workloads…</div>;
+  if (loading) return <div className="loading">Loading staging workloads…</div>;
 
   const items = deps?.items || [];
   const allPods = podsData?.items || [];
@@ -115,22 +115,22 @@ export function ProductionWorkloadsPage() {
     <div className="page">
       <div className="page-header">
         <div className="page-header-left">
-          <h1>Production Workloads</h1>
+          <h1>Staging Workloads</h1>
           <p className="page-subtitle">
             {items.length} deployments · {stsList.length} statefulsets · {dsList.length} daemonsets
           </p>
         </div>
       </div>
 
-      <div className="prod-filter-bar">
-        <div className="prod-filter-group">
-          <button className={`prod-filter-btn ${tab === 'deployments' ? 'active' : ''}`} onClick={() => { setTab('deployments'); setSelected(null); }}>
+      <div className="staging-filter-bar">
+        <div className="staging-filter-group">
+          <button className={`staging-filter-btn ${tab === 'deployments' ? 'active' : ''}`} onClick={() => { setTab('deployments'); setSelected(null); }}>
             Deployments {items.length > 0 && <span className="badge">{items.length}</span>}
           </button>
-          <button className={`prod-filter-btn ${tab === 'statefulsets' ? 'active' : ''}`} onClick={() => { setTab('statefulsets'); setSelected(null); }}>
+          <button className={`staging-filter-btn ${tab === 'statefulsets' ? 'active' : ''}`} onClick={() => { setTab('statefulsets'); setSelected(null); }}>
             StatefulSets {stsList.length > 0 && <span className="badge">{stsList.length}</span>}
           </button>
-          <button className={`prod-filter-btn ${tab === 'daemonsets' ? 'active' : ''}`} onClick={() => { setTab('daemonsets'); setSelected(null); }}>
+          <button className={`staging-filter-btn ${tab === 'daemonsets' ? 'active' : ''}`} onClick={() => { setTab('daemonsets'); setSelected(null); }}>
             DaemonSets {dsList.length > 0 && <span className="badge">{dsList.length}</span>}
           </button>
         </div>
@@ -138,7 +138,7 @@ export function ProductionWorkloadsPage() {
 
       {/* Modals */}
       {restartTarget && (
-        <ConfirmDialog title="Restart Deployment" message={`Rolling restart ${restartTarget.name} in production?`}
+        <ConfirmDialog title="Restart Deployment" message={`Rolling restart ${restartTarget.name} in staging?`}
           confirmLabel="Restart" onConfirm={handleRestart} onCancel={() => setRestartTarget(null)} danger />
       )}
 
@@ -164,7 +164,7 @@ export function ProductionWorkloadsPage() {
                 ))}
               </select>
               <p className="text-dim" style={{ fontSize: 12, marginTop: 8 }}>
-                ⚠ This will roll back the deployment in production. Make sure you know what changed.
+                ⚠ This will roll back the deployment in staging. Make sure you know what changed.
               </p>
             </>
           )}
@@ -221,7 +221,7 @@ export function ProductionWorkloadsPage() {
       {/* Deployments table */}
       {tab === 'deployments' && (<>
       {items.length === 0 ? (
-        <EmptyState icon="□" message="No deployments found in production cluster." />
+        <EmptyState icon="□" message="No deployments found in staging cluster." />
       ) : (
         <div className="table-wrap">
           <table className="data-table">
@@ -313,7 +313,7 @@ export function ProductionWorkloadsPage() {
       {/* StatefulSets table */}
       {tab === 'statefulsets' && (
         stsList.length === 0 ? (
-          <EmptyState icon="◫" message="No StatefulSets found in production cluster." />
+          <EmptyState icon="◫" message="No StatefulSets found in staging cluster." />
         ) : (
           <div className="table-wrap">
             <table className="data-table">
@@ -354,7 +354,7 @@ export function ProductionWorkloadsPage() {
       {/* DaemonSets table */}
       {tab === 'daemonsets' && (
         dsList.length === 0 ? (
-          <EmptyState icon="◈" message="No DaemonSets found in production cluster." />
+          <EmptyState icon="◈" message="No DaemonSets found in staging cluster." />
         ) : (
           <div className="table-wrap">
             <table className="data-table">

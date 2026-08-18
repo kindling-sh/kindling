@@ -79,7 +79,7 @@ func exportSnapshot(format, outDir, chartName string, dses []snapshotDSE) error 
 
 // ── 4. Ensure ingress controller ────────────────────────────────
 
-// ensureIngressController checks whether the target production cluster
+// ensureIngressController checks whether the target staging cluster
 // has an ingress controller running. If not, it installs Traefik via
 // Helm. progress is an optional callback for streaming status messages.
 func ensureIngressController(context string, progress func(string)) error {
@@ -162,7 +162,7 @@ func detectIngressClass(kubeCtx string) string {
 // ── 6. Deploy to cluster ────────────────────────────────────────
 
 // DeployOpts carries the parameters for deploying a snapshot chart to
-// a production cluster.
+// a staging cluster.
 type DeployOpts struct {
 	Context         string
 	Namespace       string
@@ -172,7 +172,7 @@ type DeployOpts struct {
 	DSEs            []snapshotDSE                      // for ingress flag generation
 	SelectedIngress map[string]bool                    // services to enable ingress for
 	IngressClass    string                             // IngressClass name for the target cluster
-	CredOverrides   map[string]map[string]credOverride // valuesKey → envVar → prodValue
+	CredOverrides   map[string]map[string]credOverride // valuesKey → envVar → stagingValue
 }
 
 // deploySnapshot runs helm upgrade --install or kubectl apply -k
@@ -195,7 +195,7 @@ func deploySnapshot(opts DeployOpts) (string, error) {
 		if fileExists(valuesLive) {
 			helmArgs = append(helmArgs, "-f", valuesLive)
 		}
-		// Apply production credential overrides (takes precedence over values-live.yaml)
+		// Apply staging credential overrides (takes precedence over values-live.yaml)
 		if len(opts.CredOverrides) > 0 {
 			credsFile, err := writeCredsOverrideFile(opts.CredOverrides)
 			if err != nil {

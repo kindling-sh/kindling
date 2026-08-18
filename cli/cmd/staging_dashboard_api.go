@@ -14,24 +14,24 @@ import (
 	"github.com/jeffvincent/kindling/cli/core"
 )
 
-// ── Production context & kubectl ────────────────────────────────
+// ── Staging context & kubectl ────────────────────────────────
 
-// prodContext is set by the --prod-context flag on the dashboard command.
-// If empty, production API routes will attempt auto-detection.
-var prodContext string
+// stagingContext is set by the --staging-context flag on the dashboard command.
+// If empty, staging API routes will attempt auto-detection.
+var stagingContext string
 
-// prodKubectlJSON runs kubectl against the production cluster context.
-func prodKubectlJSON(args ...string) (string, error) {
-	if prodContext == "" {
-		return "", fmt.Errorf("no production context configured")
+// stagingKubectlJSON runs kubectl against the staging cluster context.
+func stagingKubectlJSON(args ...string) (string, error) {
+	if stagingContext == "" {
+		return "", fmt.Errorf("no staging context configured")
 	}
-	full := append([]string{"--context", prodContext}, args...)
+	full := append([]string{"--context", stagingContext}, args...)
 	return core.RunCapture("kubectl", full...)
 }
 
-// ── Generic resource handler (production) ───────────────────────
+// ── Generic resource handler (staging) ───────────────────────
 
-func prodResourceHandler(resource string, opts resourceOpts) http.HandlerFunc {
+func stagingResourceHandler(resource string, opts resourceOpts) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		args := []string{"get", resource}
 		args = append(args, opts.extraArgs...)
@@ -50,7 +50,7 @@ func prodResourceHandler(resource string, opts resourceOpts) http.HandlerFunc {
 			}
 		}
 
-		out, err := prodKubectlJSON(args...)
+		out, err := stagingKubectlJSON(args...)
 		if err != nil {
 			if opts.emptyOnError {
 				jsonResponse(w, map[string]interface{}{"items": []interface{}{}})
@@ -64,26 +64,26 @@ func prodResourceHandler(resource string, opts resourceOpts) http.HandlerFunc {
 	}
 }
 
-// Pre-built production resource handlers.
+// Pre-built staging resource handlers.
 var (
-	handleProdNodes               = prodResourceHandler("nodes", resourceOpts{})
-	handleProdNamespaces          = prodResourceHandler("namespaces", resourceOpts{})
-	handleProdDeployments         = prodResourceHandler("deployments", resourceOpts{namespaced: true})
-	handleProdPods                = prodResourceHandler("pods", resourceOpts{namespaced: true, selectable: true})
-	handleProdServices            = prodResourceHandler("services", resourceOpts{namespaced: true})
-	handleProdIngresses           = prodResourceHandler("ingresses", resourceOpts{namespaced: true})
-	handleProdEvents              = prodResourceHandler("events", resourceOpts{namespaced: true, emptyOnError: true, extraArgs: []string{"--sort-by=.lastTimestamp"}})
-	handleProdSecrets             = prodResourceHandler("secrets", resourceOpts{namespaced: true, emptyOnError: true})
-	handleProdStatefulSets        = prodResourceHandler("statefulsets", resourceOpts{namespaced: true, emptyOnError: true})
-	handleProdDaemonSets          = prodResourceHandler("daemonsets", resourceOpts{namespaced: true, emptyOnError: true})
-	handleProdReplicaSets         = prodResourceHandler("replicasets", resourceOpts{namespaced: true, selectable: true})
-	handleProdClusterRoles        = prodResourceHandler("clusterroles", resourceOpts{emptyOnError: true})
-	handleProdClusterRoleBindings = prodResourceHandler("clusterrolebindings", resourceOpts{emptyOnError: true})
+	handleStagingNodes               = stagingResourceHandler("nodes", resourceOpts{})
+	handleStagingNamespaces          = stagingResourceHandler("namespaces", resourceOpts{})
+	handleStagingDeployments         = stagingResourceHandler("deployments", resourceOpts{namespaced: true})
+	handleStagingPods                = stagingResourceHandler("pods", resourceOpts{namespaced: true, selectable: true})
+	handleStagingServices            = stagingResourceHandler("services", resourceOpts{namespaced: true})
+	handleStagingIngresses           = stagingResourceHandler("ingresses", resourceOpts{namespaced: true})
+	handleStagingEvents              = stagingResourceHandler("events", resourceOpts{namespaced: true, emptyOnError: true, extraArgs: []string{"--sort-by=.lastTimestamp"}})
+	handleStagingSecrets             = stagingResourceHandler("secrets", resourceOpts{namespaced: true, emptyOnError: true})
+	handleStagingStatefulSets        = stagingResourceHandler("statefulsets", resourceOpts{namespaced: true, emptyOnError: true})
+	handleStagingDaemonSets          = stagingResourceHandler("daemonsets", resourceOpts{namespaced: true, emptyOnError: true})
+	handleStagingReplicaSets         = stagingResourceHandler("replicasets", resourceOpts{namespaced: true, selectable: true})
+	handleStagingClusterRoles        = stagingResourceHandler("clusterroles", resourceOpts{emptyOnError: true})
+	handleStagingClusterRoleBindings = stagingResourceHandler("clusterrolebindings", resourceOpts{emptyOnError: true})
 )
 
-// ── /api/prod/ingress-controller — detect ingress controller + external IP ──
+// ── /api/staging/ingress-controller — detect ingress controller + external IP ──
 
-func handleProdIngressController(w http.ResponseWriter, r *http.Request) {
+func handleStagingIngressController(w http.ResponseWriter, r *http.Request) {
 	type icPort struct {
 		Port     int    `json:"port"`
 		NodePort int    `json:"nodePort,omitempty"`
@@ -119,7 +119,7 @@ func handleProdIngressController(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for _, s := range searches {
-		out, err := prodKubectlJSON("get", "svc", "-n", s.ns, "-l", s.label, "-o", "json")
+		out, err := stagingKubectlJSON("get", "svc", "-n", s.ns, "-l", s.label, "-o", "json")
 		if err != nil {
 			continue
 		}
@@ -180,10 +180,10 @@ func handleProdIngressController(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, info)
 }
 
-// ── /api/prod/cluster — production cluster overview ─────────────
+// ── /api/staging/cluster — staging cluster overview ─────────────
 
-func handleProdCluster(w http.ResponseWriter, r *http.Request) {
-	type prodClusterInfo struct {
+func handleStagingCluster(w http.ResponseWriter, r *http.Request) {
+	type stagingClusterInfo struct {
 		Context    string      `json:"context"`
 		Connected  bool        `json:"connected"`
 		Provider   string      `json:"provider"`
@@ -194,10 +194,10 @@ func handleProdCluster(w http.ResponseWriter, r *http.Request) {
 		Traefik    interface{} `json:"traefik,omitempty"`
 	}
 
-	info := prodClusterInfo{Context: prodContext}
+	info := stagingClusterInfo{Context: stagingContext}
 
 	// Check connectivity
-	_, err := prodKubectlJSON("cluster-info")
+	_, err := stagingKubectlJSON("cluster-info")
 	if err != nil {
 		info.Connected = false
 		jsonResponse(w, info)
@@ -206,7 +206,7 @@ func handleProdCluster(w http.ResponseWriter, r *http.Request) {
 	info.Connected = true
 
 	// Server version
-	if out, err := prodKubectlJSON("version", "-o", "json"); err == nil {
+	if out, err := stagingKubectlJSON("version", "-o", "json"); err == nil {
 		var v struct {
 			ServerVersion struct {
 				GitVersion string `json:"gitVersion"`
@@ -218,7 +218,7 @@ func handleProdCluster(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Detect provider from context name
-	ctx := strings.ToLower(prodContext)
+	ctx := strings.ToLower(stagingContext)
 	switch {
 	case strings.Contains(ctx, "do-"):
 		info.Provider = "DigitalOcean"
@@ -235,7 +235,7 @@ func handleProdCluster(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Node count
-	if out, err := prodKubectlJSON("get", "nodes", "-o", "json"); err == nil {
+	if out, err := stagingKubectlJSON("get", "nodes", "-o", "json"); err == nil {
 		var list struct {
 			Items []interface{} `json:"items"`
 		}
@@ -245,10 +245,10 @@ func handleProdCluster(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Detect Prometheus
-	_, promErr := prodKubectlJSON("get", "svc", "-n", "monitoring", "prometheus-server", "--ignore-not-found")
+	_, promErr := stagingKubectlJSON("get", "svc", "-n", "monitoring", "prometheus-server", "--ignore-not-found")
 	if promErr == nil {
 		// Also check prometheus-operated (kube-prometheus-stack)
-		if out, _ := prodKubectlJSON("get", "svc", "-n", "monitoring", "--ignore-not-found", "-o", "json"); out != "" {
+		if out, _ := stagingKubectlJSON("get", "svc", "-n", "monitoring", "--ignore-not-found", "-o", "json"); out != "" {
 			if strings.Contains(out, "prometheus") {
 				info.Prometheus = true
 			}
@@ -256,7 +256,7 @@ func handleProdCluster(w http.ResponseWriter, r *http.Request) {
 	}
 	// Try prometheus namespace too
 	if !info.Prometheus {
-		if out, _ := prodKubectlJSON("get", "svc", "-n", "prometheus", "--ignore-not-found", "-o", "json"); out != "" {
+		if out, _ := stagingKubectlJSON("get", "svc", "-n", "prometheus", "--ignore-not-found", "-o", "json"); out != "" {
 			if strings.Contains(out, "prometheus") {
 				info.Prometheus = true
 			}
@@ -264,7 +264,7 @@ func handleProdCluster(w http.ResponseWriter, r *http.Request) {
 	}
 	// Try default namespace
 	if !info.Prometheus {
-		if out, _ := prodKubectlJSON("get", "svc", "--all-namespaces", "-l", "app=prometheus", "--ignore-not-found", "-o", "json"); out != "" {
+		if out, _ := stagingKubectlJSON("get", "svc", "--all-namespaces", "-l", "app=prometheus", "--ignore-not-found", "-o", "json"); out != "" {
 			if strings.Contains(out, "prometheus") {
 				info.Prometheus = true
 			}
@@ -272,15 +272,15 @@ func handleProdCluster(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Detect cert-manager
-	_, certErr := prodKubectlJSON("get", "namespace", "cert-manager", "--ignore-not-found")
+	_, certErr := stagingKubectlJSON("get", "namespace", "cert-manager", "--ignore-not-found")
 	if certErr == nil {
-		if out, _ := prodKubectlJSON("get", "deployment", "-n", "cert-manager", "cert-manager", "--ignore-not-found"); out != "" {
+		if out, _ := stagingKubectlJSON("get", "deployment", "-n", "cert-manager", "cert-manager", "--ignore-not-found"); out != "" {
 			info.CertMgr = true
 		}
 	}
 
 	// Detect Traefik
-	if out, err := prodKubectlJSON("get", "pods", "-n", "traefik",
+	if out, err := stagingKubectlJSON("get", "pods", "-n", "traefik",
 		"-l", "app.kubernetes.io/name=traefik", "-o", "json"); err == nil {
 		var pods interface{}
 		json.Unmarshal([]byte(out), &pods)
@@ -290,9 +290,9 @@ func handleProdCluster(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, info)
 }
 
-// ── /api/prod/contexts — list available kubeconfig contexts ─────
+// ── /api/staging/contexts — list available kubeconfig contexts ─────
 
-func handleProdContexts(w http.ResponseWriter, r *http.Request) {
+func handleStagingContexts(w http.ResponseWriter, r *http.Request) {
 	out, err := core.RunCapture("kubectl", "config", "get-contexts", "-o", "name")
 	if err != nil {
 		jsonError(w, "failed to list contexts", 500)
@@ -308,12 +308,12 @@ func handleProdContexts(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, contexts)
 }
 
-// ── /api/prod/logs/{namespace}/{pod} ────────────────────────────
+// ── /api/staging/logs/{namespace}/{pod} ────────────────────────────
 
-func handleProdLogs(w http.ResponseWriter, r *http.Request) {
-	parts, err := parsePathParams(r.URL.Path, "/api/prod/logs/", 2)
+func handleStagingLogs(w http.ResponseWriter, r *http.Request) {
+	parts, err := parsePathParams(r.URL.Path, "/api/staging/logs/", 2)
 	if err != nil {
-		jsonError(w, "usage: /api/prod/logs/{namespace}/{pod}", 400)
+		jsonError(w, "usage: /api/staging/logs/{namespace}/{pod}", 400)
 		return
 	}
 	ns, pod := parts[0], parts[1]
@@ -328,7 +328,7 @@ func handleProdLogs(w http.ResponseWriter, r *http.Request) {
 		args = append(args, "-c", container)
 	}
 
-	out, err := prodKubectlJSON(args...)
+	out, err := stagingKubectlJSON(args...)
 	if err != nil {
 		jsonError(w, "failed to get logs: "+err.Error(), 500)
 		return
@@ -336,20 +336,20 @@ func handleProdLogs(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, map[string]string{"logs": out})
 }
 
-// ── /api/prod/restart/{namespace}/{deployment} ──────────────────
+// ── /api/staging/restart/{namespace}/{deployment} ──────────────────
 
-func handleProdRestart(w http.ResponseWriter, r *http.Request) {
+func handleStagingRestart(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		jsonError(w, "method not allowed", 405)
 		return
 	}
-	parts, err := parsePathParams(r.URL.Path, "/api/prod/restart/", 2)
+	parts, err := parsePathParams(r.URL.Path, "/api/staging/restart/", 2)
 	if err != nil {
-		jsonError(w, "usage: POST /api/prod/restart/{namespace}/{deployment}", 400)
+		jsonError(w, "usage: POST /api/staging/restart/{namespace}/{deployment}", 400)
 		return
 	}
 	ns, dep := parts[0], parts[1]
-	_, err = prodKubectlJSON("rollout", "restart", "deployment/"+dep, "-n", ns)
+	_, err = stagingKubectlJSON("rollout", "restart", "deployment/"+dep, "-n", ns)
 	if err != nil {
 		jsonResponse(w, map[string]interface{}{"ok": false, "error": err.Error()})
 		return
@@ -357,16 +357,16 @@ func handleProdRestart(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, map[string]interface{}{"ok": true, "output": fmt.Sprintf("Restarted %s/%s", ns, dep)})
 }
 
-// ── /api/prod/scale/{namespace}/{deployment} ────────────────────
+// ── /api/staging/scale/{namespace}/{deployment} ────────────────────
 
-func handleProdScale(w http.ResponseWriter, r *http.Request) {
+func handleStagingScale(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		jsonError(w, "method not allowed", 405)
 		return
 	}
-	parts, err := parsePathParams(r.URL.Path, "/api/prod/scale/", 2)
+	parts, err := parsePathParams(r.URL.Path, "/api/staging/scale/", 2)
 	if err != nil {
-		jsonError(w, "usage: POST /api/prod/scale/{namespace}/{deployment}", 400)
+		jsonError(w, "usage: POST /api/staging/scale/{namespace}/{deployment}", 400)
 		return
 	}
 	ns, dep := parts[0], parts[1]
@@ -379,7 +379,7 @@ func handleProdScale(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err = prodKubectlJSON("scale", "deployment/"+dep, "-n", ns,
+	_, err = stagingKubectlJSON("scale", "deployment/"+dep, "-n", ns,
 		fmt.Sprintf("--replicas=%d", body.Replicas))
 	if err != nil {
 		jsonResponse(w, map[string]interface{}{"ok": false, "error": err.Error()})
@@ -388,20 +388,20 @@ func handleProdScale(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, map[string]interface{}{"ok": true, "output": fmt.Sprintf("Scaled %s to %d", dep, body.Replicas)})
 }
 
-// ── /api/prod/delete-pod/{namespace}/{pod} ──────────────────────
+// ── /api/staging/delete-pod/{namespace}/{pod} ──────────────────────
 
-func handleProdDeletePod(w http.ResponseWriter, r *http.Request) {
+func handleStagingDeletePod(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodDelete {
 		jsonError(w, "method not allowed", 405)
 		return
 	}
-	parts, err := parsePathParams(r.URL.Path, "/api/prod/delete-pod/", 2)
+	parts, err := parsePathParams(r.URL.Path, "/api/staging/delete-pod/", 2)
 	if err != nil {
-		jsonError(w, "usage: DELETE /api/prod/delete-pod/{namespace}/{pod}", 400)
+		jsonError(w, "usage: DELETE /api/staging/delete-pod/{namespace}/{pod}", 400)
 		return
 	}
 	ns, pod := parts[0], parts[1]
-	_, err = prodKubectlJSON("delete", "pod", pod, "-n", ns)
+	_, err = stagingKubectlJSON("delete", "pod", pod, "-n", ns)
 	if err != nil {
 		jsonResponse(w, map[string]interface{}{"ok": false, "error": err.Error()})
 		return
@@ -409,17 +409,17 @@ func handleProdDeletePod(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, map[string]interface{}{"ok": true, "output": fmt.Sprintf("Deleted pod %s/%s", ns, pod)})
 }
 
-// ── /api/prod/rollout-history/{namespace}/{deployment} ──────────
+// ── /api/staging/rollout-history/{namespace}/{deployment} ──────────
 
-func handleProdRolloutHistory(w http.ResponseWriter, r *http.Request) {
-	parts, err := parsePathParams(r.URL.Path, "/api/prod/rollout-history/", 2)
+func handleStagingRolloutHistory(w http.ResponseWriter, r *http.Request) {
+	parts, err := parsePathParams(r.URL.Path, "/api/staging/rollout-history/", 2)
 	if err != nil {
-		jsonError(w, "usage: /api/prod/rollout-history/{namespace}/{deployment}", 400)
+		jsonError(w, "usage: /api/staging/rollout-history/{namespace}/{deployment}", 400)
 		return
 	}
 	ns, dep := parts[0], parts[1]
 
-	out, err := prodKubectlJSON("rollout", "history", "deployment/"+dep, "-n", ns)
+	out, err := stagingKubectlJSON("rollout", "history", "deployment/"+dep, "-n", ns)
 	if err != nil {
 		jsonError(w, "rollout history failed: "+err.Error(), 500)
 		return
@@ -453,16 +453,16 @@ func handleProdRolloutHistory(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, map[string]interface{}{"items": revisions, "raw": out})
 }
 
-// ── /api/prod/rollback/{namespace}/{deployment} ─────────────────
+// ── /api/staging/rollback/{namespace}/{deployment} ─────────────────
 
-func handleProdRollback(w http.ResponseWriter, r *http.Request) {
+func handleStagingRollback(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		jsonError(w, "method not allowed", 405)
 		return
 	}
-	parts, err := parsePathParams(r.URL.Path, "/api/prod/rollback/", 2)
+	parts, err := parsePathParams(r.URL.Path, "/api/staging/rollback/", 2)
 	if err != nil {
-		jsonError(w, "usage: POST /api/prod/rollback/{namespace}/{deployment}", 400)
+		jsonError(w, "usage: POST /api/staging/rollback/{namespace}/{deployment}", 400)
 		return
 	}
 	ns, dep := parts[0], parts[1]
@@ -477,7 +477,7 @@ func handleProdRollback(w http.ResponseWriter, r *http.Request) {
 		args = append(args, fmt.Sprintf("--to-revision=%d", body.Revision))
 	}
 
-	out, err := prodKubectlJSON(args...)
+	out, err := stagingKubectlJSON(args...)
 	if err != nil {
 		jsonResponse(w, map[string]interface{}{"ok": false, "error": err.Error()})
 		return
@@ -485,17 +485,17 @@ func handleProdRollback(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, map[string]interface{}{"ok": true, "output": strings.TrimSpace(out)})
 }
 
-// ── /api/prod/rollout-status/{namespace}/{deployment} ───────────
+// ── /api/staging/rollout-status/{namespace}/{deployment} ───────────
 
-func handleProdRolloutStatus(w http.ResponseWriter, r *http.Request) {
-	parts, err := parsePathParams(r.URL.Path, "/api/prod/rollout-status/", 2)
+func handleStagingRolloutStatus(w http.ResponseWriter, r *http.Request) {
+	parts, err := parsePathParams(r.URL.Path, "/api/staging/rollout-status/", 2)
 	if err != nil {
-		jsonError(w, "usage: /api/prod/rollout-status/{namespace}/{deployment}", 400)
+		jsonError(w, "usage: /api/staging/rollout-status/{namespace}/{deployment}", 400)
 		return
 	}
 	ns, dep := parts[0], parts[1]
 
-	out, err := prodKubectlJSON("rollout", "status", "deployment/"+dep, "-n", ns, "--timeout=2s")
+	out, err := stagingKubectlJSON("rollout", "status", "deployment/"+dep, "-n", ns, "--timeout=2s")
 	status := "progressing"
 	if err == nil && strings.Contains(out, "successfully rolled out") {
 		status = "complete"
@@ -509,9 +509,9 @@ func handleProdRolloutStatus(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// ── /api/prod/exec — execute a command in a pod ─────────────────
+// ── /api/staging/exec — execute a command in a pod ─────────────────
 
-func handleProdExec(w http.ResponseWriter, r *http.Request) {
+func handleStagingExec(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		jsonError(w, "method not allowed", 405)
 		return
@@ -537,7 +537,7 @@ func handleProdExec(w http.ResponseWriter, r *http.Request) {
 	}
 	args = append(args, "--", "sh", "-c", body.Command)
 
-	out, err := prodKubectlJSON(args...)
+	out, err := stagingKubectlJSON(args...)
 	if err != nil {
 		jsonResponse(w, map[string]interface{}{
 			"ok":     false,
@@ -552,17 +552,17 @@ func handleProdExec(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// ── /api/prod/describe/{kind}/{namespace}/{name} ────────────────
+// ── /api/staging/describe/{kind}/{namespace}/{name} ────────────────
 
-func handleProdDescribe(w http.ResponseWriter, r *http.Request) {
-	parts, err := parsePathParams(r.URL.Path, "/api/prod/describe/", 3)
+func handleStagingDescribe(w http.ResponseWriter, r *http.Request) {
+	parts, err := parsePathParams(r.URL.Path, "/api/staging/describe/", 3)
 	if err != nil {
-		jsonError(w, "usage: /api/prod/describe/{kind}/{namespace}/{name}", 400)
+		jsonError(w, "usage: /api/staging/describe/{kind}/{namespace}/{name}", 400)
 		return
 	}
 	kind, ns, name := parts[0], parts[1], parts[2]
 
-	out, err := prodKubectlJSON("describe", kind, name, "-n", ns)
+	out, err := stagingKubectlJSON("describe", kind, name, "-n", ns)
 	if err != nil {
 		jsonError(w, "describe failed: "+err.Error(), 500)
 		return
@@ -570,10 +570,10 @@ func handleProdDescribe(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, map[string]string{"output": out})
 }
 
-// ── /api/prod/certificates — cert-manager certificates ──────────
+// ── /api/staging/certificates — cert-manager certificates ──────────
 
-func handleProdCertificates(w http.ResponseWriter, r *http.Request) {
-	out, err := prodKubectlJSON("get", "certificates", "--all-namespaces", "-o", "json")
+func handleStagingCertificates(w http.ResponseWriter, r *http.Request) {
+	out, err := stagingKubectlJSON("get", "certificates", "--all-namespaces", "-o", "json")
 	if err != nil {
 		// cert-manager CRD might not exist
 		jsonResponse(w, map[string]interface{}{"items": []interface{}{}})
@@ -583,10 +583,10 @@ func handleProdCertificates(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, out)
 }
 
-// ── /api/prod/clusterissuers — cert-manager ClusterIssuers ──────
+// ── /api/staging/clusterissuers — cert-manager ClusterIssuers ──────
 
-func handleProdClusterIssuers(w http.ResponseWriter, r *http.Request) {
-	out, err := prodKubectlJSON("get", "clusterissuers", "-o", "json")
+func handleStagingClusterIssuers(w http.ResponseWriter, r *http.Request) {
+	out, err := stagingKubectlJSON("get", "clusterissuers", "-o", "json")
 	if err != nil {
 		jsonResponse(w, map[string]interface{}{"items": []interface{}{}})
 		return
@@ -595,10 +595,10 @@ func handleProdClusterIssuers(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, out)
 }
 
-// ── /api/prod/node-metrics — kubectl top nodes ──────────────────
+// ── /api/staging/node-metrics — kubectl top nodes ──────────────────
 
-func handleProdNodeMetrics(w http.ResponseWriter, r *http.Request) {
-	out, err := prodKubectlJSON("top", "nodes", "--no-headers")
+func handleStagingNodeMetrics(w http.ResponseWriter, r *http.Request) {
+	out, err := stagingKubectlJSON("top", "nodes", "--no-headers")
 	if err != nil {
 		jsonResponse(w, map[string]interface{}{"items": []interface{}{}, "error": "metrics-server not available"})
 		return
@@ -628,9 +628,9 @@ func handleProdNodeMetrics(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, map[string]interface{}{"items": metrics})
 }
 
-// ── /api/prod/pod-metrics — kubectl top pods ────────────────────
+// ── /api/staging/pod-metrics — kubectl top pods ────────────────────
 
-func handleProdPodMetrics(w http.ResponseWriter, r *http.Request) {
+func handleStagingPodMetrics(w http.ResponseWriter, r *http.Request) {
 	ns := r.URL.Query().Get("namespace")
 	args := []string{"top", "pods", "--no-headers"}
 	if ns != "" {
@@ -639,7 +639,7 @@ func handleProdPodMetrics(w http.ResponseWriter, r *http.Request) {
 		args = append(args, "--all-namespaces")
 	}
 
-	out, err := prodKubectlJSON(args...)
+	out, err := stagingKubectlJSON(args...)
 	if err != nil {
 		jsonResponse(w, map[string]interface{}{"items": []interface{}{}, "error": "metrics-server not available"})
 		return
@@ -676,7 +676,7 @@ func handleProdPodMetrics(w http.ResponseWriter, r *http.Request) {
 
 // ── Prometheus Integration ──────────────────────────────────────
 //
-// We auto-detect Prometheus in the production cluster and proxy queries
+// We auto-detect Prometheus in the staging cluster and proxy queries
 // through a kubectl port-forward tunnel.
 
 var (
@@ -688,7 +688,7 @@ var (
 	promSvcNS   string
 )
 
-// detectPrometheus finds the Prometheus service in the production cluster.
+// detectPrometheus finds the Prometheus service in the staging cluster.
 func detectPrometheus() (namespace, service string, port int) {
 	// Common Prometheus service patterns
 	searches := []struct {
@@ -705,7 +705,7 @@ func detectPrometheus() (namespace, service string, port int) {
 	}
 
 	for _, s := range searches {
-		out, err := prodKubectlJSON("get", "svc", s.name, "-n", s.ns, "-o", "json")
+		out, err := stagingKubectlJSON("get", "svc", s.name, "-n", s.ns, "-o", "json")
 		if err == nil && out != "" {
 			var svc struct {
 				Spec struct {
@@ -721,7 +721,7 @@ func detectPrometheus() (namespace, service string, port int) {
 	}
 
 	// Fallback: search by label
-	out, err := prodKubectlJSON("get", "svc", "--all-namespaces",
+	out, err := stagingKubectlJSON("get", "svc", "--all-namespaces",
 		"-l", "app.kubernetes.io/name=prometheus",
 		"-o", "json")
 	if err == nil && out != "" {
@@ -750,7 +750,7 @@ func detectPrometheus() (namespace, service string, port int) {
 
 	// Also try app=prometheus label
 	for _, label := range []string{"app=prometheus", "app=vmsingle", "app.kubernetes.io/name=vmsingle"} {
-		out, err = prodKubectlJSON("get", "svc", "--all-namespaces",
+		out, err = stagingKubectlJSON("get", "svc", "--all-namespaces",
 			"-l", label,
 			"-o", "json")
 		if err == nil && out != "" {
@@ -796,7 +796,7 @@ func ensurePromForward() (int, error) {
 
 	ns, svc, svcPort := detectPrometheus()
 	if svc == "" {
-		return 0, fmt.Errorf("prometheus not found in production cluster")
+		return 0, fmt.Errorf("prometheus not found in staging cluster")
 	}
 	promSvcName = svc
 	promSvcNS = ns
@@ -810,7 +810,7 @@ func ensurePromForward() (int, error) {
 	ln.Close()
 
 	// Start port-forward
-	cmd := exec.Command("kubectl", "--context", prodContext,
+	cmd := exec.Command("kubectl", "--context", stagingContext,
 		"port-forward", fmt.Sprintf("svc/%s", svc),
 		fmt.Sprintf("%d:%d", localPort, svcPort),
 		"-n", ns)
@@ -847,7 +847,7 @@ func cleanupPromForward() {
 	}
 }
 
-// ── /api/prod/prometheus/status ─────────────────────────────────
+// ── /api/staging/prometheus/status ─────────────────────────────────
 
 func handlePromStatus(w http.ResponseWriter, r *http.Request) {
 	ns, svc, port := detectPrometheus()
@@ -860,7 +860,7 @@ func handlePromStatus(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// ── /api/prod/prometheus/query — instant query ──────────────────
+// ── /api/staging/prometheus/query — instant query ──────────────────
 
 func handlePromQuery(w http.ResponseWriter, r *http.Request) {
 	port, err := ensurePromForward()
@@ -893,7 +893,7 @@ func handlePromQuery(w http.ResponseWriter, r *http.Request) {
 	io.Copy(w, resp.Body)
 }
 
-// ── /api/prod/prometheus/query_range — range query ──────────────
+// ── /api/staging/prometheus/query_range — range query ──────────────
 
 func handlePromQueryRange(w http.ResponseWriter, r *http.Request) {
 	port, err := ensurePromForward()
@@ -928,7 +928,7 @@ func handlePromQueryRange(w http.ResponseWriter, r *http.Request) {
 	io.Copy(w, resp.Body)
 }
 
-// ── /api/prod/advisor — rule-based cluster advisor ──────────────
+// ── /api/staging/advisor — rule-based cluster advisor ──────────────
 
 type advisory struct {
 	Severity string `json:"severity"` // critical, warning, info
@@ -938,7 +938,7 @@ type advisory struct {
 	Resource string `json:"resource,omitempty"` // e.g. "pod/my-app-xyz"
 }
 
-func handleProdAdvisor(w http.ResponseWriter, r *http.Request) {
+func handleStagingAdvisor(w http.ResponseWriter, r *http.Request) {
 	var advisories []advisory
 
 	// ── Collect cluster state ───────────────────────────────────
@@ -1018,25 +1018,25 @@ func handleProdAdvisor(w http.ResponseWriter, r *http.Request) {
 
 	// Fetch pods
 	var podList struct{ Items []podItem }
-	if out, err := prodKubectlJSON("get", "pods", "--all-namespaces", "-o", "json"); err == nil {
+	if out, err := stagingKubectlJSON("get", "pods", "--all-namespaces", "-o", "json"); err == nil {
 		json.Unmarshal([]byte(out), &podList)
 	}
 
 	// Fetch nodes
 	var nodeList struct{ Items []nodeItem }
-	if out, err := prodKubectlJSON("get", "nodes", "-o", "json"); err == nil {
+	if out, err := stagingKubectlJSON("get", "nodes", "-o", "json"); err == nil {
 		json.Unmarshal([]byte(out), &nodeList)
 	}
 
 	// Fetch deployments
 	var depList struct{ Items []deployItem }
-	if out, err := prodKubectlJSON("get", "deployments", "--all-namespaces", "-o", "json"); err == nil {
+	if out, err := stagingKubectlJSON("get", "deployments", "--all-namespaces", "-o", "json"); err == nil {
 		json.Unmarshal([]byte(out), &depList)
 	}
 
 	// Fetch recent warning events
 	var eventList struct{ Items []eventItem }
-	if out, err := prodKubectlJSON("get", "events", "--all-namespaces",
+	if out, err := stagingKubectlJSON("get", "events", "--all-namespaces",
 		"--field-selector", "type=Warning", "--sort-by=.lastTimestamp",
 		"-o", "json"); err == nil {
 		json.Unmarshal([]byte(out), &eventList)
@@ -1256,7 +1256,7 @@ func handleProdAdvisor(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// ── Certificate rules ───────────────────────────────────────
-	if certOut, err := prodKubectlJSON("get", "certificates", "--all-namespaces", "-o", "json"); err == nil {
+	if certOut, err := stagingKubectlJSON("get", "certificates", "--all-namespaces", "-o", "json"); err == nil {
 		var certList struct {
 			Items []struct {
 				Metadata struct {
@@ -1318,7 +1318,7 @@ func handleProdAdvisor(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// ── Node metrics rules (high resource usage) ────────────────
-	if topOut, err := prodKubectlJSON("top", "nodes", "--no-headers"); err == nil {
+	if topOut, err := stagingKubectlJSON("top", "nodes", "--no-headers"); err == nil {
 		for _, line := range strings.Split(strings.TrimSpace(topOut), "\n") {
 			fields := strings.Fields(line)
 			if len(fields) >= 5 {
@@ -1385,9 +1385,9 @@ func handleProdAdvisor(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// ── /api/prod/apply — kubectl apply raw YAML ────────────────────
+// ── /api/staging/apply — kubectl apply raw YAML ────────────────────
 
-func handleProdApply(w http.ResponseWriter, r *http.Request) {
+func handleStagingApply(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		jsonError(w, "method not allowed", 405)
 		return
@@ -1401,7 +1401,7 @@ func handleProdApply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cmd := exec.Command("kubectl", "--context", prodContext, "apply", "-f", "-")
+	cmd := exec.Command("kubectl", "--context", stagingContext, "apply", "-f", "-")
 	cmd.Stdin = strings.NewReader(body.YAML)
 	out, err := cmd.CombinedOutput()
 	if err != nil {

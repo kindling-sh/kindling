@@ -10,14 +10,14 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// ── Production parent command ───────────────────────────────────
+// ── Staging parent command ───────────────────────────────────
 
-var productionCmd = &cobra.Command{
-	Use:   "production",
-	Short: "Production cluster utilities (TLS, metrics)",
-	Long: `Utilities for managing production Kubernetes clusters.
+var stagingCmd = &cobra.Command{
+	Use:   "staging",
+	Short: "Staging cluster utilities (TLS, metrics)",
+	Long: `Utilities for managing external staging Kubernetes clusters.
 
-To deploy your app to production, use 'kindling snapshot --deploy'.
+To deploy your app to staging, use 'kindling snapshot --deploy'.
 
 Subcommands:
   tls      Install cert-manager and configure TLS for Ingress resources
@@ -25,51 +25,51 @@ Subcommands:
 }
 
 func init() {
-	rootCmd.AddCommand(productionCmd)
+	rootCmd.AddCommand(stagingCmd)
 }
 
-// ── production tls ──────────────────────────────────────────────
+// ── staging tls ──────────────────────────────────────────────
 
 var (
-	prodTLSDomain       string
-	prodTLSContext      string
-	prodTLSEmail        string
-	prodTLSIssuer       string
-	prodTLSStaging      bool
-	prodTLSDSEFile      string
-	prodTLSIngressClass string
+	stagingTLSDomain       string
+	stagingTLSContext      string
+	stagingTLSEmail        string
+	stagingTLSIssuer       string
+	stagingTLSUseACMEStaging      bool
+	stagingTLSDSEFile      string
+	stagingTLSIngressClass string
 )
 
-var productionTLSCmd = &cobra.Command{
+var stagingTLSCmd = &cobra.Command{
 	Use:   "tls",
-	Short: "Configure TLS with cert-manager for production Ingress",
+	Short: "Configure TLS with cert-manager for a staging Ingress",
 	Long: `Installs cert-manager (if not already present), creates a ClusterIssuer
 for Let's Encrypt, and optionally patches a DSE YAML file to enable TLS on
 its Ingress.
 
 Examples:
-  kindling production tls --context my-prod --domain app.example.com --email admin@example.com
-  kindling production tls --context my-prod --domain app.example.com --staging
-  kindling production tls --context my-prod --domain app.example.com -f dev-environment.yaml`,
-	RunE: runProductionTLS,
+  kindling staging tls --context my-staging --domain app.example.com --email admin@example.com
+  kindling staging tls --context my-staging --domain app.example.com --staging
+  kindling staging tls --context my-staging --domain app.example.com -f dev-environment.yaml`,
+	RunE: runStagingTLS,
 }
 
 func init() {
-	productionTLSCmd.Flags().StringVar(&prodTLSContext, "context", "", "Kubeconfig context for the production cluster (required)")
-	productionTLSCmd.Flags().StringVar(&prodTLSDomain, "domain", "", "Domain name for the TLS certificate (required)")
-	productionTLSCmd.Flags().StringVar(&prodTLSEmail, "email", "", "Email for Let's Encrypt registration (required)")
-	productionTLSCmd.Flags().StringVar(&prodTLSIssuer, "issuer", "letsencrypt-prod", "ClusterIssuer name")
-	productionTLSCmd.Flags().BoolVar(&prodTLSStaging, "staging", false, "Use Let's Encrypt staging server (for testing)")
-	productionTLSCmd.Flags().StringVarP(&prodTLSDSEFile, "file", "f", "", "Optional: DSE YAML to patch with TLS config")
-	productionTLSCmd.Flags().StringVar(&prodTLSIngressClass, "ingress-class", "traefik", "IngressClass for the ACME solver")
-	_ = productionTLSCmd.MarkFlagRequired("context")
-	_ = productionTLSCmd.MarkFlagRequired("domain")
-	_ = productionTLSCmd.MarkFlagRequired("email")
-	productionCmd.AddCommand(productionTLSCmd)
+	stagingTLSCmd.Flags().StringVar(&stagingTLSContext, "context", "", "Kubeconfig context for the staging cluster (required)")
+	stagingTLSCmd.Flags().StringVar(&stagingTLSDomain, "domain", "", "Domain name for the TLS certificate (required)")
+	stagingTLSCmd.Flags().StringVar(&stagingTLSEmail, "email", "", "Email for Let's Encrypt registration (required)")
+	stagingTLSCmd.Flags().StringVar(&stagingTLSIssuer, "issuer", "letsencrypt-prod", "ClusterIssuer name")
+	stagingTLSCmd.Flags().BoolVar(&stagingTLSUseACMEStaging, "staging", false, "Use Let's Encrypt staging server (for testing)")
+	stagingTLSCmd.Flags().StringVarP(&stagingTLSDSEFile, "file", "f", "", "Optional: DSE YAML to patch with TLS config")
+	stagingTLSCmd.Flags().StringVar(&stagingTLSIngressClass, "ingress-class", "traefik", "IngressClass for the ACME solver")
+	_ = stagingTLSCmd.MarkFlagRequired("context")
+	_ = stagingTLSCmd.MarkFlagRequired("domain")
+	_ = stagingTLSCmd.MarkFlagRequired("email")
+	stagingCmd.AddCommand(stagingTLSCmd)
 }
 
-func runProductionTLS(cmd *cobra.Command, args []string) error {
-	ctx := prodTLSContext
+func runStagingTLS(cmd *cobra.Command, args []string) error {
+	ctx := stagingTLSContext
 
 	// Safety: refuse Kind contexts
 	if strings.HasPrefix(ctx, "kind-") {
@@ -105,7 +105,7 @@ func runProductionTLS(cmd *cobra.Command, args []string) error {
 
 	// ── Create ClusterIssuer ────────────────────────────────────
 	acmeServer := "https://acme-v02.api.letsencrypt.org/directory"
-	if prodTLSStaging {
+	if stagingTLSUseACMEStaging {
 		acmeServer = "https://acme-staging-v02.api.letsencrypt.org/directory"
 		step("🧪", "Using Let's Encrypt staging server")
 	}
@@ -124,21 +124,21 @@ spec:
     - http01:
         ingress:
           ingressClassName: %s
-`, prodTLSIssuer, acmeServer, prodTLSEmail, prodTLSIssuer, prodTLSIngressClass)
+`, stagingTLSIssuer, acmeServer, stagingTLSEmail, stagingTLSIssuer, stagingTLSIngressClass)
 
-	step("🔐", fmt.Sprintf("Creating ClusterIssuer %q", prodTLSIssuer))
+	step("🔐", fmt.Sprintf("Creating ClusterIssuer %q", stagingTLSIssuer))
 	if err := runStdin(issuerYAML, "kubectl", "--context", ctx, "apply", "-f", "-"); err != nil {
 		return fmt.Errorf("ClusterIssuer creation failed: %w", err)
 	}
 	success("ClusterIssuer created")
 
 	// ── Optionally patch a DSE file ─────────────────────────────
-	if prodTLSDSEFile != "" {
-		step("📝", fmt.Sprintf("Patching %s with TLS config", prodTLSDSEFile))
-		if err := patchDSEWithTLS(prodTLSDSEFile, prodTLSDomain, prodTLSIssuer, prodTLSIngressClass); err != nil {
+	if stagingTLSDSEFile != "" {
+		step("📝", fmt.Sprintf("Patching %s with TLS config", stagingTLSDSEFile))
+		if err := patchDSEWithTLS(stagingTLSDSEFile, stagingTLSDomain, stagingTLSIssuer, stagingTLSIngressClass); err != nil {
 			return fmt.Errorf("failed to patch DSE: %w", err)
 		}
-		success(fmt.Sprintf("Updated %s with TLS config", prodTLSDSEFile))
+		success(fmt.Sprintf("Updated %s with TLS config", stagingTLSDSEFile))
 		fmt.Println()
 		fmt.Fprintf(os.Stderr, "  Deploy with: %skindling snapshot -r <registry> --deploy --context %s%s\n", colorCyan, ctx, colorReset)
 	}
@@ -153,14 +153,14 @@ spec:
 	fmt.Println()
 	fmt.Fprintf(os.Stderr, "    ingress:\n")
 	fmt.Fprintf(os.Stderr, "      enabled: true\n")
-	fmt.Fprintf(os.Stderr, "      host: %s\n", prodTLSDomain)
-	fmt.Fprintf(os.Stderr, "      ingressClassName: %s\n", prodTLSIngressClass)
+	fmt.Fprintf(os.Stderr, "      host: %s\n", stagingTLSDomain)
+	fmt.Fprintf(os.Stderr, "      ingressClassName: %s\n", stagingTLSIngressClass)
 	fmt.Fprintf(os.Stderr, "      annotations:\n")
-	fmt.Fprintf(os.Stderr, "        cert-manager.io/cluster-issuer: %s\n", prodTLSIssuer)
+	fmt.Fprintf(os.Stderr, "        cert-manager.io/cluster-issuer: %s\n", stagingTLSIssuer)
 	fmt.Fprintf(os.Stderr, "      tls:\n")
-	fmt.Fprintf(os.Stderr, "        secretName: %s-tls\n", strings.ReplaceAll(prodTLSDomain, ".", "-"))
+	fmt.Fprintf(os.Stderr, "        secretName: %s-tls\n", strings.ReplaceAll(stagingTLSDomain, ".", "-"))
 	fmt.Fprintf(os.Stderr, "        hosts:\n")
-	fmt.Fprintf(os.Stderr, "          - %s\n", prodTLSDomain)
+	fmt.Fprintf(os.Stderr, "          - %s\n", stagingTLSDomain)
 	fmt.Println()
 
 	return nil

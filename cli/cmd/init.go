@@ -86,20 +86,20 @@ func runInit(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("missing required tools: %v", missing)
 	}
 
-	// Optional tools for graduating a dev environment to production
+	// Optional tools for graduating a dev environment to staging
 	// (`kindling snapshot -r <registry> --deploy`). Not required for local
 	// dev, so these are warnings rather than a hard failure — but flagged
 	// here, at setup time, instead of surfacing mid-deploy after the user
 	// has already read cluster state and entered registry credentials.
 	optionalTools := map[string]string{
-		"crane": "brew install crane      # pushes images to your production registry (kindling snapshot -r ...)",
-		"helm":  "brew install helm       # installs the production Helm chart (kindling snapshot --deploy)",
+		"crane": "brew install crane      # pushes images to your staging registry (kindling snapshot -r ...)",
+		"helm":  "brew install helm       # installs the staging Helm chart (kindling snapshot --deploy)",
 	}
 	for _, tool := range []string{"crane", "helm"} {
 		if commandExists(tool) {
 			step("✓", fmt.Sprintf("%s found", tool))
 		} else {
-			warn(fmt.Sprintf("%s not found on PATH — needed later for 'kindling snapshot --deploy' (production graduation)", tool))
+			warn(fmt.Sprintf("%s not found on PATH — needed later for 'kindling snapshot --deploy' (staging graduation)", tool))
 			step("→", optionalTools[tool])
 		}
 	}

@@ -37,7 +37,7 @@ const config: Config = {
         "@type": "SoftwareApplication",
         name: "kindling",
         description:
-          "Dev on your laptop. Deploy to production. One tool. Analyze your repo, AI-generate a CI workflow, dev with live sync on localhost, then graduate to production.",
+          "Dev on your laptop. Deploy to staging. One tool. Analyze your repo, AI-generate a CI workflow, dev with live sync on localhost, then graduate to a staging cluster.",
         url: "https://kindling.sh",
         applicationCategory: "DeveloperApplication",
         operatingSystem: "macOS, Linux",
@@ -115,7 +115,7 @@ const config: Config = {
           items: [
             { label: "GitHub Actions", to: "/docs/github-actions" },
             { label: "Dependencies", to: "/docs/dependencies" },
-            { label: "Graduating to Production", to: "/docs/graduation" },
+            { label: "Graduating to a Staging Cluster", to: "/docs/graduation" },
           ],
         },
         {

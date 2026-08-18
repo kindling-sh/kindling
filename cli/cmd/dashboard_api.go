@@ -91,14 +91,14 @@ var (
 
 func handleContexts(w http.ResponseWriter, r *http.Request) {
 	type contextsResponse struct {
-		Local      string `json:"local"`
-		Production string `json:"production"`
-		Current    string `json:"current"`
+		Local   string `json:"local"`
+		Staging string `json:"staging"`
+		Current string `json:"current"`
 	}
 
 	resp := contextsResponse{
 		Local:      kindContext(),
-		Production: prodContext,
+		Staging:    stagingContext,
 	}
 
 	// Get current kubectl context

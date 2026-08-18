@@ -162,8 +162,8 @@ AI-generated workflow, instead of editing each service's YAML by hand.
 
 > Note: this only affects the **local Kind dev cluster** (where the
 > operator provisions a dedicated dependency per DSE). `kindling snapshot`'s
-> production Helm/Kustomize export already deduplicates dependencies by
-> type across the whole chart, so a graduated production deployment always
+> staging Helm/Kustomize export already deduplicates dependencies by
+> type across the whole chart, so a graduated staging deployment always
 > shares one instance per type regardless of this setting.
 
 ---

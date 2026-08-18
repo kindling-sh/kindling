@@ -313,7 +313,7 @@ func TestClearCredCache(t *testing.T) {
 // ════════════════════════════════════════════════════════════════
 
 func TestBuildOverrideMap_Basic(t *testing.T) {
-	entries := []prodCredEntry{
+	entries := []stagingCredEntry{
 		{DepType: "postgres", EnvVarName: "DATABASE_URL", Services: []string{"orders", "api"}},
 		{DepType: "redis", EnvVarName: "REDIS_URL", Services: []string{"orders"}},
 	}
@@ -355,7 +355,7 @@ func TestBuildOverrideMap_Basic(t *testing.T) {
 
 func TestBuildOverrideMap_EmptyCreds(t *testing.T) {
 	result := buildOverrideMap(
-		[]prodCredEntry{{DepType: "postgres", EnvVarName: "DATABASE_URL"}},
+		[]stagingCredEntry{{DepType: "postgres", EnvVarName: "DATABASE_URL"}},
 		[]snapshotDSE{{Name: "api", Deps: []snapshotDep{{Type: "postgres"}}}},
 		map[string]string{},
 	)
@@ -366,7 +366,7 @@ func TestBuildOverrideMap_EmptyCreds(t *testing.T) {
 
 func TestBuildOverrideMap_NilCreds(t *testing.T) {
 	result := buildOverrideMap(
-		[]prodCredEntry{{DepType: "postgres", EnvVarName: "DATABASE_URL"}},
+		[]stagingCredEntry{{DepType: "postgres", EnvVarName: "DATABASE_URL"}},
 		[]snapshotDSE{{Name: "api", Deps: []snapshotDep{{Type: "postgres"}}}},
 		nil,
 	)
@@ -376,7 +376,7 @@ func TestBuildOverrideMap_NilCreds(t *testing.T) {
 }
 
 func TestBuildOverrideMap_PartialCreds(t *testing.T) {
-	entries := []prodCredEntry{
+	entries := []stagingCredEntry{
 		{DepType: "postgres", EnvVarName: "DATABASE_URL", Services: []string{"api"}},
 		{DepType: "redis", EnvVarName: "REDIS_URL", Services: []string{"api"}},
 	}
@@ -537,7 +537,7 @@ func TestDetectUserSecrets_DeduplicatesAcrossServices(t *testing.T) {
 // ════════════════════════════════════════════════════════════════
 
 func TestBuildOverrideMap_WithSecrets(t *testing.T) {
-	entries := []prodCredEntry{
+	entries := []stagingCredEntry{
 		{DepType: "postgres", EnvVarName: "DATABASE_URL", Services: []string{"gateway"}},
 		{DepType: "secret", EnvVarName: "AUTH0_DOMAIN", Services: []string{"gateway"}},
 	}

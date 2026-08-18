@@ -121,14 +121,14 @@ For plain (non-secret) configuration, use 'kindling env set KEY=VALUE'
 or spec.env[] in the DSE YAML instead.`,
 	},
 	{
-		Name:    "production",
+		Name:    "staging",
 		Summary: "Graduating from local Kind to a real cluster",
-		Body: `'kindling snapshot -r <registry> --deploy --context <prod-context>'
+		Body: `'kindling snapshot -r <registry> --deploy --context <staging-context>'
 exports the current DSEs as a Helm chart (or Kustomize overlay),
-pushes images to a real registry, and deploys to a production
+pushes images to a real registry, and deploys to a staging
 cluster — it's the bridge from the local Kind loop to a real target.
 
-'kindling production tls --context <ctx> --domain <domain> --email
+'kindling staging tls --context <ctx> --domain <domain> --email
 <email>' sets up cert-manager + Let's Encrypt for that cluster.
 
 Image pushes fail hard (not silently) if any service can't be pushed

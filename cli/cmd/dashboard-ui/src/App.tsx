@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import type { ReactNode } from 'react';
 import { ToastProvider, ActionModal, ConfirmDialog, useToast, ResultOutput } from './pages/actions';
-import { useApi, apiPost, apiDelete, fetchExposeStatus, streamInit, streamGenerate, fetchProdIngressController } from './api';
+import { useApi, apiPost, apiDelete, fetchExposeStatus, streamInit, streamGenerate, fetchStagingIngressController } from './api';
 import type { ActionResult, GenerateResult } from './api';
 import { OverviewPage } from './pages/OverviewPage';
 import { DSEPage } from './pages/DSEPage';
@@ -10,17 +10,17 @@ import { RunnersPage } from './pages/RunnersPage';
 import { TopologyPage } from './pages/TopologyPage';
 import { ApiExplorerPage } from './pages/ApiExplorerPage';
 import { K8sPrimitivesPage } from './pages/K8sPrimitivesPage';
-import { ProductionOverviewPage } from './pages/ProductionOverviewPage';
-import { ProductionWorkloadsPage } from './pages/ProductionWorkloadsPage';
-import { ProductionNetworkPage } from './pages/ProductionNetworkPage';
-import { ProductionMetricsPage } from './pages/ProductionMetricsPage';
-import { ProductionDeployPage } from './pages/ProductionDeployPage';
-import { ProductionTLSPage } from './pages/ProductionTLSPage';
+import { StagingOverviewPage } from './pages/StagingOverviewPage';
+import { StagingWorkloadsPage } from './pages/StagingWorkloadsPage';
+import { StagingNetworkPage } from './pages/StagingNetworkPage';
+import { StagingMetricsPage } from './pages/StagingMetricsPage';
+import { StagingDeployPage } from './pages/StagingDeployPage';
+import { StagingTLSPage } from './pages/StagingTLSPage';
 import type { K8sList, K8sIngress, IngressControllerInfo } from './types';
 
 interface ContextsInfo {
   local: string;
-  production: string;
+  staging: string;
   current: string;
 }
 type Page =
@@ -31,12 +31,12 @@ type Page =
   | 'dses'
   | 'runners'
   | 'k8s'
-  | 'prod-overview'
-  | 'prod-workloads'
-  | 'prod-network'
-  | 'prod-tls'
-  | 'prod-metrics'
-  | 'prod-deploy';
+  | 'staging-overview'
+  | 'staging-workloads'
+  | 'staging-network'
+  | 'staging-tls'
+  | 'staging-metrics'
+  | 'staging-deploy';
 
 interface NavGroup {
   label: string;
@@ -64,15 +64,15 @@ const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
-    label: 'Production',
+    label: 'Staging',
     icon: '◎',
     items: [
-      { page: 'prod-overview', icon: '⬢', label: 'Overview' },
-      { page: 'prod-deploy', icon: '▷', label: 'Deploy' },
-      { page: 'prod-workloads', icon: '□', label: 'Workloads' },
-      { page: 'prod-network', icon: '◎', label: 'Network' },
-      { page: 'prod-tls', icon: '◈', label: 'TLS' },
-      { page: 'prod-metrics', icon: '◇', label: 'Metrics' },
+      { page: 'staging-overview', icon: '⬢', label: 'Overview' },
+      { page: 'staging-deploy', icon: '▷', label: 'Deploy' },
+      { page: 'staging-workloads', icon: '□', label: 'Workloads' },
+      { page: 'staging-network', icon: '◎', label: 'Network' },
+      { page: 'staging-tls', icon: '◈', label: 'TLS' },
+      { page: 'staging-metrics', icon: '◇', label: 'Metrics' },
     ],
   },
 ];
@@ -85,12 +85,12 @@ const PAGES: Record<Page, () => ReactNode> = {
   dses: DSEPage,
   runners: RunnersPage,
   k8s: K8sPrimitivesPage,
-  'prod-overview': ProductionOverviewPage,
-  'prod-workloads': ProductionWorkloadsPage,
-  'prod-network': ProductionNetworkPage,
-  'prod-tls': ProductionTLSPage,
-  'prod-metrics': ProductionMetricsPage,
-  'prod-deploy': ProductionDeployPage,
+  'staging-overview': StagingOverviewPage,
+  'staging-workloads': StagingWorkloadsPage,
+  'staging-network': StagingNetworkPage,
+  'staging-tls': StagingTLSPage,
+  'staging-metrics': StagingMetricsPage,
+  'staging-deploy': StagingDeployPage,
 };
 
 function App() {
@@ -295,25 +295,25 @@ function AppSidebar({ activePage, setActivePage }: { activePage: Page; setActive
   // Determine which cluster section the current context matches
   const currentCtx = contexts?.current || '';
   const localCtx = contexts?.local || 'kind-dev';
-  const prodCtx = contexts?.production || '';
+  const stagingCtx = contexts?.staging || '';
   const isLocalActive = currentCtx === localCtx;
-  const isProdActive = prodCtx !== '' && currentCtx === prodCtx;
+  const isStagingActive = stagingCtx !== '' && currentCtx === stagingCtx;
 
-  // Separate local and prod nav groups
-  const localGroups = NAV_GROUPS.filter(g => g.label !== 'Production');
-  const prodGroup = NAV_GROUPS.find(g => g.label === 'Production');
+  // Separate local and staging nav groups
+  const localGroups = NAV_GROUPS.filter(g => g.label !== 'Staging');
+  const stagingGroup = NAV_GROUPS.find(g => g.label === 'Staging');
 
-  // Fetch production ingress controller for public IP
-  const [prodIC, setProdIC] = useState<IngressControllerInfo | null>(null);
+  // Fetch staging ingress controller for public IP
+  const [stagingIC, setStagingIC] = useState<IngressControllerInfo | null>(null);
   useEffect(() => {
-    if (!prodCtx) return;
-    fetchProdIngressController().then(setProdIC).catch(() => {});
+    if (!stagingCtx) return;
+    fetchStagingIngressController().then(setStagingIC).catch(() => {});
     const interval = setInterval(() => {
-      fetchProdIngressController().then(setProdIC).catch(() => {});
+      fetchStagingIngressController().then(setStagingIC).catch(() => {});
     }, 30000);
     return () => clearInterval(interval);
-  }, [prodCtx]);
-  const prodPublicIP = prodIC?.external_ip || prodIC?.hostname || '';
+  }, [stagingCtx]);
+  const stagingPublicIP = stagingIC?.external_ip || stagingIC?.hostname || '';
 
   // ── modal state ───────────────────────────────────
   const [showDeploy, setShowDeploy] = useState(false);
@@ -606,29 +606,29 @@ function AppSidebar({ activePage, setActivePage }: { activePage: Page; setActive
           </div>
         </div>
 
-        {/* ── PRODUCTION section ──────────── */}
-        {prodGroup && (
-          <div className={`cluster-section cluster-section-prod ${isProdActive ? 'cluster-active' : ''}`}>
-            <div className="cluster-section-header cluster-section-header-prod">
+        {/* ── STAGING section ──────────── */}
+        {stagingGroup && (
+          <div className={`cluster-section cluster-section-staging ${isStagingActive ? 'cluster-active' : ''}`}>
+            <div className="cluster-section-header cluster-section-header-staging">
               <span className="cluster-section-icon">⬢</span>
               <div className="cluster-section-info">
-                <span className="cluster-section-title">Production</span>
-                {prodCtx ? (
-                  <span className="cluster-context-badge cluster-context-badge-prod" title={prodCtx}>
-                    {prodCtx.length > 24 ? prodCtx.slice(0, 22) + '…' : prodCtx}
+                <span className="cluster-section-title">Staging</span>
+                {stagingCtx ? (
+                  <span className="cluster-context-badge cluster-context-badge-staging" title={stagingCtx}>
+                    {stagingCtx.length > 24 ? stagingCtx.slice(0, 22) + '…' : stagingCtx}
                   </span>
                 ) : (
-                  <span className="cluster-context-badge cluster-context-badge-none">no --prod-context</span>
+                  <span className="cluster-context-badge cluster-context-badge-none">no --staging-context</span>
                 )}
-                {prodPublicIP && (
-                  <span className="cluster-context-ip" title={prodPublicIP} style={{ fontSize: 10, color: 'var(--accent)', fontFamily: 'var(--font-mono)', opacity: 0.85 }}>
-                    {prodPublicIP}
+                {stagingPublicIP && (
+                  <span className="cluster-context-ip" title={stagingPublicIP} style={{ fontSize: 10, color: 'var(--accent)', fontFamily: 'var(--font-mono)', opacity: 0.85 }}>
+                    {stagingPublicIP}
                   </span>
                 )}
               </div>
-              {isProdActive && <span className="cluster-active-dot cluster-active-dot-prod" title="kubectl pointing here" />}
+              {isStagingActive && <span className="cluster-active-dot cluster-active-dot-staging" title="kubectl pointing here" />}
             </div>
-            {prodGroup.items.map((item) => (
+            {stagingGroup.items.map((item) => (
               <button
                 key={item.page}
                 className={`nav-item ${activePage === item.page ? 'active' : ''}`}
@@ -645,7 +645,7 @@ function AppSidebar({ activePage, setActivePage }: { activePage: Page; setActive
         {contexts && (
           <div className="cluster-context-indicator">
             <span className="cluster-context-indicator-label">kubectl →</span>
-            <span className={`cluster-context-indicator-value ${isLocalActive ? 'ctx-local' : isProdActive ? 'ctx-prod' : 'ctx-other'}`}>
+            <span className={`cluster-context-indicator-value ${isLocalActive ? 'ctx-local' : isStagingActive ? 'ctx-staging' : 'ctx-other'}`}>
               {currentCtx ? (currentCtx.length > 20 ? currentCtx.slice(0, 18) + '…' : currentCtx) : 'unknown'}
             </span>
           </div>

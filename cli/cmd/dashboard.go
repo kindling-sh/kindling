@@ -36,7 +36,7 @@ var dashboardPort int
 
 func init() {
 	dashboardCmd.Flags().IntVar(&dashboardPort, "port", 19090, "Port to serve the dashboard on")
-	dashboardCmd.Flags().StringVar(&prodContext, "prod-context", "", "Kubeconfig context for production cluster (enables production panel)")
+	dashboardCmd.Flags().StringVar(&stagingContext, "staging-context", "", "Kubeconfig context for staging cluster (enables staging panel)")
 	rootCmd.AddCommand(dashboardCmd)
 }
 
@@ -124,62 +124,62 @@ func runDashboard(cmd *cobra.Command, args []string) error {
 	mux.HandleFunc("/api/debug", handleDebugAction)        // POST=start, DELETE=stop
 	mux.HandleFunc("/api/debug/status", handleDebugStatus) // GET — active debug sessions
 
-	// ── API routes (production cluster) ─────────────────────────
-	if prodContext != "" {
-		mux.HandleFunc("/api/prod/cluster", handleProdCluster)
-		mux.HandleFunc("/api/prod/contexts", handleProdContexts)
-		mux.HandleFunc("/api/prod/nodes", handleProdNodes)
-		mux.HandleFunc("/api/prod/namespaces", handleProdNamespaces)
-		mux.HandleFunc("/api/prod/deployments", handleProdDeployments)
-		mux.HandleFunc("/api/prod/pods", handleProdPods)
-		mux.HandleFunc("/api/prod/services", handleProdServices)
-		mux.HandleFunc("/api/prod/ingresses", handleProdIngresses)
-		mux.HandleFunc("/api/prod/ingress-controller", handleProdIngressController)
-		mux.HandleFunc("/api/prod/events", handleProdEvents)
-		mux.HandleFunc("/api/prod/secrets", handleProdSecrets)
-		mux.HandleFunc("/api/prod/statefulsets", handleProdStatefulSets)
-		mux.HandleFunc("/api/prod/daemonsets", handleProdDaemonSets)
-		mux.HandleFunc("/api/prod/replicasets", handleProdReplicaSets)
-		mux.HandleFunc("/api/prod/clusterroles", handleProdClusterRoles)
-		mux.HandleFunc("/api/prod/clusterrolebindings", handleProdClusterRoleBindings)
-		mux.HandleFunc("/api/prod/logs/", handleProdLogs)
-		mux.HandleFunc("/api/prod/restart/", handleProdRestart)
-		mux.HandleFunc("/api/prod/scale/", handleProdScale)
-		mux.HandleFunc("/api/prod/delete-pod/", handleProdDeletePod)
-		mux.HandleFunc("/api/prod/rollout-history/", handleProdRolloutHistory)
-		mux.HandleFunc("/api/prod/rollback/", handleProdRollback)
-		mux.HandleFunc("/api/prod/rollout-status/", handleProdRolloutStatus)
-		mux.HandleFunc("/api/prod/exec", handleProdExec)
-		mux.HandleFunc("/api/prod/describe/", handleProdDescribe)
-		mux.HandleFunc("/api/prod/certificates", handleProdCertificates)
-		mux.HandleFunc("/api/prod/clusterissuers", handleProdClusterIssuers)
-		mux.HandleFunc("/api/prod/node-metrics", handleProdNodeMetrics)
-		mux.HandleFunc("/api/prod/pod-metrics", handleProdPodMetrics)
-		mux.HandleFunc("/api/prod/apply", handleProdApply)
-		mux.HandleFunc("/api/prod/advisor", handleProdAdvisor)
+	// ── API routes (staging cluster) ────────────────────────────
+	if stagingContext != "" {
+		mux.HandleFunc("/api/staging/cluster", handleStagingCluster)
+		mux.HandleFunc("/api/staging/contexts", handleStagingContexts)
+		mux.HandleFunc("/api/staging/nodes", handleStagingNodes)
+		mux.HandleFunc("/api/staging/namespaces", handleStagingNamespaces)
+		mux.HandleFunc("/api/staging/deployments", handleStagingDeployments)
+		mux.HandleFunc("/api/staging/pods", handleStagingPods)
+		mux.HandleFunc("/api/staging/services", handleStagingServices)
+		mux.HandleFunc("/api/staging/ingresses", handleStagingIngresses)
+		mux.HandleFunc("/api/staging/ingress-controller", handleStagingIngressController)
+		mux.HandleFunc("/api/staging/events", handleStagingEvents)
+		mux.HandleFunc("/api/staging/secrets", handleStagingSecrets)
+		mux.HandleFunc("/api/staging/statefulsets", handleStagingStatefulSets)
+		mux.HandleFunc("/api/staging/daemonsets", handleStagingDaemonSets)
+		mux.HandleFunc("/api/staging/replicasets", handleStagingReplicaSets)
+		mux.HandleFunc("/api/staging/clusterroles", handleStagingClusterRoles)
+		mux.HandleFunc("/api/staging/clusterrolebindings", handleStagingClusterRoleBindings)
+		mux.HandleFunc("/api/staging/logs/", handleStagingLogs)
+		mux.HandleFunc("/api/staging/restart/", handleStagingRestart)
+		mux.HandleFunc("/api/staging/scale/", handleStagingScale)
+		mux.HandleFunc("/api/staging/delete-pod/", handleStagingDeletePod)
+		mux.HandleFunc("/api/staging/rollout-history/", handleStagingRolloutHistory)
+		mux.HandleFunc("/api/staging/rollback/", handleStagingRollback)
+		mux.HandleFunc("/api/staging/rollout-status/", handleStagingRolloutStatus)
+		mux.HandleFunc("/api/staging/exec", handleStagingExec)
+		mux.HandleFunc("/api/staging/describe/", handleStagingDescribe)
+		mux.HandleFunc("/api/staging/certificates", handleStagingCertificates)
+		mux.HandleFunc("/api/staging/clusterissuers", handleStagingClusterIssuers)
+		mux.HandleFunc("/api/staging/node-metrics", handleStagingNodeMetrics)
+		mux.HandleFunc("/api/staging/pod-metrics", handleStagingPodMetrics)
+		mux.HandleFunc("/api/staging/apply", handleStagingApply)
+		mux.HandleFunc("/api/staging/advisor", handleStagingAdvisor)
 
 		// Snapshot / Deploy
-		mux.HandleFunc("/api/prod/snapshot/status", handleProdSnapshotStatus)
-		mux.HandleFunc("/api/prod/snapshot/credentials", handleProdSnapshotCredentials)
-		mux.HandleFunc("/api/prod/snapshot/deploy", handleProdSnapshotDeploy)
-		mux.HandleFunc("/api/prod/snapshot/secrets/update", handleProdSnapshotSecretsUpdate)
+		mux.HandleFunc("/api/staging/snapshot/status", handleStagingSnapshotStatus)
+		mux.HandleFunc("/api/staging/snapshot/credentials", handleStagingSnapshotCredentials)
+		mux.HandleFunc("/api/staging/snapshot/deploy", handleStagingSnapshotDeploy)
+		mux.HandleFunc("/api/staging/snapshot/secrets/update", handleStagingSnapshotSecretsUpdate)
 
 		// TLS management
-		mux.HandleFunc("/api/prod/tls/status", handleProdTLSStatus)
-		mux.HandleFunc("/api/prod/tls/install", handleProdTLSInstall)
+		mux.HandleFunc("/api/staging/tls/status", handleStagingTLSStatus)
+		mux.HandleFunc("/api/staging/tls/install", handleStagingTLSInstall)
 
 		// VictoriaMetrics management
-		mux.HandleFunc("/api/prod/metrics/status", handleProdMetricsStatus)
-		mux.HandleFunc("/api/prod/metrics/install", handleProdMetricsInstall)
-		mux.HandleFunc("/api/prod/metrics/uninstall", handleProdMetricsUninstall)
+		mux.HandleFunc("/api/staging/metrics/status", handleStagingMetricsStatus)
+		mux.HandleFunc("/api/staging/metrics/install", handleStagingMetricsInstall)
+		mux.HandleFunc("/api/staging/metrics/uninstall", handleStagingMetricsUninstall)
 
 		// Prometheus-compatible query API
-		mux.HandleFunc("/api/prod/prometheus/status", handlePromStatus)
-		mux.HandleFunc("/api/prod/prometheus/query", handlePromQuery)
-		mux.HandleFunc("/api/prod/prometheus/query_range", handlePromQueryRange)
+		mux.HandleFunc("/api/staging/prometheus/status", handlePromStatus)
+		mux.HandleFunc("/api/staging/prometheus/query", handlePromQuery)
+		mux.HandleFunc("/api/staging/prometheus/query_range", handlePromQueryRange)
 	} else {
-		// Return a minimal handler so the frontend can detect no prod context
-		mux.HandleFunc("/api/prod/cluster", func(w http.ResponseWriter, r *http.Request) {
+		// Return a minimal handler so the frontend can detect no staging context
+		mux.HandleFunc("/api/staging/cluster", func(w http.ResponseWriter, r *http.Request) {
 			jsonResponse(w, map[string]interface{}{
 				"context":   "",
 				"connected": false,
@@ -243,8 +243,8 @@ func runDashboard(cmd *cobra.Command, args []string) error {
 
 	fmt.Fprintf(os.Stderr, "\n%s%s▸ Kindling Dashboard%s\n", colorBold, colorCyan, colorReset)
 	fmt.Fprintf(os.Stderr, "  🌐  http://localhost:%d\n", dashboardPort)
-	if prodContext != "" {
-		fmt.Fprintf(os.Stderr, "  🏭  Production context: %s%s%s\n", colorBold, prodContext, colorReset)
+	if stagingContext != "" {
+		fmt.Fprintf(os.Stderr, "  🏭  Staging context: %s%s%s\n", colorBold, stagingContext, colorReset)
 	}
 	fmt.Fprintf(os.Stderr, "  %sPress Ctrl+C to stop%s\n\n", colorDim, colorReset)
 

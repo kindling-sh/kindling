@@ -21,7 +21,7 @@
 #     CRUD, env set/list/unset, load (build+kind load+patch), runners CR
 #     lifecycle, reset, status, logs, snapshot (helm + kustomize),
 #     tunnel ingress patching/restore, tunnel state management,
-#     snapshot-during-tunnel isolation, production TLS safety + DSE patching.
+#     snapshot-during-tunnel isolation, staging TLS safety + DSE patching.
 #
 #   TIER 2b — Dashboard API (always runs)
 #     Starts the dashboard in background, exercises read-only + action
@@ -1546,18 +1546,18 @@ rm -rf "$TSNAP_DIR"
 kctl delete dse e2e-tunnel-app --wait=false 2>/dev/null || true
 sleep 3
 
-# ── 31e. Production TLS — Kind context safety check ─────────────────────
-info "31e. Production TLS safety checks"
+# ── 31e. Staging TLS — Kind context safety check ─────────────────────
+info "31e. Staging TLS safety checks"
 
-# kindling production tls should refuse a kind- context
-PROD_TLS_OUT=$("$KINDLING" production tls \
+# kindling staging tls should refuse a kind- context
+STAGING_TLS_OUT=$("$KINDLING" staging tls \
   --context "kind-$CLUSTER_NAME" \
   --domain app.example.com \
   --email admin@example.com 2>&1 || true)
-assert_contains "production tls refuses kind- context" "Kind cluster" "$PROD_TLS_OUT"
+assert_contains "staging tls refuses kind- context" "Kind cluster" "$STAGING_TLS_OUT"
 
-# ── 31f. Production TLS — DSE file patching ──────────────────────────────
-info "31f. Production TLS DSE file patching"
+# ── 31f. Staging TLS — DSE file patching ──────────────────────────────
+info "31f. Staging TLS DSE file patching"
 
 # Create a temp DSE YAML to test file patching
 TLS_TEST_DIR=$(mktemp -d)
@@ -1580,12 +1580,12 @@ spec:
     pathType: Prefix
 DSEEOF
 
-# Run production tls with a fake non-kind context — it will fail on the
+# Run staging tls with a fake non-kind context — it will fail on the
 # kubectl calls but should still patch the file if we provide --file.
-# Since we can't use a real prod cluster, test the file patching by
+# Since we can't use a real staging cluster, test the file patching by
 # running the command and checking the modified YAML.
-"$KINDLING" production tls \
-  --context "fake-prod-ctx" \
+"$KINDLING" staging tls \
+  --context "fake-staging-ctx" \
   --domain app.example.com \
   --email admin@example.com \
   -f "$TLS_TEST_DIR/test-dse.yaml" 2>&1 || true
