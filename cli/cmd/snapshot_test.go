@@ -99,10 +99,10 @@ func TestHelmSafe(t *testing.T) {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// productionImageClean
+// stagingImageClean
 // ────────────────────────────────────────────────────────────────────────────
 
-func TestProductionImageClean(t *testing.T) {
+func TestStagingImageClean(t *testing.T) {
 	tests := []struct {
 		name   string
 		image  string
@@ -116,8 +116,8 @@ func TestProductionImageClean(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := productionImageClean(tt.image, tt.svc); got != tt.expect {
-				t.Errorf("productionImageClean(%q, %q) = %q, want %q", tt.image, tt.svc, got, tt.expect)
+			if got := stagingImageClean(tt.image, tt.svc); got != tt.expect {
+				t.Errorf("stagingImageClean(%q, %q) = %q, want %q", tt.image, tt.svc, got, tt.expect)
 			}
 		})
 	}
@@ -497,10 +497,10 @@ func TestIsClusterRegistryImage(t *testing.T) {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// Registry images pass through productionImageClean unchanged
+// Registry images pass through stagingImageClean unchanged
 // ────────────────────────────────────────────────────────────────────────────
 
-func TestProductionImageClean_RegistryImages(t *testing.T) {
+func TestStagingImageClean_RegistryImages(t *testing.T) {
 	tests := []struct {
 		name   string
 		image  string
@@ -513,9 +513,9 @@ func TestProductionImageClean_RegistryImages(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := productionImageClean(tt.image, tt.svc)
+			got := stagingImageClean(tt.image, tt.svc)
 			if got != tt.expect {
-				t.Errorf("productionImageClean(%q, %q) = %q, want %q", tt.image, tt.svc, got, tt.expect)
+				t.Errorf("stagingImageClean(%q, %q) = %q, want %q", tt.image, tt.svc, got, tt.expect)
 			}
 		})
 	}

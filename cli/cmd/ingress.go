@@ -331,7 +331,7 @@ func runIngressSave(cmd *cobra.Command, args []string) error {
 // writeRoutesToYAML rewrites the "routes:" block inside the first
 // "ingress:" block found in yamlFile to match routes, preserving the rest
 // of the file. Follows the same line-based patching approach as
-// patchDSEWithTLS in production.go — this repo doesn't otherwise depend on
+// patchDSEWithTLS in staging.go — this repo doesn't otherwise depend on
 // a YAML parsing library, and this keeps formatting/comments in the rest
 // of the file untouched.
 func writeRoutesToYAML(yamlFile string, routes []snapshotRoute) error {

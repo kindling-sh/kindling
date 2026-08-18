@@ -27,7 +27,7 @@ const sidebars: SidebarsConfig = {
     },
     {
       type: "category",
-      label: "Production",
+      label: "Staging",
       collapsed: false,
       items: ["graduation", "tls"],
     },

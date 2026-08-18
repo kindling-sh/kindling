@@ -771,7 +771,7 @@ constructs the CIRunnerPool CR YAML and applies it.
 **What it does:**
 - (no argument) — lists available topics with a one-line summary each
 - `<topic>` — prints that topic's guidance (overview, debugging,
-  dependencies, builds, secrets, production)
+  dependencies, builds, secrets, staging)
 
 Content is a small, hardcoded `[]explainTopic` table shipped inside the
 binary — always in sync with the installed CLI version, no repo

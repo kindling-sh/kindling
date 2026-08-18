@@ -29,7 +29,7 @@ through the CI runner (not 'docker build'), declare dependencies in a
 DSE YAML (not Docker Compose), and use 'kindling sync' for fast live
 debugging instead of rebuilding images. Run 'kindling explain' for a
 list of topics with more detail (debugging, dependencies, builds,
-secrets, production).
+secrets, staging).
 
 Common workflow:
 

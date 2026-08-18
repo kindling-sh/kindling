@@ -403,7 +403,7 @@ context into every session.
 2. Agent runs `kindling explain` (no args)
    │
    └─ Lists topics: overview, debugging, dependencies, builds, secrets,
-      production.
+      staging.
 
 3. Agent runs `kindling explain debugging`
    │

@@ -1,19 +1,19 @@
 import { useApi } from '../api';
-import { fetchProdNodeMetrics, fetchProdAdvisor, fetchMetricsStatus } from '../api';
+import { fetchStagingNodeMetrics, fetchStagingAdvisor, fetchMetricsStatus } from '../api';
 import { useState, useEffect } from 'react';
-import type { ProdClusterInfo, K8sList, K8sNode, K8sDeployment, K8sPod, NodeMetric, PrometheusStatus, Advisory, MetricsStackStatus } from '../types';
+import type { StagingClusterInfo, K8sList, K8sNode, K8sDeployment, K8sPod, NodeMetric, PrometheusStatus, Advisory, MetricsStackStatus } from '../types';
 import { StatusBadge, TimeAgo } from './shared';
 
 function parsePct(s: string): number {
   return parseInt(s.replace('%', ''), 10) || 0;
 }
 
-export function ProductionOverviewPage() {
-  const { data: cluster, loading } = useApi<ProdClusterInfo>('/api/prod/cluster');
-  const { data: nodes } = useApi<K8sList<K8sNode>>('/api/prod/nodes');
-  const { data: deployments } = useApi<K8sList<K8sDeployment>>('/api/prod/deployments');
-  const { data: pods } = useApi<K8sList<K8sPod>>('/api/prod/pods');
-  const { data: prom } = useApi<PrometheusStatus>('/api/prod/prometheus/status', 15000);
+export function StagingOverviewPage() {
+  const { data: cluster, loading } = useApi<StagingClusterInfo>('/api/staging/cluster');
+  const { data: nodes } = useApi<K8sList<K8sNode>>('/api/staging/nodes');
+  const { data: deployments } = useApi<K8sList<K8sDeployment>>('/api/staging/deployments');
+  const { data: pods } = useApi<K8sList<K8sPod>>('/api/staging/pods');
+  const { data: prom } = useApi<PrometheusStatus>('/api/staging/prometheus/status', 15000);
 
   const [nodeMetrics, setNodeMetrics] = useState<NodeMetric[]>([]);
   const [metricsStack, setMetricsStack] = useState<MetricsStackStatus | null>(null);
@@ -23,10 +23,10 @@ export function ProductionOverviewPage() {
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
 
   useEffect(() => {
-    fetchProdNodeMetrics().then(r => setNodeMetrics(r.items || [])).catch(() => {});
+    fetchStagingNodeMetrics().then(r => setNodeMetrics(r.items || [])).catch(() => {});
     fetchMetricsStatus().then(s => setMetricsStack(s)).catch(() => {});
     const id = setInterval(() => {
-      fetchProdNodeMetrics().then(r => setNodeMetrics(r.items || [])).catch(() => {});
+      fetchStagingNodeMetrics().then(r => setNodeMetrics(r.items || [])).catch(() => {});
     }, 10000);
     return () => clearInterval(id);
   }, []);
@@ -34,7 +34,7 @@ export function ProductionOverviewPage() {
   // Advisor poll — check every 30s
   useEffect(() => {
     const load = () => {
-      fetchProdAdvisor().then(r => {
+      fetchStagingAdvisor().then(r => {
         setAdvisories(r.advisories || []);
         setAdvisorChecked(r.checked_at || '');
         setAdvisorLoading(false);
@@ -45,19 +45,19 @@ export function ProductionOverviewPage() {
     return () => clearInterval(id);
   }, []);
 
-  if (loading) return <div className="loading">Connecting to production cluster…</div>;
+  if (loading) return <div className="loading">Connecting to staging cluster…</div>;
   if (!cluster || !cluster.connected) {
     return (
       <div className="page">
         <div className="page-header"><div className="page-header-left">
-          <h1>Production Cluster</h1>
-          <p className="page-subtitle">Not connected — start the dashboard with <code>--prod-context</code></p>
+          <h1>Staging Cluster</h1>
+          <p className="page-subtitle">Not connected — start the dashboard with <code>--staging-context</code></p>
         </div></div>
-        <div className="prod-disconnected">
-          <div className="prod-disconnected-icon">⚠</div>
-          <h2>No Production Context</h2>
-          <p>Launch the dashboard with a production kubeconfig context:</p>
-          <pre className="prod-code-block">kindling dashboard --prod-context &lt;your-context&gt;</pre>
+        <div className="staging-disconnected">
+          <div className="staging-disconnected-icon">⚠</div>
+          <h2>No Staging Context</h2>
+          <p>Launch the dashboard with a staging kubeconfig context:</p>
+          <pre className="staging-code-block">kindling dashboard --staging-context &lt;your-context&gt;</pre>
           <p className="text-dim" style={{ marginTop: 12, fontSize: 13 }}>
             Available contexts are listed by <code>kubectl config get-contexts -o name</code>
           </p>
@@ -81,16 +81,16 @@ export function ProductionOverviewPage() {
     <div className="page">
       <div className="page-header">
         <div className="page-header-left">
-          <h1>Production Overview</h1>
+          <h1>Staging Overview</h1>
           <p className="page-subtitle">
-            <span className="prod-provider-badge">{cluster.provider}</span>
+            <span className="staging-provider-badge">{cluster.provider}</span>
             {cluster.version && <span className="tag" style={{ marginLeft: 8 }}>{cluster.version}</span>}
             <span style={{ marginLeft: 8, color: 'var(--text-tertiary)' }}>{cluster.context}</span>
           </p>
         </div>
         <div className="page-actions">
-          <span className={`prod-status-pill ${cluster.connected ? 'prod-status-ok' : 'prod-status-err'}`}>
-            <span className="prod-status-dot" /> {cluster.connected ? 'Connected' : 'Disconnected'}
+          <span className={`staging-status-pill ${cluster.connected ? 'staging-status-ok' : 'staging-status-err'}`}>
+            <span className="staging-status-dot" /> {cluster.connected ? 'Connected' : 'Disconnected'}
           </span>
         </div>
       </div>
@@ -210,7 +210,7 @@ export function ProductionOverviewPage() {
             </div>
             {(metricsStack?.victoria_metrics || prom?.detected) && (
               <div style={{ marginTop: 8 }}>
-                <button className="btn btn-sm btn-primary" onClick={() => window.dispatchEvent(new CustomEvent('navigate', { detail: 'prod-metrics' }))}>
+                <button className="btn btn-sm btn-primary" onClick={() => window.dispatchEvent(new CustomEvent('navigate', { detail: 'staging-metrics' }))}>
                   View Metrics →
                 </button>
               </div>
@@ -265,14 +265,14 @@ export function ProductionOverviewPage() {
                       <td>{m.cpu_cores}</td>
                       <td>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                          <div className="prod-mini-bar"><div className="prod-mini-fill" style={{ width: m.cpu_pct, background: parsePct(m.cpu_pct) > 80 ? 'var(--red)' : 'var(--accent)' }} /></div>
+                          <div className="staging-mini-bar"><div className="staging-mini-fill" style={{ width: m.cpu_pct, background: parsePct(m.cpu_pct) > 80 ? 'var(--red)' : 'var(--accent)' }} /></div>
                           <span>{m.cpu_pct}</span>
                         </div>
                       </td>
                       <td>{m.mem_bytes}</td>
                       <td>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                          <div className="prod-mini-bar"><div className="prod-mini-fill" style={{ width: m.mem_pct, background: parsePct(m.mem_pct) > 85 ? 'var(--red)' : 'var(--green)' }} /></div>
+                          <div className="staging-mini-bar"><div className="staging-mini-fill" style={{ width: m.mem_pct, background: parsePct(m.mem_pct) > 85 ? 'var(--red)' : 'var(--green)' }} /></div>
                           <span>{m.mem_pct}</span>
                         </div>
                       </td>

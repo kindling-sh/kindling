@@ -1,21 +1,21 @@
 ---
 sidebar_position: 8
 title: TLS & Certificates
-description: Set up automatic HTTPS with cert-manager and Let's Encrypt on your production cluster.
+description: Set up automatic HTTPS with cert-manager and Let's Encrypt on your staging cluster.
 ---
 
 # TLS & Certificates
 
-`kindling production tls` installs cert-manager and configures automatic TLS
-certificates from Let's Encrypt on your production cluster.
+`kindling staging tls` installs cert-manager and configures automatic TLS
+certificates from Let's Encrypt on your staging cluster.
 
 ---
 
 ## Quick start
 
 ```bash
-kindling production tls \
-  --context my-prod-cluster \
+kindling staging tls \
+  --context my-staging-cluster \
   --domain app.example.com \
   --email admin@example.com
 ```
@@ -42,8 +42,8 @@ certificates.
 ### Basic — domain + email
 
 ```bash
-kindling production tls \
-  --context do-prod \
+kindling staging tls \
+  --context do-staging \
   --domain api.myapp.com \
   --email team@myapp.com
 ```
@@ -54,8 +54,8 @@ Pass `--file` to automatically update your DSE YAML with the correct
 ingress annotations and TLS block:
 
 ```bash
-kindling production tls \
-  --context do-prod \
+kindling staging tls \
+  --context do-staging \
   --domain api.myapp.com \
   --email team@myapp.com \
   -f .kindling/dev-environment.yaml
@@ -82,8 +82,8 @@ Use Let's Encrypt's staging server to avoid rate limits while testing.
 Browsers will show a certificate warning, but the full ACME flow runs:
 
 ```bash
-kindling production tls \
-  --context do-prod \
+kindling staging tls \
+  --context do-staging \
   --domain api.myapp.com \
   --email team@myapp.com \
   --staging
@@ -94,8 +94,8 @@ kindling production tls \
 If you're not using Traefik, specify the ingress class:
 
 ```bash
-kindling production tls \
-  --context do-prod \
+kindling staging tls \
+  --context do-staging \
   --domain api.myapp.com \
   --email team@myapp.com \
   --ingress-class nginx
@@ -109,7 +109,7 @@ After configuring TLS, point your domain to the cluster's load balancer:
 
 ```bash
 # Get the external IP
-kubectl get svc -n traefik --context do-prod
+kubectl get svc -n traefik --context do-staging
 
 # Create a DNS A record:
 #   api.myapp.com → <EXTERNAL-IP>
@@ -125,7 +125,7 @@ challenge succeeds. This can take a few minutes.
 
 ## Dashboard
 
-The TLS page is available under **Production → TLS** in the dashboard. It
+The TLS page is available under **Staging → TLS** in the dashboard. It
 provides the same functionality with form inputs for domain, email, and
 ingress selection.
 
@@ -138,9 +138,9 @@ ingress selection.
 Check the cert-manager logs and certificate status:
 
 ```bash
-kubectl get certificates --context do-prod
-kubectl describe certificate <name> --context do-prod
-kubectl logs -n cert-manager deploy/cert-manager --context do-prod
+kubectl get certificates --context do-staging
+kubectl describe certificate <name> --context do-staging
+kubectl logs -n cert-manager deploy/cert-manager --context do-staging
 ```
 
 Common causes: DNS not pointing to the right IP, port 80 not reachable
@@ -148,5 +148,5 @@ Common causes: DNS not pointing to the right IP, port 80 not reachable
 
 ### cert-manager already installed
 
-If cert-manager is already running, `kindling production tls` skips the
+If cert-manager is already running, `kindling staging tls` skips the
 install step and just creates the ClusterIssuer. No conflicts.

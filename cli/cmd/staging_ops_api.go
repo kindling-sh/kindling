@@ -9,9 +9,9 @@ import (
 	"time"
 )
 
-// ── /api/prod/snapshot/status — snapshot readiness check ─────────
+// ── /api/staging/snapshot/status — snapshot readiness check ─────────
 
-func handleProdSnapshotStatus(w http.ResponseWriter, r *http.Request) {
+func handleStagingSnapshotStatus(w http.ResponseWriter, r *http.Request) {
 	// Read DSEs from the dev cluster
 	dses, err := readClusterDSEs()
 
@@ -25,8 +25,8 @@ func handleProdSnapshotStatus(w http.ResponseWriter, r *http.Request) {
 		"helm":      helmOk,
 		"crane":     craneOk,
 		"docker":    dockerOk,
-		"context":   prodContext,
-		"connected": prodContext != "",
+		"context":   stagingContext,
+		"connected": stagingContext != "",
 	}
 
 	if err == nil && len(dses) > 0 {
@@ -58,11 +58,11 @@ func handleProdSnapshotStatus(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, result)
 }
 
-// ── /api/prod/snapshot/deploy — run snapshot + deploy ────────────
+// ── /api/staging/snapshot/deploy — run snapshot + deploy ────────────
 
-// ── /api/prod/snapshot/credentials — detect dev credentials ─────
+// ── /api/staging/snapshot/credentials — detect dev credentials ─────
 
-func handleProdSnapshotCredentials(w http.ResponseWriter, r *http.Request) {
+func handleStagingSnapshotCredentials(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		jsonError(w, "method not allowed", 405)
 		return
@@ -85,8 +85,8 @@ func handleProdSnapshotCredentials(w http.ResponseWriter, r *http.Request) {
 	// Check for cached values
 	var cachedCreds map[string]string
 	var cachedAt string
-	if prodContext != "" {
-		if cached := loadCredCache(prodContext); cached != nil && len(cached.Creds) > 0 {
+	if stagingContext != "" {
+		if cached := loadCredCache(stagingContext); cached != nil && len(cached.Creds) > 0 {
 			cachedCreds = cached.Creds
 			cachedAt = cached.UpdatedAt.Format(time.RFC3339)
 		}
@@ -97,7 +97,7 @@ func handleProdSnapshotCredentials(w http.ResponseWriter, r *http.Request) {
 		DepType  string   `json:"dep_type"`
 		DevValue string   `json:"dev_value"`
 		Services []string `json:"services"`
-		Cached   string   `json:"cached,omitempty"` // cached production value (if any)
+		Cached   string   `json:"cached,omitempty"` // cached staging value (if any)
 	}
 
 	var result []credInfo
@@ -122,7 +122,7 @@ func handleProdSnapshotCredentials(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func handleProdSnapshotDeploy(w http.ResponseWriter, r *http.Request) {
+func handleStagingSnapshotDeploy(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		jsonError(w, "method not allowed", 405)
 		return
@@ -136,7 +136,7 @@ func handleProdSnapshotDeploy(w http.ResponseWriter, r *http.Request) {
 		Format       string            `json:"format"`
 		Namespace    string            `json:"namespace"`
 		Ingress      []string          `json:"ingress"`     // services to enable ingress for
-		Credentials  map[string]string `json:"credentials"` // envVarName → production connection string
+		Credentials  map[string]string `json:"credentials"` // envVarName → staging connection string
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonError(w, "invalid request body", 400)
@@ -147,8 +147,8 @@ func handleProdSnapshotDeploy(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "registry is required", 400)
 		return
 	}
-	if prodContext == "" {
-		jsonError(w, "no production context configured", 400)
+	if stagingContext == "" {
+		jsonError(w, "no staging context configured", 400)
 		return
 	}
 
@@ -217,7 +217,7 @@ func handleProdSnapshotDeploy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// ── Ensure ingress controller (shared pipeline) ─────────────
-	if err := ensureIngressController(prodContext, func(msg string) {
+	if err := ensureIngressController(stagingContext, func(msg string) {
 		send("step", msg)
 	}); err != nil {
 		send("error", "Ingress controller setup failed: "+err.Error())
@@ -226,7 +226,7 @@ func handleProdSnapshotDeploy(w http.ResponseWriter, r *http.Request) {
 
 	// ── Deploy (shared pipeline) ────────────────────────────────
 	// The frontend sends ingress names with the original user prefix
-	// (from /api/prod/snapshot/status), but DSE names have been
+	// (from /api/staging/snapshot/status), but DSE names have been
 	// stripped above. Strip the same prefix from ingress selections
 	// so the lookup matches the chart's values keys.
 	selectedSet := make(map[string]bool)
@@ -239,37 +239,37 @@ func handleProdSnapshotDeploy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Auto-detect the IngressClass on the target cluster
-	ingClass := detectIngressClass(prodContext)
+	ingClass := detectIngressClass(stagingContext)
 	if ingClass != "" {
 		send("step", fmt.Sprintf("Using IngressClass: %s", ingClass))
 	}
 
-	send("step", fmt.Sprintf("Deploying to %s (namespace: %s)", prodContext, ns))
+	send("step", fmt.Sprintf("Deploying to %s (namespace: %s)", stagingContext, ns))
 
-	// Build credential overrides from user-supplied production values
+	// Build credential overrides from user-supplied staging values
 	var credOverrides map[string]map[string]credOverride
 	if len(body.Credentials) > 0 {
 		entries := detectDevCredentials(chartName, dses)
 		secretEntries := detectUserSecrets(dses)
 		entries = append(entries, secretEntries...)
 		credOverrides = buildOverrideMap(entries, dses, body.Credentials)
-		send("step", fmt.Sprintf("Applying %d production credential override(s)", len(body.Credentials)))
+		send("step", fmt.Sprintf("Applying %d staging credential override(s)", len(body.Credentials)))
 		// Cache for future deploys
-		_ = saveCredCache(prodContext, chartName, body.Credentials)
+		_ = saveCredCache(stagingContext, chartName, body.Credentials)
 	} else {
 		// Auto-apply cached credentials if available
-		cached := loadCredCache(prodContext)
+		cached := loadCredCache(stagingContext)
 		if cached != nil && len(cached.Creds) > 0 {
 			entries := detectDevCredentials(chartName, dses)
 			secretEntries := detectUserSecrets(dses)
 			entries = append(entries, secretEntries...)
 			credOverrides = buildOverrideMap(entries, dses, cached.Creds)
-			send("step", fmt.Sprintf("Using %d cached production credential(s)", len(cached.Creds)))
+			send("step", fmt.Sprintf("Using %d cached staging credential(s)", len(cached.Creds)))
 		}
 	}
 
 	out, err := deploySnapshot(DeployOpts{
-		Context:         prodContext,
+		Context:         stagingContext,
 		Namespace:       ns,
 		Format:          format,
 		OutDir:          outDir,
@@ -285,18 +285,18 @@ func handleProdSnapshotDeploy(w http.ResponseWriter, r *http.Request) {
 	}
 	send("step", "Deploy complete")
 
-	send("done", "Deployed to production cluster")
+	send("done", "Deployed to staging cluster")
 }
 
-// ── /api/prod/snapshot/secrets/update — patch secrets post-deploy ─
+// ── /api/staging/snapshot/secrets/update — patch secrets post-deploy ─
 
-func handleProdSnapshotSecretsUpdate(w http.ResponseWriter, r *http.Request) {
+func handleStagingSnapshotSecretsUpdate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		jsonError(w, "method not allowed", 405)
 		return
 	}
-	if prodContext == "" {
-		jsonError(w, "no production context configured", 400)
+	if stagingContext == "" {
+		jsonError(w, "no staging context configured", 400)
 		return
 	}
 
@@ -320,7 +320,7 @@ func handleProdSnapshotSecretsUpdate(w http.ResponseWriter, r *http.Request) {
 
 	// Discover which K8s Secrets contain these keys by listing secrets
 	// in the namespace that match our naming convention (<release>-*-secrets).
-	out, err := prodKubectlJSON("get", "secrets", "-n", ns, "-o", "json")
+	out, err := stagingKubectlJSON("get", "secrets", "-n", ns, "-o", "json")
 	if err != nil {
 		jsonError(w, "failed to list secrets: "+err.Error(), 500)
 		return
@@ -355,7 +355,7 @@ func handleProdSnapshotSecretsUpdate(w http.ResponseWriter, r *http.Request) {
 			patchJSON, _ := json.Marshal(map[string]interface{}{
 				"stringData": map[string]string{envVar: newValue},
 			})
-			_, patchErr := prodKubectlJSON("patch", "secret", secret.Metadata.Name,
+			_, patchErr := stagingKubectlJSON("patch", "secret", secret.Metadata.Name,
 				"-n", ns, "--type", "strategic", "-p", string(patchJSON))
 			if patchErr != nil {
 				jsonError(w, fmt.Sprintf("failed to patch secret %s: %s", secret.Metadata.Name, patchErr.Error()), 500)
@@ -374,7 +374,7 @@ func handleProdSnapshotSecretsUpdate(w http.ResponseWriter, r *http.Request) {
 	// Restart deployments that reference the updated secrets
 	var restarted []string
 	for depName := range restartSet {
-		_, err := prodKubectlJSON("rollout", "restart", "deployment/"+depName, "-n", ns)
+		_, err := stagingKubectlJSON("rollout", "restart", "deployment/"+depName, "-n", ns)
 		if err == nil {
 			restarted = append(restarted, depName)
 		}
@@ -382,7 +382,7 @@ func handleProdSnapshotSecretsUpdate(w http.ResponseWriter, r *http.Request) {
 
 	// Cache the updated credentials
 	chartName := "kindling-snapshot"
-	_ = saveCredCache(prodContext, chartName, body.Credentials)
+	_ = saveCredCache(stagingContext, chartName, body.Credentials)
 
 	jsonResponse(w, map[string]interface{}{
 		"ok":        true,
@@ -391,11 +391,11 @@ func handleProdSnapshotSecretsUpdate(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// ── /api/prod/tls/status — cert-manager + TLS status ────────────
+// ── /api/staging/tls/status — cert-manager + TLS status ────────────
 
-func handleProdTLSStatus(w http.ResponseWriter, r *http.Request) {
-	if prodContext == "" {
-		jsonError(w, "no production context configured", 400)
+func handleStagingTLSStatus(w http.ResponseWriter, r *http.Request) {
+	if stagingContext == "" {
+		jsonError(w, "no staging context configured", 400)
 		return
 	}
 
@@ -406,13 +406,13 @@ func handleProdTLSStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check cert-manager
-	_, err := prodKubectlJSON("get", "namespace", "cert-manager")
+	_, err := stagingKubectlJSON("get", "namespace", "cert-manager")
 	if err == nil {
 		result["cert_manager"] = true
 	}
 
 	// Get cluster issuers
-	if out, err := prodKubectlJSON("get", "clusterissuers", "-o", "json"); err == nil {
+	if out, err := stagingKubectlJSON("get", "clusterissuers", "-o", "json"); err == nil {
 		var list struct {
 			Items []struct {
 				Metadata struct {
@@ -456,7 +456,7 @@ func handleProdTLSStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get certificates
-	if out, err := prodKubectlJSON("get", "certificates", "--all-namespaces", "-o", "json"); err == nil {
+	if out, err := stagingKubectlJSON("get", "certificates", "--all-namespaces", "-o", "json"); err == nil {
 		var list struct {
 			Items []struct {
 				Metadata struct {
@@ -504,15 +504,15 @@ func handleProdTLSStatus(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, result)
 }
 
-// ── /api/prod/tls/install — install cert-manager + ClusterIssuer + patch ingress ─
+// ── /api/staging/tls/install — install cert-manager + ClusterIssuer + patch ingress ─
 
-func handleProdTLSInstall(w http.ResponseWriter, r *http.Request) {
+func handleStagingTLSInstall(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		jsonError(w, "method not allowed", 405)
 		return
 	}
-	if prodContext == "" {
-		jsonError(w, "no production context configured", 400)
+	if stagingContext == "" {
+		jsonError(w, "no staging context configured", 400)
 		return
 	}
 
@@ -549,7 +549,7 @@ func handleProdTLSInstall(w http.ResponseWriter, r *http.Request) {
 		body.IngressClass = "traefik"
 	}
 
-	ctx := prodContext
+	ctx := stagingContext
 
 	// Stream progress
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -744,9 +744,9 @@ spec:
 	send("done", fmt.Sprintf("TLS configured for %s with issuer %s", body.Domain, body.Issuer))
 }
 
-// ── /api/prod/metrics/status — VictoriaMetrics + kube-state-metrics status ──
+// ── /api/staging/metrics/status — VictoriaMetrics + kube-state-metrics status ──
 
-func handleProdMetricsStatus(w http.ResponseWriter, r *http.Request) {
+func handleStagingMetricsStatus(w http.ResponseWriter, r *http.Request) {
 	result := map[string]interface{}{
 		"victoria_metrics":   false,
 		"kube_state_metrics": false,
@@ -754,7 +754,7 @@ func handleProdMetricsStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check VictoriaMetrics
-	if out, err := prodKubectlJSON("get", "deployment", "vmsingle", "-n", "monitoring", "-o", "json"); err == nil {
+	if out, err := stagingKubectlJSON("get", "deployment", "vmsingle", "-n", "monitoring", "-o", "json"); err == nil {
 		var dep struct {
 			Status struct {
 				ReadyReplicas int `json:"readyReplicas"`
@@ -781,7 +781,7 @@ func handleProdMetricsStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check kube-state-metrics
-	if out, err := prodKubectlJSON("get", "deployment", "kube-state-metrics", "-n", "monitoring", "-o", "json"); err == nil {
+	if out, err := stagingKubectlJSON("get", "deployment", "kube-state-metrics", "-n", "monitoring", "-o", "json"); err == nil {
 		var dep struct {
 			Status struct {
 				ReadyReplicas int `json:"readyReplicas"`
@@ -795,9 +795,9 @@ func handleProdMetricsStatus(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, result)
 }
 
-// ── /api/prod/metrics/install — install VictoriaMetrics stack ────
+// ── /api/staging/metrics/install — install VictoriaMetrics stack ────
 
-func handleProdMetricsInstall(w http.ResponseWriter, r *http.Request) {
+func handleStagingMetricsInstall(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		jsonError(w, "method not allowed", 405)
 		return
@@ -818,7 +818,7 @@ func handleProdMetricsInstall(w http.ResponseWriter, r *http.Request) {
 		body.Scrape = "30s"
 	}
 
-	ctx := prodContext
+	ctx := stagingContext
 
 	// Stream progress
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -836,12 +836,12 @@ func handleProdMetricsInstall(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Set globals for the install functions
-	prodMetricsContext = ctx
-	prodMetricsRetention = body.Retention
-	prodMetricsScrape = body.Scrape
+	stagingMetricsContext = ctx
+	stagingMetricsRetention = body.Retention
+	stagingMetricsScrape = body.Scrape
 
 	// Validate retention before starting the install
-	if err := validateRetention(prodMetricsRetention); err != nil {
+	if err := validateRetention(stagingMetricsRetention); err != nil {
 		send("error", err.Error())
 		return
 	}
@@ -891,15 +891,15 @@ metadata:
 	send("done", fmt.Sprintf("Metrics stack installed (retention: %s, scrape: %s)", body.Retention, body.Scrape))
 }
 
-// ── /api/prod/metrics/uninstall — remove metrics stack ──────────
+// ── /api/staging/metrics/uninstall — remove metrics stack ──────────
 
-func handleProdMetricsUninstall(w http.ResponseWriter, r *http.Request) {
+func handleStagingMetricsUninstall(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		jsonError(w, "method not allowed", 405)
 		return
 	}
 
-	ctx := prodContext
+	ctx := stagingContext
 
 	_, _ = runSilent("kubectl", "--context", ctx, "-n", "monitoring", "delete", "deployment", "vmsingle", "--ignore-not-found")
 	_, _ = runSilent("kubectl", "--context", ctx, "-n", "monitoring", "delete", "service", "vmsingle", "--ignore-not-found")

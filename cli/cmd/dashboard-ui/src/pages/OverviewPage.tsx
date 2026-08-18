@@ -46,12 +46,12 @@ const PATHS: PathTile[] = [
     features: ['AI workflow generation', 'Push to trigger CI', 'Build & test locally', 'Automated deploys'],
   },
   {
-    id: 'production',
+    id: 'staging',
     icon: '◎',
-    title: 'Production',
+    title: 'Staging',
     desc: 'Snapshot your dev environment and deploy to a real cluster. Monitor, scale, and manage TLS.',
     color: '#10b981',
-    navigateTo: 'prod-overview',
+    navigateTo: 'staging-overview',
     features: ['One-click deploy', 'Metrics & monitoring', 'TLS certificates', 'Rollbacks & scaling'],
   },
 ];

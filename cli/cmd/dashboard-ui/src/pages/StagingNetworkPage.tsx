@@ -1,23 +1,23 @@
-import { useApi, fetchProdIngressController } from '../api';
+import { useApi, fetchStagingIngressController } from '../api';
 import { useState, useEffect } from 'react';
 import type { K8sList, K8sService, K8sIngress, IngressControllerInfo } from '../types';
 import { TimeAgo, EmptyState } from './shared';
 
-export function ProductionNetworkPage() {
-  const { data: services } = useApi<K8sList<K8sService>>('/api/prod/services');
-  const { data: ingresses } = useApi<K8sList<K8sIngress>>('/api/prod/ingresses');
+export function StagingNetworkPage() {
+  const { data: services } = useApi<K8sList<K8sService>>('/api/staging/services');
+  const { data: ingresses } = useApi<K8sList<K8sIngress>>('/api/staging/ingresses');
   const [ic, setIc] = useState<IngressControllerInfo | null>(null);
   const [tab, setTab] = useState<'ingresses' | 'services'>('ingresses');
 
   useEffect(() => {
-    fetchProdIngressController().then(setIc).catch(() => {});
+    fetchStagingIngressController().then(setIc).catch(() => {});
   }, []);
 
   const svcItems = services?.items || [];
   const ingItems = ingresses?.items || [];
 
   function goToTLS() {
-    window.dispatchEvent(new CustomEvent('navigate', { detail: 'prod-tls' }));
+    window.dispatchEvent(new CustomEvent('navigate', { detail: 'staging-tls' }));
   }
 
   return (
@@ -70,12 +70,12 @@ export function ProductionNetworkPage() {
         );
       })()}
 
-      <div className="prod-tabs">
-        <button className={`prod-tab ${tab === 'ingresses' ? 'active' : ''}`} onClick={() => setTab('ingresses')}>
-          Ingresses <span className="prod-tab-count">{ingItems.length}</span>
+      <div className="staging-tabs">
+        <button className={`staging-tab ${tab === 'ingresses' ? 'active' : ''}`} onClick={() => setTab('ingresses')}>
+          Ingresses <span className="staging-tab-count">{ingItems.length}</span>
         </button>
-        <button className={`prod-tab ${tab === 'services' ? 'active' : ''}`} onClick={() => setTab('services')}>
-          Services <span className="prod-tab-count">{svcItems.length}</span>
+        <button className={`staging-tab ${tab === 'services' ? 'active' : ''}`} onClick={() => setTab('services')}>
+          Services <span className="staging-tab-count">{svcItems.length}</span>
         </button>
       </div>
 
@@ -101,9 +101,9 @@ export function ProductionNetworkPage() {
                       <td className="mono">{path?.backend?.service?.name || '—'}:{path?.backend?.service?.port?.number || '—'}</td>
                       <td>
                         {hasTLS ? (
-                          <span className="prod-tls-badge prod-tls-ok">◈ TLS</span>
+                          <span className="staging-tls-badge staging-tls-ok">◈ TLS</span>
                         ) : (
-                          <span className="prod-tls-badge prod-tls-none">—</span>
+                          <span className="staging-tls-badge staging-tls-none">—</span>
                         )}
                       </td>
                       <td><TimeAgo timestamp={ing.metadata.creationTimestamp} /></td>

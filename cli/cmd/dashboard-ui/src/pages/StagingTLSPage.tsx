@@ -1,10 +1,10 @@
-import { useApi, fetchProdCertificates, fetchProdClusterIssuers, fetchTLSStatus, streamTLSInstall, fetchProdIngressController } from '../api';
+import { useApi, fetchStagingCertificates, fetchStagingClusterIssuers, fetchTLSStatus, streamTLSInstall, fetchStagingIngressController } from '../api';
 import { useState, useEffect, useRef } from 'react';
 import type { K8sList, K8sIngress, CertificateItem, ClusterIssuerItem, TLSStatus, IngressControllerInfo } from '../types';
 import { StatusBadge, EmptyState } from './shared';
 
-export function ProductionTLSPage() {
-  const { data: ingresses } = useApi<K8sList<K8sIngress>>('/api/prod/ingresses');
+export function StagingTLSPage() {
+  const { data: ingresses } = useApi<K8sList<K8sIngress>>('/api/staging/ingresses');
 
   const [certs, setCerts] = useState<CertificateItem[]>([]);
   const [issuers, setIssuers] = useState<ClusterIssuerItem[]>([]);
@@ -18,7 +18,7 @@ export function ProductionTLSPage() {
   const [domain, setDomain] = useState('');
   const [issuerName, setIssuerName] = useState('letsencrypt-prod');
   const [ingressClass, setIngressClass] = useState('traefik');
-  const [staging, setStaging] = useState(false);
+  const [useACMEStaging, setUseACMEStaging] = useState(false);
   const [installing, setInstalling] = useState(false);
   const [logs, setLogs] = useState<{ type: string; message: string }[]>([]);
   const [ingressName, setIngressName] = useState('');
@@ -29,17 +29,17 @@ export function ProductionTLSPage() {
   const untlsIngresses = ingItems.filter(ing => !ing.spec?.tls?.length);
 
   useEffect(() => {
-    fetchProdCertificates().then(r => setCerts(r.items || [])).catch(() => {});
-    fetchProdClusterIssuers().then(r => setIssuers(r.items || [])).catch(() => {});
+    fetchStagingCertificates().then(r => setCerts(r.items || [])).catch(() => {});
+    fetchStagingClusterIssuers().then(r => setIssuers(r.items || [])).catch(() => {});
     fetchTLSStatus().then(s => setTlsStatus(s)).catch(() => {});
-    fetchProdIngressController().then(ic => setIcInfo(ic)).catch(() => {});
+    fetchStagingIngressController().then(ic => setIcInfo(ic)).catch(() => {});
     return () => { abortRef.current?.(); };
   }, []);
 
   function refreshAll() {
     fetchTLSStatus().then(s => setTlsStatus(s)).catch(() => {});
-    fetchProdClusterIssuers().then(r => setIssuers(r.items || [])).catch(() => {});
-    fetchProdCertificates().then(r => setCerts(r.items || [])).catch(() => {});
+    fetchStagingClusterIssuers().then(r => setIssuers(r.items || [])).catch(() => {});
+    fetchStagingCertificates().then(r => setCerts(r.items || [])).catch(() => {});
   }
 
   function doInstall() {
@@ -47,7 +47,7 @@ export function ProductionTLSPage() {
     setInstalling(true);
     setLogs([]);
     const abort = streamTLSInstall(
-      { email, domain, issuer: issuerName, ingress_class: ingressClass, staging, ingress_name: ingressName, ingress_namespace: ingressNs },
+      { email, domain, issuer: issuerName, ingress_class: ingressClass, staging: useACMEStaging, ingress_name: ingressName, ingress_namespace: ingressNs },
       (msg) => {
         setLogs(prev => [...prev, msg]);
         if (msg.type === 'done' || msg.type === 'error') {
@@ -307,9 +307,9 @@ export function ProductionTLSPage() {
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
               <label className="deploy-ingress-toggle">
-                <input type="checkbox" checked={staging} onChange={e => setStaging(e.target.checked)} />
+                <input type="checkbox" checked={useACMEStaging} onChange={e => setUseACMEStaging(e.target.checked)} />
                 <span className="toggle-track" />
-                <span style={{ fontSize: 13 }}>Use staging server</span>
+                <span style={{ fontSize: 13 }}>Use Let's Encrypt staging server (for testing)</span>
               </label>
               <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
                 <button className="btn btn-secondary" onClick={() => setShowForm(false)}>Cancel</button>
@@ -441,9 +441,9 @@ export function ProductionTLSPage() {
                       <td className="mono">{host || '—'}</td>
                       <td>
                         {hasTLS ? (
-                          <span className="prod-tls-badge prod-tls-ok">◈ {secret || 'TLS'}</span>
+                          <span className="staging-tls-badge staging-tls-ok">◈ {secret || 'TLS'}</span>
                         ) : (
-                          <span className="prod-tls-badge prod-tls-none">No TLS</span>
+                          <span className="staging-tls-badge staging-tls-none">No TLS</span>
                         )}
                       </td>
                       <td>

@@ -9,20 +9,20 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// ── production metrics ──────────────────────────────────────────
+// ── staging metrics ──────────────────────────────────────────
 
 var (
-	prodMetricsContext   string
-	prodMetricsRetention string
-	prodMetricsScrape    string
-	prodMetricsUninstall bool
+	stagingMetricsContext   string
+	stagingMetricsRetention string
+	stagingMetricsScrape    string
+	stagingMetricsUninstall bool
 )
 
-var productionMetricsCmd = &cobra.Command{
+var stagingMetricsCmd = &cobra.Command{
 	Use:   "metrics",
 	Short: "Install lightweight metrics (VictoriaMetrics + kube-state-metrics)",
 	Long: `Installs VictoriaMetrics single-node and kube-state-metrics with minimal
-resource footprint, optimised for small production clusters.
+resource footprint, optimised for small staging clusters.
 
 VictoriaMetrics is a PromQL-compatible metrics backend that uses 2-5x less
 memory than Prometheus. The kindling dashboard auto-detects it — all charts,
@@ -35,34 +35,34 @@ What gets installed:
   • Scrape configs for kubelet, kube-state-metrics, and pod annotations
 
 Examples:
-  kindling production metrics --context my-prod
-  kindling production metrics --context my-prod --retention 7d --scrape 30s
-  kindling production metrics --context my-prod --uninstall`,
-	RunE: runProductionMetrics,
+  kindling staging metrics --context my-staging
+  kindling staging metrics --context my-staging --retention 7d --scrape 30s
+  kindling staging metrics --context my-staging --uninstall`,
+	RunE: runStagingMetrics,
 }
 
 func init() {
-	productionMetricsCmd.Flags().StringVar(&prodMetricsContext, "context", "", "Kubeconfig context for the production cluster (required)")
-	productionMetricsCmd.Flags().StringVar(&prodMetricsRetention, "retention", "1d", "How long to retain metrics data (e.g. 1d, 7d, 30d)")
-	productionMetricsCmd.Flags().StringVar(&prodMetricsScrape, "scrape", "30s", "Scrape interval (e.g. 15s, 30s, 60s)")
-	productionMetricsCmd.Flags().BoolVar(&prodMetricsUninstall, "uninstall", false, "Remove metrics stack instead of installing")
-	_ = productionMetricsCmd.MarkFlagRequired("context")
-	productionCmd.AddCommand(productionMetricsCmd)
+	stagingMetricsCmd.Flags().StringVar(&stagingMetricsContext, "context", "", "Kubeconfig context for the staging cluster (required)")
+	stagingMetricsCmd.Flags().StringVar(&stagingMetricsRetention, "retention", "1d", "How long to retain metrics data (e.g. 1d, 7d, 30d)")
+	stagingMetricsCmd.Flags().StringVar(&stagingMetricsScrape, "scrape", "30s", "Scrape interval (e.g. 15s, 30s, 60s)")
+	stagingMetricsCmd.Flags().BoolVar(&stagingMetricsUninstall, "uninstall", false, "Remove metrics stack instead of installing")
+	_ = stagingMetricsCmd.MarkFlagRequired("context")
+	stagingCmd.AddCommand(stagingMetricsCmd)
 }
 
-func runProductionMetrics(cmd *cobra.Command, args []string) error {
-	ctx := prodMetricsContext
+func runStagingMetrics(cmd *cobra.Command, args []string) error {
+	ctx := stagingMetricsContext
 
 	if strings.HasPrefix(ctx, "kind-") {
-		return fmt.Errorf("context %q looks like a Kind cluster — production metrics are for external clusters", ctx)
+		return fmt.Errorf("context %q looks like a Kind cluster — staging metrics are for external clusters", ctx)
 	}
 
 	// VictoriaMetrics requires retention >= 1 day
-	if err := validateRetention(prodMetricsRetention); err != nil {
+	if err := validateRetention(stagingMetricsRetention); err != nil {
 		return err
 	}
 
-	if prodMetricsUninstall {
+	if stagingMetricsUninstall {
 		return uninstallMetrics(ctx)
 	}
 
@@ -112,12 +112,12 @@ metadata:
 	fmt.Fprintf(os.Stderr, "  %s📊 Metrics stack ready!%s\n", colorGreen+colorBold, colorReset)
 	fmt.Println()
 	fmt.Fprintf(os.Stderr, "  VictoriaMetrics  %smonitoring/vmsingle:8428%s  (retention: %s, scrape: %s)\n",
-		colorCyan, colorReset, prodMetricsRetention, prodMetricsScrape)
+		colorCyan, colorReset, stagingMetricsRetention, stagingMetricsScrape)
 	fmt.Fprintf(os.Stderr, "  kube-state       %smonitoring/kube-state-metrics:8080%s\n",
 		colorCyan, colorReset)
 	fmt.Println()
 	fmt.Fprintf(os.Stderr, "  The kindling dashboard auto-detects VictoriaMetrics.\n")
-	fmt.Fprintf(os.Stderr, "  Run: %skindling dashboard --prod-context %s%s\n", colorCyan, ctx, colorReset)
+	fmt.Fprintf(os.Stderr, "  Run: %skindling dashboard --staging-context %s%s\n", colorCyan, ctx, colorReset)
 	fmt.Println()
 
 	return nil
@@ -415,7 +415,7 @@ spec:
           sizeLimit: 1Gi
       nodeSelector:
         kubernetes.io/os: linux
-`, prodMetricsRetention)
+`, stagingMetricsRetention)
 
 	svc := `apiVersion: v1
 kind: Service
@@ -493,7 +493,7 @@ scrape_configs:
       target_label: namespace
     - source_labels: [__meta_kubernetes_pod_name]
       target_label: pod
-`, prodMetricsScrape)
+`, stagingMetricsScrape)
 }
 
 // indent prepends each line with n spaces.

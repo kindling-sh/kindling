@@ -16,35 +16,35 @@ import (
 	"github.com/charmbracelet/huh"
 )
 
-// ── Production credential management for snapshot deploy ────────
+// ── Staging credential management for snapshot deploy ────────
 //
-// When deploying a snapshot to production, dependency connection strings
+// When deploying a snapshot to staging, dependency connection strings
 // (DATABASE_URL, REDIS_URL, etc.) default to dev credentials like
 // devuser/devpass. This module:
 //
 //   1. Detects which dependencies have dev-default credentials
-//   2. Prompts the user interactively for production connection strings
+//   2. Prompts the user interactively for staging connection strings
 //   3. Caches credentials locally (AES-256-GCM encrypted) for convenience
 //   4. Generates a temporary Helm values override file (never persisted)
 //
-// The encrypted cache lives at ~/.kindling/prod-credentials/ with 0600
+// The encrypted cache lives at ~/.kindling/staging-credentials/ with 0600
 // permissions. The encryption key is derived from the local machine
 // identity (hostname + username) — reasonable protection for a localhost
 // tool, preventing casual file browsing from exposing secrets.
 
-// prodCredEntry represents one dependency that needs production credentials.
-type prodCredEntry struct {
+// stagingCredEntry represents one dependency that needs staging credentials.
+type stagingCredEntry struct {
 	DepType    string   // "postgres", "redis", etc.
 	EnvVarName string   // "DATABASE_URL", "REDIS_URL", etc.
 	DevValue   string   // the dev-default connection URL
 	Services   []string // which services use this dependency
 }
 
-// prodCredCache is the on-disk structure for cached credentials.
-type prodCredCache struct {
+// stagingCredCache is the on-disk structure for cached credentials.
+type stagingCredCache struct {
 	Context   string            `json:"context"`
 	Chart     string            `json:"chart"`
-	Creds     map[string]string `json:"creds"` // EnvVarName → production value
+	Creds     map[string]string `json:"creds"` // EnvVarName → staging value
 	UpdatedAt time.Time         `json:"updated_at"`
 }
 
@@ -54,12 +54,12 @@ type prodCredCache struct {
 // still have dev-default credentials. Returns deduplicated entries grouped
 // by dependency type (e.g. one "postgres" entry listing all services that
 // use it).
-func detectDevCredentials(chartName string, dses []snapshotDSE) []prodCredEntry {
+func detectDevCredentials(chartName string, dses []snapshotDSE) []stagingCredEntry {
 	type key struct {
 		depType string
 		envVar  string
 	}
-	seen := make(map[key]*prodCredEntry)
+	seen := make(map[key]*stagingCredEntry)
 	var order []key
 
 	for _, dse := range dses {
@@ -73,7 +73,7 @@ func detectDevCredentials(chartName string, dses []snapshotDSE) []prodCredEntry 
 				entry.Services = append(entry.Services, dse.Name)
 			} else {
 				devURL := buildConnectionURL(chartName, dep.Type, helmSafe(dep.Type), def)
-				entry := &prodCredEntry{
+				entry := &stagingCredEntry{
 					DepType:    dep.Type,
 					EnvVarName: def.EnvVarName,
 					DevValue:   devURL,
@@ -85,7 +85,7 @@ func detectDevCredentials(chartName string, dses []snapshotDSE) []prodCredEntry 
 		}
 	}
 
-	var result []prodCredEntry
+	var result []stagingCredEntry
 	for _, k := range order {
 		result = append(result, *seen[k])
 	}
@@ -93,13 +93,13 @@ func detectDevCredentials(chartName string, dses []snapshotDSE) []prodCredEntry 
 }
 
 // detectUserSecrets scans DSEs for env vars that are sourced from K8s
-// secrets (secretKeyRef). These need production values because the dev
-// cluster secrets won't exist in production.
-func detectUserSecrets(dses []snapshotDSE) []prodCredEntry {
+// secrets (secretKeyRef). These need staging values because the dev
+// cluster secrets won't exist in staging.
+func detectUserSecrets(dses []snapshotDSE) []stagingCredEntry {
 	type key struct {
 		name string
 	}
-	seen := make(map[key]*prodCredEntry)
+	seen := make(map[key]*stagingCredEntry)
 	var order []key
 
 	for _, dse := range dses {
@@ -111,7 +111,7 @@ func detectUserSecrets(dses []snapshotDSE) []prodCredEntry {
 			if entry, exists := seen[k]; exists {
 				entry.Services = append(entry.Services, dse.Name)
 			} else {
-				entry := &prodCredEntry{
+				entry := &stagingCredEntry{
 					DepType:    "secret",
 					EnvVarName: e.Name,
 					DevValue:   e.Value,
@@ -123,7 +123,7 @@ func detectUserSecrets(dses []snapshotDSE) []prodCredEntry {
 		}
 	}
 
-	var result []prodCredEntry
+	var result []stagingCredEntry
 	for _, k := range order {
 		result = append(result, *seen[k])
 	}
@@ -134,7 +134,7 @@ func detectUserSecrets(dses []snapshotDSE) []prodCredEntry {
 
 func credsCacheDir() string {
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".kindling", "prod-credentials")
+	return filepath.Join(home, ".kindling", "staging-credentials")
 }
 
 func credsCacheFile(context string) string {
@@ -152,7 +152,7 @@ func deriveEncryptionKey() []byte {
 	if u != nil {
 		username = u.Username
 	}
-	h := sha256.Sum256([]byte(hostname + "|" + username + "|kindling-prod-creds-v1"))
+	h := sha256.Sum256([]byte(hostname + "|" + username + "|kindling-staging-creds-v1"))
 	return h[:]
 }
 
@@ -187,7 +187,7 @@ func decryptBytes(ciphertext []byte) ([]byte, error) {
 	return gcm.Open(nil, ciphertext[:gcm.NonceSize()], ciphertext[gcm.NonceSize():], nil)
 }
 
-func loadCredCache(context string) *prodCredCache {
+func loadCredCache(context string) *stagingCredCache {
 	data, err := os.ReadFile(credsCacheFile(context))
 	if err != nil {
 		return nil
@@ -196,7 +196,7 @@ func loadCredCache(context string) *prodCredCache {
 	if err != nil {
 		return nil // corrupted or key changed — prompt fresh
 	}
-	var cache prodCredCache
+	var cache stagingCredCache
 	if err := json.Unmarshal(plain, &cache); err != nil {
 		return nil
 	}
@@ -204,7 +204,7 @@ func loadCredCache(context string) *prodCredCache {
 }
 
 func saveCredCache(context, chart string, creds map[string]string) error {
-	cache := prodCredCache{
+	cache := stagingCredCache{
 		Context:   context,
 		Chart:     chart,
 		Creds:     creds,
@@ -231,16 +231,16 @@ func clearCredCache(context string) {
 
 // ── Interactive prompt ──────────────────────────────────────────
 
-// resolveProductionCredentials is the main entry point for the credential
+// resolveStagingCredentials is the main entry point for the credential
 // flow. It detects dev credentials, checks the cache, prompts the user,
 // and returns a map of helm values overrides to apply.
 //
 // Returns:
-//   - overrides: map[valuesKey]map[envVarName]prodValue for helm --set
+//   - overrides: map[valuesKey]map[envVarName]stagingValue for helm --set
 //   - error if the user cancels or something fails
 //
 // If the user chooses to skip, overrides is nil (deploy with dev creds).
-func resolveProductionCredentials(chartName, context string, dses []snapshotDSE) (map[string]map[string]credOverride, error) {
+func resolveStagingCredentials(chartName, context string, dses []snapshotDSE) (map[string]map[string]credOverride, error) {
 	entries := detectDevCredentials(chartName, dses)
 	secretEntries := detectUserSecrets(dses)
 	entries = append(entries, secretEntries...)
@@ -290,15 +290,15 @@ func resolveProductionCredentials(chartName, context string, dses []snapshotDSE)
 		}
 	}
 	options = append(options,
-		huh.NewOption[string]("Configure production credentials", "configure"),
+		huh.NewOption[string]("Configure staging credentials", "configure"),
 		huh.NewOption[string]("Deploy with dev credentials (insecure)", "skip"),
 	)
 
 	form := huh.NewForm(
 		huh.NewGroup(
 			huh.NewSelect[string]().
-				Title("Production Credentials").
-				Description("Dependencies have dev-default passwords (devuser/devpass).\nConfigure production connection strings for a secure deployment.").
+				Title("Staging Credentials").
+				Description("Dependencies have dev-default passwords (devuser/devpass).\nConfigure staging connection strings for a secure deployment.").
 				Options(options...).
 				Value(&choice),
 		),
@@ -309,11 +309,11 @@ func resolveProductionCredentials(chartName, context string, dses []snapshotDSE)
 
 	switch choice {
 	case "skip":
-		warn("Deploying with dev credentials — not recommended for production")
+		warn("Deploying with dev credentials — not recommended for staging")
 		return nil, nil
 
 	case "cached":
-		step("🔑", "Using cached production credentials")
+		step("🔑", "Using cached staging credentials")
 		return buildOverrideMap(entries, dses, cached.Creds), nil
 
 	case "configure":
@@ -336,7 +336,7 @@ func resolveProductionCredentials(chartName, context string, dses []snapshotDSE)
 }
 
 // promptCredentialValues shows input fields for each credential.
-func promptCredentialValues(entries []prodCredEntry, cached *prodCredCache) (map[string]string, error) {
+func promptCredentialValues(entries []stagingCredEntry, cached *stagingCredCache) (map[string]string, error) {
 	// Prepare value pointers for the form
 	type fieldRef struct {
 		envVar string
@@ -381,7 +381,7 @@ func promptCredentialValues(entries []prodCredEntry, cached *prodCredCache) (map
 	}
 
 	if len(creds) > 0 {
-		step("✓", fmt.Sprintf("Configured %d production %s",
+		step("✓", fmt.Sprintf("Configured %d staging %s",
 			len(creds), pluralize(len(creds), "credential", "credentials")))
 	}
 
@@ -392,7 +392,7 @@ func promptCredentialValues(entries []prodCredEntry, cached *prodCredCache) (map
 
 // buildOverrideMap converts a flat credential map into the nested structure
 // needed for Helm values overrides: valuesKey → envVarName → value.
-// credOverride holds a production credential value and whether it's a
+// credOverride holds a staging credential value and whether it's a
 // secret (goes into secrets: section) or a plain env var (goes into env:).
 type credOverride struct {
 	Value    string
@@ -400,7 +400,7 @@ type credOverride struct {
 }
 
 // Each service that uses a given dependency gets the same credential.
-func buildOverrideMap(entries []prodCredEntry, dses []snapshotDSE, creds map[string]string) map[string]map[string]credOverride {
+func buildOverrideMap(entries []stagingCredEntry, dses []snapshotDSE, creds map[string]string) map[string]map[string]credOverride {
 	if len(creds) == 0 {
 		return nil
 	}
@@ -430,14 +430,14 @@ func buildOverrideMap(entries []prodCredEntry, dses []snapshotDSE, creds map[str
 			if !ok {
 				continue
 			}
-			prodVal, ok := creds[envVar]
-			if !ok || prodVal == "" {
+			stagingVal, ok := creds[envVar]
+			if !ok || stagingVal == "" {
 				continue
 			}
 			if result[vk] == nil {
 				result[vk] = make(map[string]credOverride)
 			}
-			result[vk][envVar] = credOverride{Value: prodVal, IsSecret: false}
+			result[vk][envVar] = credOverride{Value: stagingVal, IsSecret: false}
 		}
 		// User secrets → secrets:
 		for _, e := range dse.Env {
@@ -447,14 +447,14 @@ func buildOverrideMap(entries []prodCredEntry, dses []snapshotDSE, creds map[str
 			if !secretEnvVars[e.Name] {
 				continue
 			}
-			prodVal, ok := creds[e.Name]
-			if !ok || prodVal == "" {
+			stagingVal, ok := creds[e.Name]
+			if !ok || stagingVal == "" {
 				continue
 			}
 			if result[vk] == nil {
 				result[vk] = make(map[string]credOverride)
 			}
-			result[vk][e.Name] = credOverride{Value: prodVal, IsSecret: true}
+			result[vk][e.Name] = credOverride{Value: stagingVal, IsSecret: true}
 		}
 	}
 
@@ -462,12 +462,12 @@ func buildOverrideMap(entries []prodCredEntry, dses []snapshotDSE, creds map[str
 }
 
 // writeCredsOverrideFile writes a temporary Helm values file with the
-// production credential overrides. Using a file avoids shell escaping
+// staging credential overrides. Using a file avoids shell escaping
 // issues with special characters in connection URLs (commas, @, etc.).
 // Returns the path to the temp file (caller should defer os.Remove).
 func writeCredsOverrideFile(overrides map[string]map[string]credOverride) (string, error) {
 	var buf strings.Builder
-	buf.WriteString("# Auto-generated production credential overrides\n")
+	buf.WriteString("# Auto-generated staging credential overrides\n")
 	buf.WriteString("# This file is ephemeral and deleted after deploy.\n\n")
 
 	for vk, creds := range overrides {

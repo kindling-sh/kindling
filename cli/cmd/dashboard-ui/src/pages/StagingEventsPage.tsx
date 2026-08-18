@@ -3,11 +3,11 @@ import { useApi } from '../api';
 import type { K8sList, K8sEvent, K8sMetadata } from '../types';
 import { TimeAgo, EmptyState } from './shared';
 
-export function ProductionEventsPage() {
+export function StagingEventsPage() {
   const [namespace, setNamespace] = useState('');
-  const eventsPath = namespace ? `/api/prod/events?namespace=${encodeURIComponent(namespace)}` : '/api/prod/events';
+  const eventsPath = namespace ? `/api/staging/events?namespace=${encodeURIComponent(namespace)}` : '/api/staging/events';
   const { data, loading } = useApi<K8sList<K8sEvent>>(eventsPath);
-  const { data: nsData } = useApi<K8sList<{ metadata: K8sMetadata }>>('/api/prod/namespaces');
+  const { data: nsData } = useApi<K8sList<{ metadata: K8sMetadata }>>('/api/staging/namespaces');
   const [typeFilter, setTypeFilter] = useState<string>('');
   const [search, setSearch] = useState('');
 
@@ -33,7 +33,7 @@ export function ProductionEventsPage() {
     <div className="page">
       <div className="page-header">
         <div className="page-header-left">
-          <h1>Production Events</h1>
+          <h1>Staging Events</h1>
           <p className="page-subtitle">
             {data?.items?.length ?? 0} events
             {warnings > 0 && <span className="text-yellow" style={{ marginLeft: 8 }}>⚠ {warnings} warnings</span>}
@@ -41,11 +41,11 @@ export function ProductionEventsPage() {
         </div>
       </div>
 
-      <div className="prod-filter-bar">
-        <div className="prod-filter-group">
-          <button className={`prod-filter-btn ${typeFilter === '' ? 'active' : ''}`} onClick={() => setTypeFilter('')}>All</button>
-          <button className={`prod-filter-btn ${typeFilter === 'Normal' ? 'active' : ''}`} onClick={() => setTypeFilter('Normal')}>Normal</button>
-          <button className={`prod-filter-btn ${typeFilter === 'Warning' ? 'active' : ''}`} onClick={() => setTypeFilter('Warning')}>
+      <div className="staging-filter-bar">
+        <div className="staging-filter-group">
+          <button className={`staging-filter-btn ${typeFilter === '' ? 'active' : ''}`} onClick={() => setTypeFilter('')}>All</button>
+          <button className={`staging-filter-btn ${typeFilter === 'Normal' ? 'active' : ''}`} onClick={() => setTypeFilter('Normal')}>Normal</button>
+          <button className={`staging-filter-btn ${typeFilter === 'Warning' ? 'active' : ''}`} onClick={() => setTypeFilter('Warning')}>
             Warning {warnings > 0 && <span className="badge">{warnings}</span>}
           </button>
         </div>
@@ -62,25 +62,25 @@ export function ProductionEventsPage() {
       {items.length === 0 ? (
         <EmptyState icon="◇" message={search || typeFilter ? 'No matching events.' : 'No events in the cluster.'} />
       ) : (
-        <div className="prod-event-list">
+        <div className="staging-event-list">
           {items.map((ev, i) => (
-            <div key={ev.metadata.uid || i} className={`prod-event-item ${ev.type === 'Warning' ? 'warning' : ''}`}>
-              <span className="prod-event-icon">
+            <div key={ev.metadata.uid || i} className={`staging-event-item ${ev.type === 'Warning' ? 'warning' : ''}`}>
+              <span className="staging-event-icon">
                 {ev.type === 'Warning' ? '⚠' : '✓'}
               </span>
-              <div className="prod-event-body">
-                <div className="prod-event-header">
-                  <span className="prod-event-reason">{ev.reason}</span>
-                  <span className="prod-event-object">
+              <div className="staging-event-body">
+                <div className="staging-event-header">
+                  <span className="staging-event-reason">{ev.reason}</span>
+                  <span className="staging-event-object">
                     {ev.involvedObject?.kind}/{ev.involvedObject?.name}
                   </span>
                   {ev.involvedObject?.namespace && (
-                    <span className="prod-event-ns">{ev.involvedObject.namespace}</span>
+                    <span className="staging-event-ns">{ev.involvedObject.namespace}</span>
                   )}
                 </div>
-                <div className="prod-event-message">{ev.message}</div>
+                <div className="staging-event-message">{ev.message}</div>
               </div>
-              <div className="prod-event-meta">
+              <div className="staging-event-meta">
                 {(ev.count ?? 0) > 1 && <span className="badge">×{ev.count}</span>}
                 <TimeAgo timestamp={ev.lastTimestamp || ev.metadata.creationTimestamp} />
               </div>

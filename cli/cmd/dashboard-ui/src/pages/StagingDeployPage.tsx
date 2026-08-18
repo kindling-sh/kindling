@@ -1,12 +1,12 @@
 import { useState, useEffect, useRef } from 'react';
-import { fetchSnapshotStatus, fetchSnapshotCredentials, streamSnapshotDeploy, updateProdSecrets, fetchProdIngressController } from '../api';
+import { fetchSnapshotStatus, fetchSnapshotCredentials, streamSnapshotDeploy, updateStagingSecrets, fetchStagingIngressController } from '../api';
 import type { SnapshotStatus, SnapshotService, IngressControllerInfo } from '../types';
 import type { SnapshotCredential } from '../api';
 import { StatusBadge, EmptyState } from './shared';
 
 type DeployStep = 'configure' | 'deploying' | 'done';
 
-export function ProductionDeployPage() {
+export function StagingDeployPage() {
   const [status, setStatus] = useState<SnapshotStatus | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -86,7 +86,7 @@ export function ProductionDeployPage() {
     setIngressLookupFailed(false);
 
     const poll = () => {
-      fetchProdIngressController()
+      fetchStagingIngressController()
         .then(info => {
           if (cancelled) return;
           setIngressInfo(info);
@@ -159,14 +159,14 @@ export function ProductionDeployPage() {
     return (
       <div className="page">
         <div className="page-header"><div className="page-header-left">
-          <h1>Deploy to Production</h1>
-          <p className="page-subtitle">Not connected — start the dashboard with <code>--prod-context</code></p>
+          <h1>Deploy to Staging</h1>
+          <p className="page-subtitle">Not connected — start the dashboard with <code>--staging-context</code></p>
         </div></div>
-        <div className="prod-disconnected">
-          <div className="prod-disconnected-icon">⚠</div>
-          <h2>No Production Context</h2>
-          <p>Launch the dashboard with a production kubeconfig context to enable deployment.</p>
-          <pre className="prod-code-block">kindling dashboard --prod-context &lt;your-context&gt;</pre>
+        <div className="staging-disconnected">
+          <div className="staging-disconnected-icon">⚠</div>
+          <h2>No Staging Context</h2>
+          <p>Launch the dashboard with a staging kubeconfig context to enable deployment.</p>
+          <pre className="staging-code-block">kindling dashboard --staging-context &lt;your-context&gt;</pre>
         </div>
       </div>
     );
@@ -178,7 +178,7 @@ export function ProductionDeployPage() {
     <div className="page">
       <div className="page-header">
         <div className="page-header-left">
-          <h1>Deploy to Production</h1>
+          <h1>Deploy to Staging</h1>
           <p className="page-subtitle">
             Snapshot dev environment and deploy to <span className="mono">{status?.context}</span>
             {' '}<a href="https://kindling.sh/docs/graduation" target="_blank" rel="noopener noreferrer" style={{ fontSize: 11, color: 'var(--accent)', textDecoration: 'none' }}>Docs ↗</a>
@@ -336,7 +336,7 @@ export function ProductionDeployPage() {
                         value={status?.context || ''}
                         disabled
                       />
-                      <span className="form-hint">Set via --prod-context flag</span>
+                      <span className="form-hint">Set via --staging-context flag</span>
                     </div>
                   </div>
                 </div>
@@ -357,7 +357,7 @@ export function ProductionDeployPage() {
                   <div className="card-body">
                     <div style={{ marginBottom: 12, padding: '8px 12px', background: 'var(--bg-elevated)', borderRadius: 6, border: '1px solid var(--warning-border, #a8860044)', fontSize: 13 }}>
                       <strong>⚠ Dev credentials detected.</strong> Your dependencies use default dev values (e.g. <code>devuser/devpass</code>).
-                      Enter production connection strings below or they'll be deployed with dev defaults.
+                      Enter staging connection strings below or they'll be deployed with dev defaults.
                     </div>
                     {devCreds.filter(c => c.dep_type !== 'secret').map(cred => (
                       <div key={cred.env_var} className="form-group" style={{ marginTop: 12 }}>
@@ -391,7 +391,7 @@ export function ProductionDeployPage() {
                   <div className="card-body">
                     <div style={{ marginBottom: 12, padding: '8px 12px', background: 'var(--bg-elevated)', borderRadius: 6, border: '1px solid var(--info-border, #4488cc44)', fontSize: 13 }}>
                       These values are pre-filled from your dev cluster secrets.
-                      Accept the defaults or enter production-specific values.
+                      Accept the defaults or enter staging-specific values.
                       Values like <code>PUBLIC_URL</code> can be updated after deploy once TLS is configured.
                     </div>
                     {devCreds.filter(c => c.dep_type === 'secret').map(cred => (
@@ -423,7 +423,7 @@ export function ProductionDeployPage() {
                   disabled={!registry || services.length === 0}
                   onClick={startDeploy}
                 >
-                  Deploy to Production
+                  Deploy to Staging
                 </button>
               </div>
             </>
@@ -486,7 +486,7 @@ export function ProductionDeployPage() {
                 ✗ Could not determine an external IP yet. Run <code>kubectl get svc -n traefik --context {status?.context}</code> from
                 the CLI, or click Refresh below once the ingress controller has an address.
                 <div style={{ marginTop: 8 }}>
-                  <button className="btn btn-secondary" onClick={() => { setIngressLookupFailed(false); fetchProdIngressController().then(setIngressInfo).catch(() => setIngressLookupFailed(true)); }}>
+                  <button className="btn btn-secondary" onClick={() => { setIngressLookupFailed(false); fetchStagingIngressController().then(setIngressInfo).catch(() => setIngressLookupFailed(true)); }}>
                     Refresh
                   </button>
                 </div>
@@ -501,10 +501,10 @@ export function ProductionDeployPage() {
                 </div>
                 <div style={{ marginBottom: 12, padding: '8px 12px', background: 'var(--bg-elevated)', borderRadius: 6, border: '1px solid var(--info-border, #4488cc44)', fontSize: 13 }}>
                   Create a DNS A record pointing your domain at this address, then configure TLS:
-                  <pre className="prod-code-block" style={{ marginTop: 8 }}>
+                  <pre className="staging-code-block" style={{ marginTop: 8 }}>
 {`<your-domain>  →  ${ingressInfo.external_ip}
 
-kindling production tls --context ${status?.context} \\
+kindling staging tls --context ${status?.context} \\
   --domain <your-domain> --email <you@example.com>`}
                   </pre>
                 </div>
@@ -523,7 +523,7 @@ kindling production tls --context ${status?.context} \\
           </div>
           <div className="card-body">
             <div style={{ marginBottom: 12, padding: '8px 12px', background: 'var(--bg-elevated)', borderRadius: 6, border: '1px solid var(--info-border, #4488cc44)', fontSize: 13 }}>
-              Update secrets on the running production cluster (e.g. set <code>PUBLIC_URL</code> after configuring TLS).
+              Update secrets on the running staging cluster (e.g. set <code>PUBLIC_URL</code> after configuring TLS).
               Changed secrets will be patched in-place and affected deployments will be restarted automatically.
             </div>
             {devCreds.filter(c => c.dep_type === 'secret').map(cred => (
@@ -531,7 +531,7 @@ kindling production tls --context ${status?.context} \\
                 <label className="form-label">
                   <span className="mono" style={{ fontWeight: 600 }}>{cred.env_var}</span>
                   {cred.env_var === 'PUBLIC_URL' && (
-                    <span className="tag" style={{ marginLeft: 8, fontSize: 10 }}>set your production URL</span>
+                    <span className="tag" style={{ marginLeft: 8, fontSize: 10 }}>set your staging URL</span>
                   )}
                 </label>
                 <input
@@ -567,7 +567,7 @@ kindling production tls --context ${status?.context} \\
                   if (Object.keys(creds).length === 0) return;
                   setSecretUpdateStatus('saving');
                   try {
-                    const res = await updateProdSecrets({ namespace, credentials: creds });
+                    const res = await updateStagingSecrets({ namespace, credentials: creds });
                     setSecretUpdateStatus('saved');
                     const restartedMsg = res.restarted?.length ? ` Restarted: ${res.restarted.join(', ')}` : '';
                     setSecretUpdateMsg(`Updated ${res.updated} secret(s).${restartedMsg}`);

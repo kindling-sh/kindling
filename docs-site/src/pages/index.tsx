@@ -246,9 +246,9 @@ const features: FeatureItem[] = [
   },
   {
     icon: <IconGlobe />,
-    title: "Localhost to Production",
+    title: "Localhost to Staging",
     description:
-      "Dev on localhost with instant staging. Need OAuth callbacks? kindling expose creates a public HTTPS tunnel. Ready to ship? kindling snapshot graduates to any cluster.",
+      "Dev on localhost with instant staging. Need OAuth callbacks? kindling expose creates a public HTTPS tunnel. Ready to ship? kindling snapshot graduates to any staging cluster.",
   },
   {
     icon: <IconShield />,
@@ -328,7 +328,7 @@ function HowItWorksSection() {
             <h3>Snapshot & Deploy</h3>
             <p>
               <code>kindling snapshot --deploy</code> copies images to your
-              registry, generates a Helm chart, and deploys to any production
+              registry, generates a Helm chart, and deploys to any staging
               cluster.
             </p>
           </div>

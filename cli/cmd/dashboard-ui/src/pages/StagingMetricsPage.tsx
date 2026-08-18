@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { useApi, promQuery, promQueryRange, fetchProdNodeMetrics, fetchProdPodMetrics, fetchMetricsStatus, streamMetricsInstall, uninstallMetricsStack } from '../api';
+import { useApi, promQuery, promQueryRange, fetchStagingNodeMetrics, fetchStagingPodMetrics, fetchMetricsStatus, streamMetricsInstall, uninstallMetricsStack } from '../api';
 import type { PrometheusStatus, NodeMetric, PodMetric, MetricsStackStatus } from '../types';
 
 // ── SVG Sparkline Chart ─────────────────────────────────────────
@@ -102,8 +102,8 @@ function formatValue(v: number, fmt: string): string {
   return v % 1 === 0 ? v.toFixed(0) : v.toFixed(2);
 }
 
-export function ProductionMetricsPage() {
-  const { data: promStatus } = useApi<PrometheusStatus>('/api/prod/prometheus/status', 15000);
+export function StagingMetricsPage() {
+  const { data: promStatus } = useApi<PrometheusStatus>('/api/staging/prometheus/status', 15000);
 
   const [rangeData, setRangeData] = useState<Record<string, [number, string][]>>({});
   const [instantData, setInstantData] = useState<Record<string, number>>({});
@@ -158,11 +158,11 @@ export function ProductionMetricsPage() {
 
   // Fallback: kubectl top
   useEffect(() => {
-    fetchProdNodeMetrics().then(r => setNodeMetrics(r.items || [])).catch(() => {});
-    fetchProdPodMetrics(metricNS || undefined).then(r => setPodMetrics(r.items || [])).catch(() => {});
+    fetchStagingNodeMetrics().then(r => setNodeMetrics(r.items || [])).catch(() => {});
+    fetchStagingPodMetrics(metricNS || undefined).then(r => setPodMetrics(r.items || [])).catch(() => {});
     const id = setInterval(() => {
-      fetchProdNodeMetrics().then(r => setNodeMetrics(r.items || [])).catch(() => {});
-      fetchProdPodMetrics(metricNS || undefined).then(r => setPodMetrics(r.items || [])).catch(() => {});
+      fetchStagingNodeMetrics().then(r => setNodeMetrics(r.items || [])).catch(() => {});
+      fetchStagingPodMetrics(metricNS || undefined).then(r => setPodMetrics(r.items || [])).catch(() => {});
     }, 15000);
     return () => clearInterval(id);
   }, [metricNS]);
@@ -343,14 +343,14 @@ export function ProductionMetricsPage() {
                       <td>{m.cpu_cores}</td>
                       <td>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                          <div className="prod-mini-bar"><div className="prod-mini-fill" style={{ width: m.cpu_pct, background: 'var(--accent)' }} /></div>
+                          <div className="staging-mini-bar"><div className="staging-mini-fill" style={{ width: m.cpu_pct, background: 'var(--accent)' }} /></div>
                           <span>{m.cpu_pct}</span>
                         </div>
                       </td>
                       <td>{m.mem_bytes}</td>
                       <td>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                          <div className="prod-mini-bar"><div className="prod-mini-fill" style={{ width: m.mem_pct, background: 'var(--green)' }} /></div>
+                          <div className="staging-mini-bar"><div className="staging-mini-fill" style={{ width: m.mem_pct, background: 'var(--green)' }} /></div>
                           <span>{m.mem_pct}</span>
                         </div>
                       </td>

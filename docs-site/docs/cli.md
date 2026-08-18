@@ -7,7 +7,7 @@ description: Complete reference for all kindling CLI commands. Structured for LL
 <!-- 
   LLM/Agent parsing notes:
   - Each command follows: COMMAND → SYNOPSIS → DESCRIPTION → FLAGS → EXAMPLES
-  - Commands are grouped by phase: Setup → Develop → Production → Lifecycle
+  - Commands are grouped by phase: Setup → Develop → Staging → Lifecycle
   - All flags use consistent table format: Flag | Short | Default | Description
   - Search for "kindling <command>" to jump to any command
 -->
@@ -37,8 +37,8 @@ description: Complete reference for all kindling CLI commands. Structured for LL
 | `kindling deps` | Develop | Manage shared dependency resources |
 | `kindling status` | Develop | Cluster + environment status |
 | `kindling logs` | Develop | Tail controller logs |
-| `kindling snapshot` | Production | Export Helm/Kustomize + deploy |
-| `kindling production tls` | Production | Configure TLS with cert-manager |
+| `kindling snapshot` | Staging | Export Helm/Kustomize + deploy |
+| `kindling staging tls` | Staging | Configure TLS with cert-manager |
 | `kindling reset` | Lifecycle | Remove runner pool, keep cluster |
 | `kindling destroy` | Lifecycle | Delete cluster and all resources |
 | `kindling version` | — | Print CLI version |
@@ -136,7 +136,7 @@ kindling runners --ci-provider gitlab -u myuser -r mygroup/myproject -t glpat_xx
 
 **Synopsis:** `kindling explain [topic]`
 
-Prints short, current guidance on kindling concepts and workflows (e.g. debugging/hot-reload, dependency auto-injection, Kaniko build constraints, secrets flow, production graduation) — pulled on demand instead of injected into every coding-agent session. Run with no arguments to list topics.
+Prints short, current guidance on kindling concepts and workflows (e.g. debugging/hot-reload, dependency auto-injection, Kaniko build constraints, secrets flow, staging graduation) — pulled on demand instead of injected into every coding-agent session. Run with no arguments to list topics.
 
 ```bash
 kindling explain
@@ -343,7 +343,7 @@ Launch the kindling web dashboard. Provides visual management for environments, 
 |---|---|
 | Setup | App Designer, Analyze & Generate, Runners |
 | Develop | Environments, API Explorer, Cluster Resources |
-| Production | Overview, Deploy, Workloads, Network, TLS, Metrics |
+| Staging | Overview, Deploy, Workloads, Network, TLS, Metrics |
 
 ---
 
@@ -472,15 +472,15 @@ Tail the kindling controller logs.
 
 ---
 
-## Production
+## Staging
 
 ### `kindling snapshot`
 
 **Synopsis:** `kindling snapshot [flags]`
 
-Export a Helm chart or Kustomize overlay from the current cluster state, optionally push images to a container registry, and deploy to a production cluster.
+Export a Helm chart or Kustomize overlay from the current cluster state, optionally push images to a container registry, and deploy to a staging cluster.
 
-**Steps:** read all DSEs → strip actor prefix from names → generate chart with `values.yaml` (clean defaults) + `values-live.yaml` (dev values) → optionally push images via `crane copy` → optionally `helm install` on production cluster.
+**Steps:** read all DSEs → strip actor prefix from names → generate chart with `values.yaml` (clean defaults) + `values-live.yaml` (dev values) → optionally push images via `crane copy` → optionally `helm install` on staging cluster.
 
 **Flags:**
 
@@ -492,7 +492,7 @@ Export a Helm chart or Kustomize overlay from the current cluster state, optiona
 | `--registry` | `-r` | — | Container registry (e.g. `ghcr.io/myorg`) |
 | `--tag` | `-t` | git SHA | Image tag |
 | `--deploy` | | `false` | Deploy after generating chart |
-| `--context` | | — | Kubeconfig context for production cluster |
+| `--context` | | — | Kubeconfig context for staging cluster |
 | `--namespace` | | `default` | Namespace to deploy into |
 
 **Examples:**
@@ -503,9 +503,9 @@ kindling snapshot                          # Helm chart in ./kindling-snapshot/
 kindling snapshot --format kustomize       # Kustomize overlay
 kindling snapshot -o ./my-chart            # custom output directory
 
-# Push images + deploy to production
-kindling snapshot -r ghcr.io/myorg --deploy --context do-prod
-kindling snapshot -r ghcr.io/myorg -t v1.2.0 --deploy --context do-prod --namespace staging
+# Push images + deploy to staging
+kindling snapshot -r ghcr.io/myorg --deploy --context do-staging
+kindling snapshot -r ghcr.io/myorg -t v1.2.0 --deploy --context do-staging --namespace staging
 ```
 
 **Manual usage:**
@@ -513,22 +513,22 @@ kindling snapshot -r ghcr.io/myorg -t v1.2.0 --deploy --context do-prod --namesp
 ```bash
 helm template my-app ./kindling-snapshot -f values-live.yaml
 helm install my-app ./kindling-snapshot \
-  --set gateway.env.DATABASE_URL=postgres://prod-host:5432/mydb
+  --set gateway.env.DATABASE_URL=postgres://staging-host:5432/mydb
 ```
 
 ---
 
-### `kindling production tls`
+### `kindling staging tls`
 
-**Synopsis:** `kindling production tls [flags]`
+**Synopsis:** `kindling staging tls [flags]`
 
-Configure TLS with cert-manager for production Ingress resources. Installs cert-manager, creates a Let's Encrypt ClusterIssuer, and optionally patches a DSE YAML to enable TLS.
+Configure TLS with cert-manager for staging Ingress resources. Installs cert-manager, creates a Let's Encrypt ClusterIssuer, and optionally patches a DSE YAML to enable TLS.
 
 **Flags:**
 
 | Flag | Short | Default | Description |
 |---|---|---|---|
-| `--context` | | — (required) | Kubeconfig context for production cluster |
+| `--context` | | — (required) | Kubeconfig context for staging cluster |
 | `--domain` | | — (required) | Domain for TLS certificate |
 | `--email` | | — (required) | Email for Let's Encrypt registration |
 | `--issuer` | | `letsencrypt-prod` | ClusterIssuer name |
@@ -539,9 +539,9 @@ Configure TLS with cert-manager for production Ingress resources. Installs cert-
 **Examples:**
 
 ```bash
-kindling production tls --context my-prod --domain app.example.com --email admin@example.com
-kindling production tls --context my-prod --domain app.example.com --staging
-kindling production tls --context my-prod --domain app.example.com -f dev-environment.yaml
+kindling staging tls --context my-staging --domain app.example.com --email admin@example.com
+kindling staging tls --context my-staging --domain app.example.com --staging
+kindling staging tls --context my-staging --domain app.example.com -f dev-environment.yaml
 ```
 
 ---
@@ -620,8 +620,8 @@ kindling push -s alice-myapp            # rebuild one service
 kindling expose                         # public URL for OAuth
 
 # ── PRODUCTION ───────────────────────────────────
-kindling snapshot -r ghcr.io/myorg --deploy --context my-prod
-kindling production tls --context my-prod --domain app.example.com --email admin@example.com
+kindling snapshot -r ghcr.io/myorg --deploy --context my-staging
+kindling staging tls --context my-staging --domain app.example.com --email admin@example.com
 
 # ── LIFECYCLE ────────────────────────────────────
 kindling reset                          # switch repos

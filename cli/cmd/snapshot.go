@@ -21,12 +21,12 @@ var snapshotCmd = &cobra.Command{
 	Use:   "snapshot",
 	Short: "Export a Helm chart or Kustomize overlay from the current cluster state",
 	Long: `Reads all DevStagingEnvironments in the cluster and generates
-production-ready Kubernetes manifests as a Helm chart or Kustomize overlay.
+staging-ready Kubernetes manifests as a Helm chart or Kustomize overlay.
 
 With --registry, images are copied from the Kind cluster's in-cluster
 registry to your container registry via crane (no Docker daemon needed).
 
-With --deploy, the generated chart is deployed to a production cluster
+With --deploy, the generated chart is deployed to a staging cluster
 in one step. The --context flag is required to specify the target cluster
 and --registry is required to make images accessible outside Kind.
 
@@ -38,10 +38,10 @@ Examples:
   kindling snapshot -r ghcr.io/myorg         # push images + ready-to-run chart
   kindling snapshot -r ghcr.io/myorg -t v1.0 # push with specific tag
 
-  # Full graduation: snapshot + push images + deploy to production
-  kindling snapshot -r ghcr.io/myorg --deploy --context my-prod-cluster
-  kindling snapshot -r ghcr.io/myorg --deploy --context prod --namespace staging
-  kindling snapshot -f kustomize -r ghcr.io/myorg --deploy --context prod`,
+  # Full graduation: snapshot + push images + deploy to staging
+  kindling snapshot -r ghcr.io/myorg --deploy --context my-staging-cluster
+  kindling snapshot -r ghcr.io/myorg --deploy --context staging --namespace staging
+  kindling snapshot -f kustomize -r ghcr.io/myorg --deploy --context staging`,
 	RunE: runSnapshot,
 }
 
@@ -62,8 +62,8 @@ func init() {
 	snapshotCmd.Flags().StringVarP(&snapshotName, "name", "n", "", "Chart/project name (default: derived from cluster)")
 	snapshotCmd.Flags().StringVarP(&snapshotRegistry, "registry", "r", "", "Container registry (e.g. ghcr.io/myorg, 123456.dkr.ecr.us-east-1.amazonaws.com/myapp)")
 	snapshotCmd.Flags().StringVarP(&snapshotTag, "tag", "t", "", "Image tag (default: git SHA or 'latest')")
-	snapshotCmd.Flags().BoolVar(&snapshotDeploy, "deploy", false, "Deploy to a production cluster after generating the chart")
-	snapshotCmd.Flags().StringVar(&snapshotContext, "context", "", "Kubeconfig context for the production cluster (required with --deploy)")
+	snapshotCmd.Flags().BoolVar(&snapshotDeploy, "deploy", false, "Deploy to a staging cluster after generating the chart")
+	snapshotCmd.Flags().StringVar(&snapshotContext, "context", "", "Kubeconfig context for the staging cluster (required with --deploy)")
 	snapshotCmd.Flags().StringVar(&snapshotNamespace, "namespace", "default", "Kubernetes namespace to deploy into (used with --deploy)")
 	rootCmd.AddCommand(snapshotCmd)
 }
@@ -255,7 +255,7 @@ func readClusterDSEs() ([]snapshotDSE, error) {
 
 // resolveSecretValue reads a K8s secret value from the cluster.
 // Falls back to empty string on error (the user will supply the
-// production value via the credential prompt).
+// staging value via the credential prompt).
 func resolveSecretValue(secretName, key, namespace string) string {
 	ns := namespace
 	if ns == "" {
@@ -279,7 +279,7 @@ func resolveSecretValue(secretName, key, namespace string) string {
 	return ""
 }
 
-// promptSnapshotSecrets prompts the user for production values for all
+// promptSnapshotSecrets prompts the user for staging values for all
 // secret-backed env vars. The dev cluster values are shown as defaults.
 // The user can press Enter to accept the default or type a new value.
 // Updated values are written back into the DSE structs so they appear
@@ -312,7 +312,7 @@ func promptSnapshotSecrets(dses []snapshotDSE) error {
 	fmt.Fprintln(os.Stderr)
 	step("🔑", fmt.Sprintf("Found %d %s from K8s secrets",
 		len(fields), pluralize(len(fields), "env var", "env vars")))
-	fmt.Fprintln(os.Stderr, "       Accept the dev defaults (press Enter) or enter production values.")
+	fmt.Fprintln(os.Stderr, "       Accept the dev defaults (press Enter) or enter staging values.")
 	fmt.Fprintln(os.Stderr)
 
 	// Build form fields — one input per secret
@@ -357,7 +357,7 @@ func promptSnapshotSecrets(dses []snapshotDSE) error {
 	}
 
 	if changed > 0 {
-		step("✓", fmt.Sprintf("Updated %d %s with production values",
+		step("✓", fmt.Sprintf("Updated %d %s with staging values",
 			changed, pluralize(changed, "secret", "secrets")))
 	} else {
 		step("✓", "Using dev values for all secrets")
@@ -441,7 +441,7 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("context %q looks like a Kind cluster — use 'kindling deploy' for local dev", snapshotContext)
 		}
 		if snapshotRegistry == "" {
-			return fmt.Errorf("--registry is required when using --deploy (images must be accessible from the production cluster)")
+			return fmt.Errorf("--registry is required when using --deploy (images must be accessible from the staging cluster)")
 		}
 	}
 
@@ -516,7 +516,7 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 
 	// ── Prompt for secret values ────────────────────────────────
 	// If any services have secretKeyRef env vars, prompt the user to
-	// accept the dev defaults or enter production-specific values.
+	// accept the dev defaults or enter staging-specific values.
 	if err := promptSnapshotSecrets(dses); err != nil {
 		return err
 	}
@@ -525,12 +525,12 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// ── Deploy to production cluster ───────────────────────────
+	// ── Deploy to staging cluster ───────────────────────────
 	if !snapshotDeploy {
 		return nil
 	}
 
-	header("Deploying to production")
+	header("Deploying to staging")
 	step("🔗", fmt.Sprintf("Target context: %s%s%s", colorBold, snapshotContext, colorReset))
 
 	// Verify cluster connectivity
@@ -595,9 +595,9 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 		step("🌐", fmt.Sprintf("Using IngressClass: %s", ingClass))
 	}
 
-	// ── Production credentials ──────────────────────────────────
-	// Detect dev-default connection strings and prompt for production values.
-	credOverrides, err := resolveProductionCredentials(chartName, snapshotContext, dses)
+	// ── Staging credentials ──────────────────────────────────
+	// Detect dev-default connection strings and prompt for staging values.
+	credOverrides, err := resolveStagingCredentials(chartName, snapshotContext, dses)
 	if err != nil {
 		return fmt.Errorf("credential configuration failed: %w", err)
 	}
@@ -625,7 +625,7 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 			"-f", filepath.Join(outDir, "values-live.yaml"),
 			"--timeout", "10m",
 		}
-		// Apply production credential overrides (takes precedence over values-live.yaml)
+		// Apply staging credential overrides (takes precedence over values-live.yaml)
 		if credsFile != "" {
 			helmArgs = append(helmArgs, "-f", credsFile)
 		}
@@ -654,7 +654,7 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	success("Deployed to production")
+	success("Deployed to staging")
 	fmt.Println()
 	fmt.Printf("  Check pods:     %skubectl --context %s -n %s get pods%s\n", colorCyan, snapshotContext, snapshotNamespace, colorReset)
 	fmt.Printf("  Check services: %skubectl --context %s -n %s get svc%s\n", colorCyan, snapshotContext, snapshotNamespace, colorReset)
@@ -785,13 +785,13 @@ func buildValuesYAML(chartName string, dses []snapshotDSE, depsSeen map[string]b
 		buf.WriteString("#\n")
 		buf.WriteString("# Lines marked with ← are the values currently running in your\n")
 		buf.WriteString("# kindling dev cluster. Replace the defaults below with your\n")
-		buf.WriteString("# production values, or use values-live.yaml as a starting point.\n\n")
+		buf.WriteString("# staging values, or use values-live.yaml as a starting point.\n\n")
 	}
 
 	// ── Service values ──────────────────────────────────────────
 	for _, dse := range dses {
 		vk := helmValuesKey(dse.Name)
-		prodImage := productionImageClean(dse.Image, dse.Name)
+		stagingImg := stagingImageClean(dse.Image, dse.Name)
 		liveImage := dse.Image
 
 		buf.WriteString(fmt.Sprintf("%s:\n", vk))
@@ -799,8 +799,8 @@ func buildValuesYAML(chartName string, dses []snapshotDSE, depsSeen map[string]b
 		if live {
 			buf.WriteString(fmt.Sprintf("  image: \"%s\"\n", liveImage))
 		} else {
-			buf.WriteString(fmt.Sprintf("  image: \"%s\"", prodImage))
-			if liveImage != prodImage {
+			buf.WriteString(fmt.Sprintf("  image: \"%s\"", stagingImg))
+			if liveImage != stagingImg {
 				buf.WriteString(fmt.Sprintf("  # ← currently: %s", liveImage))
 			}
 			buf.WriteString("\n")
@@ -844,7 +844,7 @@ func buildValuesYAML(chartName string, dses []snapshotDSE, depsSeen map[string]b
 						buf.WriteString(fmt.Sprintf("    %s: \"%s\"\n", def.EnvVarName,
 							buildConnectionURL(chartName, dep.Type, helmSafe(dep.Type), def)))
 					} else {
-						buf.WriteString(fmt.Sprintf("    %s: \"\"  # TODO: set your production %s connection string\n",
+						buf.WriteString(fmt.Sprintf("    %s: \"\"  # TODO: set your staging %s connection string\n",
 							def.EnvVarName, dep.Type))
 					}
 				}
@@ -868,7 +868,7 @@ func buildValuesYAML(chartName string, dses []snapshotDSE, depsSeen map[string]b
 				if live {
 					buf.WriteString(fmt.Sprintf("    %s: \"%s\"\n", e.Name, yamlEscape(e.Value)))
 				} else {
-					buf.WriteString(fmt.Sprintf("    %s: \"\"  # TODO: set production value\n", e.Name))
+					buf.WriteString(fmt.Sprintf("    %s: \"\"  # TODO: set staging value\n", e.Name))
 				}
 			}
 		}
@@ -880,7 +880,7 @@ func buildValuesYAML(chartName string, dses []snapshotDSE, depsSeen map[string]b
 			if live {
 				buf.WriteString(fmt.Sprintf("    host: \"%s\"\n", dse.Ingress.Host))
 			} else {
-				buf.WriteString(fmt.Sprintf("    host: \"\"  # TODO: set your production hostname (dev: %s)\n", dse.Ingress.Host))
+				buf.WriteString(fmt.Sprintf("    host: \"\"  # TODO: set your staging hostname (dev: %s)\n", dse.Ingress.Host))
 			}
 			path := dse.Ingress.Path
 			pathType := dse.Ingress.PathType
@@ -1052,8 +1052,8 @@ func buildConnectionURL(releasePrefix, depType, safe string, def depDefaults) st
 	}
 }
 
-// productionImageClean is like productionImage but without the trailing comment.
-func productionImageClean(image, name string) string {
+// stagingImageClean is like stagingImage but without the trailing comment.
+func stagingImageClean(image, name string) string {
 	if strings.HasPrefix(image, "localhost:5001/") {
 		return name + ":latest"
 	}
@@ -1076,7 +1076,7 @@ func helmDeploymentTemplate(dse snapshotDSE, chartName string, allDSEs []snapsho
 	// Build env block — connection strings from deps + user env
 	var envLines strings.Builder
 	// Dep connection strings — now sourced from values.yaml so users can
-	// set their production URLs without editing templates.
+	// set their staging URLs without editing templates.
 	for _, dep := range dse.Deps {
 		if def, ok := depRegistry[dep.Type]; ok {
 			envLines.WriteString(fmt.Sprintf(`        {{- if .Values.%s.env.%s }}
@@ -1429,7 +1429,7 @@ func kustomizeDeployment(dse snapshotDSE) string {
 	// Dependency connection strings
 	for _, dep := range dse.Deps {
 		if def, ok := depRegistry[dep.Type]; ok {
-			envLines.WriteString(fmt.Sprintf("        - name: %s\n          value: \"\"  # TODO: set your production %s connection string\n",
+			envLines.WriteString(fmt.Sprintf("        - name: %s\n          value: \"\"  # TODO: set your staging %s connection string\n",
 				def.EnvVarName, dep.Type))
 		}
 	}
@@ -1465,7 +1465,7 @@ spec:
         ports:
         - containerPort: %d
 %s`, dse.Name, dse.Replicas, dse.Name, dse.Name, dse.Name,
-		productionImage(dse.Image, dse.Name), dse.Port, envSection)
+		stagingImage(dse.Image, dse.Name), dse.Port, envSection)
 }
 
 func kustomizeService(dse snapshotDSE) string {
@@ -1502,7 +1502,7 @@ func kustomizeIngress(dse snapshotDSE) string {
 
 	host := ing.Host
 	if host == "" {
-		host = dse.Name + ".example.com  # TODO: set your production hostname"
+		host = dse.Name + ".example.com  # TODO: set your staging hostname"
 	}
 
 	var extraPaths strings.Builder
@@ -1619,15 +1619,15 @@ func helmValuesKey(name string) string {
 	return s
 }
 
-// productionImage converts local registry images to placeholder production images.
+// stagingImage converts local registry images to placeholder staging images.
 // e.g. "localhost:5001/my-svc:123" → "my-svc:latest" (user replaces with their registry)
-func productionImage(image, name string) string {
+func stagingImage(image, name string) string {
 	if strings.HasPrefix(image, "localhost:5001/") {
-		return name + ":latest  # TODO: replace with your production registry"
+		return name + ":latest  # TODO: replace with your staging registry"
 	}
 	// If it's a kind-loaded tag like "my-svc:1234567", normalize
 	if !strings.Contains(image, "/") && !strings.Contains(image, ":latest") {
-		return name + ":latest  # TODO: replace with your production registry"
+		return name + ":latest  # TODO: replace with your staging registry"
 	}
 	return image
 }
@@ -1942,7 +1942,7 @@ func craneCopyImages(dses []snapshotDSE, registry, tag, userPrefix, regUser, reg
 			warn(fmt.Sprintf("Could not push %s — not in registry or Docker daemon", dses[i].Name))
 			failed = append(failed, dses[i].Name)
 			// Do NOT rewrite the image ref on failure — leaving it pointed
-			// at the production destination tag would make the deploy
+			// at the staging destination tag would make the deploy
 			// silently reuse whatever image already happens to exist there
 			// (stale or wrong-arch), instead of surfacing the failure.
 			continue

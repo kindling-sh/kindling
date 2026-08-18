@@ -1,24 +1,39 @@
 ---
 sidebar_position: 7
-title: Graduating to Production
-description: Take your dev environment to a real Kubernetes cluster with TLS, image push, and Helm deploy.
+title: Graduating to a Staging Cluster
+description: Take your dev environment to a persistent staging Kubernetes cluster with TLS, image push, and Helm deploy.
 ---
 
-# Graduating to Production
+# Graduating to a Staging Cluster
 
 Once your app runs reliably in the local Kind cluster, you can **graduate**
-it to any Kubernetes cluster — DigitalOcean, AWS EKS, GKE, bare-metal, or
-anything with a kubeconfig context.
+it to a persistent staging Kubernetes cluster — any cluster with a
+kubeconfig context. This is the bridge from the disposable local Kind loop
+to a shared, longer-lived environment; it is **not** a path to production.
+Kindling never holds a production credential, never calls a production
+cluster's API server, and never deploys to production on your behalf —
+that handoff happens through a GitOps controller at the git boundary (see
+the project's staging/production redesign notes for the full model).
 
 kindling's graduation flow uses two commands:
 
 | Command | Purpose |
 |---|---|
 | `kindling snapshot --deploy` | Generate a Helm chart, push images, and deploy |
-| `kindling production tls` | Set up TLS with cert-manager and Let's Encrypt |
+| `kindling staging tls` | Set up TLS with cert-manager and Let's Encrypt |
 
 :::tip Dashboard
-You can also manage graduation from the dashboard: **Production → Overview** and **Production → Deploy**. See [Dashboard](dashboard.md) for details.
+You can also manage graduation from the dashboard: **Staging → Overview** and **Staging → Deploy**. See [Dashboard](dashboard.md) for details.
+:::
+
+:::caution Dependencies are not persistent
+Dependencies provisioned by `kindling snapshot --deploy` (Postgres, Redis,
+Mongo, etc.) are the same convenience, non-persistent Deployments used in
+local dev — they run without durable storage and are not backed up. They're
+fine for a staging cluster used to validate behavior before a real release,
+but never point a staging deployment's dependencies at data you can't
+afford to lose, and never treat this flow as a substitute for your
+organization's actual production data infrastructure.
 :::
 
 ---
@@ -28,7 +43,7 @@ You can also manage graduation from the dashboard: **Production → Overview** a
 Before graduating, make sure you have:
 
 1. **A running Kind cluster** with your app deployed and healthy (`kindling status`)
-2. **A production Kubernetes cluster** with a kubeconfig context configured (`kubectl config get-contexts`)
+2. **A staging Kubernetes cluster** with a kubeconfig context configured (`kubectl config get-contexts`)
 3. **A container registry** you can push to (GHCR, ECR, Docker Hub, etc.)
 4. **Registry authentication** (`docker login`, `aws ecr get-login-password`, etc.)
 5. **Helm v3** installed (`brew install helm`)
@@ -39,15 +54,15 @@ Before graduating, make sure you have:
 ## Step 1: Snapshot and deploy
 
 The `kindling snapshot` command reads all DevStagingEnvironments from your
-local Kind cluster and generates a production-ready Helm chart. With
-`--deploy`, it also pushes images and installs the chart on your production
+local Kind cluster and generates a staging-ready Helm chart. With
+`--deploy`, it also pushes images and installs the chart on your staging
 cluster in one step.
 
 ```bash
 kindling snapshot \
   --registry ghcr.io/myorg \
   --deploy \
-  --context my-prod-cluster
+  --context my-staging-cluster
 ```
 
 ### What happens
@@ -56,19 +71,19 @@ kindling snapshot \
 2. **Strips dev prefixes** — `jeff-vincent-gateway` becomes `gateway`
 3. **Generates Helm chart** — templates, values.yaml, values-live.yaml
 4. **Pushes images** — copies each image from `localhost:5001` to your registry using `crane copy`
-5. **Installs chart** — runs `helm upgrade --install` on the production cluster
+5. **Installs chart** — runs `helm upgrade --install` on the staging cluster
 
 ### Common flags
 
 ```bash
 # Custom image tag (default: git SHA)
-kindling snapshot -r ghcr.io/myorg -t v1.2.0 --deploy --context my-prod
+kindling snapshot -r ghcr.io/myorg -t v1.2.0 --deploy --context my-staging
 
 # Deploy into a specific namespace
-kindling snapshot -r ghcr.io/myorg --deploy --context my-prod --namespace staging
+kindling snapshot -r ghcr.io/myorg --deploy --context my-staging --namespace staging
 
 # Custom chart name and output directory
-kindling snapshot -r ghcr.io/myorg -n my-platform -o ./charts/prod --deploy --context my-prod
+kindling snapshot -r ghcr.io/myorg -n my-platform -o ./charts/staging --deploy --context my-staging
 ```
 
 ### Generate without deploying
@@ -84,20 +99,20 @@ tagged for your registry. Deploy it yourself with:
 
 ```bash
 helm install my-app ./kindling-snapshot \
-  --kube-context my-prod \
-  --set gateway.env.DATABASE_URL=postgres://prod-host:5432/mydb
+  --kube-context my-staging \
+  --set gateway.env.DATABASE_URL=postgres://staging-host:5432/mydb
 ```
 
 ---
 
 ## Step 2: Configure TLS
 
-Once your app is deployed to production, set up automatic TLS certificates
+Once your app is deployed to staging, set up automatic TLS certificates
 with Let's Encrypt:
 
 ```bash
-kindling production tls \
-  --context my-prod-cluster \
+kindling staging tls \
+  --context my-staging-cluster \
   --domain app.example.com \
   --email admin@example.com
 ```
@@ -114,8 +129,8 @@ If you pass `--file`, the command patches your DSE YAML with the correct
 ingress annotations and TLS block:
 
 ```bash
-kindling production tls \
-  --context my-prod \
+kindling staging tls \
+  --context my-staging \
   --domain app.example.com \
   --email admin@example.com \
   -f .kindling/dev-environment.yaml
@@ -136,14 +151,16 @@ ingress:
       - app.example.com
 ```
 
-### Testing with staging certificates
+### Testing with staging ACME certificates
 
-Use `--staging` to get test certificates from Let's Encrypt's staging server
-(no rate limits, but browsers will show a warning):
+Use `--staging` to get test certificates from Let's Encrypt's own staging
+server (no rate limits, but browsers will show a warning) — this is
+separate from, and can be combined with, deploying to your kindling
+staging cluster:
 
 ```bash
-kindling production tls \
-  --context my-prod \
+kindling staging tls \
+  --context my-staging \
   --domain app.example.com \
   --email admin@example.com \
   --staging
@@ -158,7 +175,7 @@ load balancer:
 
 ```bash
 # Get the external IP of your Traefik load balancer
-kubectl get svc -n traefik --context my-prod
+kubectl get svc -n traefik --context my-staging
 
 # Create a DNS A record:
 #   app.example.com → <EXTERNAL-IP>
@@ -171,30 +188,30 @@ propagates and the HTTP-01 challenge succeeds.
 
 ## Complete example
 
-Here's the full flow from a working dev environment to production:
+Here's the full flow from a working dev environment to a staging cluster:
 
 ```bash
-# ── Verify dev is healthy ─────────────────────────────────
+# ── Verify dev is healthy ─────────────────────
 kindling status
 
-# ── Authenticate to your registry ─────────────────────────
+# ── Authenticate to your registry ───────────────────
 echo $GHCR_TOKEN | docker login ghcr.io -u myuser --password-stdin
 
-# ── Graduate to production ────────────────────────────────
+# ── Graduate to staging ────────────────────────
 kindling snapshot \
   -r ghcr.io/myorg \
   --deploy \
-  --context do-prod-cluster
+  --context do-staging-cluster
 
-# ── Configure TLS ────────────────────────────────────────
-kindling production tls \
-  --context do-prod-cluster \
+# ── Configure TLS ─────────────────────
+kindling staging tls \
+  --context do-staging-cluster \
   --domain api.myapp.com \
   --email team@myapp.com
 
-# ── Verify ────────────────────────────────────────────────
-kubectl get pods --context do-prod-cluster
-kubectl get ingress --context do-prod-cluster
+# ── Verify ──────────────────────────
+kubectl get pods --context do-staging-cluster
+kubectl get ingress --context do-staging-cluster
 curl https://api.myapp.com/health
 ```
 

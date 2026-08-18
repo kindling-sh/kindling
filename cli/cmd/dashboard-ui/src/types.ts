@@ -508,9 +508,9 @@ export interface TopologyLogs {
   pods: string[];
 }
 
-// ── Production Cluster ──────────────────────────────────────────
+// ── Staging Cluster ──────────────────────────────────────────────
 
-export interface ProdClusterInfo {
+export interface StagingClusterInfo {
   context: string;
   connected: boolean;
   provider: string;
