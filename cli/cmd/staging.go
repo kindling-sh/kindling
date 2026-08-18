@@ -31,13 +31,13 @@ func init() {
 // ── staging tls ──────────────────────────────────────────────
 
 var (
-	stagingTLSDomain       string
-	stagingTLSContext      string
-	stagingTLSEmail        string
-	stagingTLSIssuer       string
-	stagingTLSUseACMEStaging      bool
-	stagingTLSDSEFile      string
-	stagingTLSIngressClass string
+	stagingTLSDomain         string
+	stagingTLSContext        string
+	stagingTLSEmail          string
+	stagingTLSIssuer         string
+	stagingTLSUseACMEStaging bool
+	stagingTLSDSEFile        string
+	stagingTLSIngressClass   string
 )
 
 var stagingTLSCmd = &cobra.Command{
