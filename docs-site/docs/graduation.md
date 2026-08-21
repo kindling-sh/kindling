@@ -69,9 +69,10 @@ kindling snapshot \
 
 1. **Reads cluster state** — discovers all DSEs, services, dependencies
 2. **Strips dev prefixes** — `jeff-vincent-gateway` becomes `gateway`
-3. **Generates Helm chart** — templates, values.yaml, values-live.yaml
-4. **Pushes images** — copies each image from `localhost:5001` to your registry using `crane copy`
-5. **Installs chart** — runs `helm upgrade --install` on the staging cluster
+3. **Derives a name/namespace from the current git branch** (unless `--name`/`--namespace` are set explicitly) — so concurrent branches never collide on the same shared staging cluster
+4. **Generates Helm chart** — templates, values.yaml, values-live.yaml
+5. **Pushes images** — copies each image from `localhost:5001` to your registry using `crane copy`
+6. **Installs chart** — runs `helm upgrade --install` on the staging cluster
 
 ### Common flags
 
@@ -84,6 +85,12 @@ kindling snapshot -r ghcr.io/myorg --deploy --context my-staging --namespace sta
 
 # Custom chart name and output directory
 kindling snapshot -r ghcr.io/myorg -n my-platform -o ./charts/staging --deploy --context my-staging
+
+# Multiple PR branches on the same shared cluster, no collisions —
+# each gets its own name/namespace derived from the branch (no --name/--namespace needed)
+kindling snapshot -r ghcr.io/myorg --deploy --context my-staging
+# ...or override which branch to derive from explicitly
+kindling snapshot -r ghcr.io/myorg --deploy --context my-staging --branch feature/checkout-retry
 ```
 
 ### Generate without deploying

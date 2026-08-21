@@ -482,18 +482,21 @@ Export a Helm chart or Kustomize overlay from the current cluster state, optiona
 
 **Steps:** read all DSEs → strip actor prefix from names → generate chart with `values.yaml` (clean defaults) + `values-live.yaml` (dev values) → optionally push images via `crane copy` → optionally `helm install` on staging cluster.
 
+With `--deploy`, unless `--name`/`--namespace` are set explicitly, both are derived from the current git branch (or `--branch`) via a stable slug — so concurrent branches deployed to the same shared staging cluster (e.g. multiple open PRs) never collide.
+
 **Flags:**
 
 | Flag | Short | Default | Description |
 |---|---|---|---|
 | `--format` | `-f` | `helm` | `helm` or `kustomize` |
 | `--output` | `-o` | `./kindling-snapshot` | Output directory |
-| `--name` | `-n` | `kindling-snapshot` | Chart/project name |
+| `--name` | `-n` | `kindling-snapshot` (or branch slug with `--deploy`) | Chart/project name |
 | `--registry` | `-r` | — | Container registry (e.g. `ghcr.io/myorg`) |
 | `--tag` | `-t` | git SHA | Image tag |
 | `--deploy` | | `false` | Deploy after generating chart |
 | `--context` | | — | Kubeconfig context for staging cluster |
-| `--namespace` | | `default` | Namespace to deploy into |
+| `--namespace` | | `default` (or branch slug with `--deploy`) | Namespace to deploy into |
+| `--branch` | | current git branch | Git branch to derive the staging name/namespace from (used with `--deploy`) |
 
 **Examples:**
 
@@ -506,6 +509,10 @@ kindling snapshot -o ./my-chart            # custom output directory
 # Push images + deploy to staging
 kindling snapshot -r ghcr.io/myorg --deploy --context do-staging
 kindling snapshot -r ghcr.io/myorg -t v1.2.0 --deploy --context do-staging --namespace staging
+
+# PR branch → its own name/namespace-scoped staging environment
+# (feature/checkout-retry -> name/namespace "feature-checkout-retry")
+kindling snapshot -r ghcr.io/myorg --deploy --context do-staging
 ```
 
 **Manual usage:**

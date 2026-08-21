@@ -6,6 +6,75 @@ import (
 )
 
 // ────────────────────────────────────────────────────────────────────────────
+// slugifyBranch
+// ────────────────────────────────────────────────────────────────────────────
+
+func TestSlugifyBranch(t *testing.T) {
+	tests := []struct {
+		name   string
+		branch string
+		want   string
+	}{
+		{"simple slash-separated", "feature/add-checkout-retry", "feature-add-checkout-retry"},
+		{"mixed case and symbols", "Fix/Bug#142", "fix-bug-142"},
+		{"dots collapse to hyphen", "renovate/go.mod-updates", "renovate-go-mod-updates"},
+		{"all symbols falls back", "------", "branch"},
+		{"main is not special-cased", "main", "main"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := slugifyBranch(tt.branch); got != tt.want {
+				t.Errorf("slugifyBranch(%q) = %q, want %q", tt.branch, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSlugifyBranch_TruncatesLongNames(t *testing.T) {
+	branch := "a-branch-name-that-is-extremely-long-and-exceeds-the-limit"
+	got := slugifyBranch(branch)
+	if len(got) > 40 {
+		t.Errorf("slugifyBranch(%q) = %q (len %d), want len <= 40", branch, got, len(got))
+	}
+	if strings.HasSuffix(got, "-") {
+		t.Errorf("slugifyBranch(%q) = %q, should not end in a trailing hyphen after truncation", branch, got)
+	}
+	if got != branch[:40] {
+		t.Errorf("slugifyBranch(%q) = %q, want the first 40 chars %q (no symbols land on the cut boundary in this case)", branch, got, branch[:40])
+	}
+}
+
+func TestSlugifyBranch_Deterministic(t *testing.T) {
+	branch := "feature/add-checkout-retry"
+	first := slugifyBranch(branch)
+	for i := 0; i < 5; i++ {
+		if got := slugifyBranch(branch); got != first {
+			t.Errorf("slugifyBranch(%q) is not deterministic: got %q, first call was %q", branch, got, first)
+		}
+	}
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// currentBranch
+// ────────────────────────────────────────────────────────────────────────────
+
+func TestCurrentBranch(t *testing.T) {
+	// Smoke test: this package's own checkout is a git repo, so
+	// currentBranch() should resolve to something non-empty and
+	// slugify-able without error.
+	branch, err := currentBranch()
+	if err != nil {
+		t.Fatalf("currentBranch() error: %v", err)
+	}
+	if branch == "" {
+		t.Error("currentBranch() returned an empty string")
+	}
+	if slug := slugifyBranch(branch); slug == "" {
+		t.Errorf("slugifyBranch(currentBranch()=%q) returned an empty string", branch)
+	}
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // detectUserPrefix
 // ────────────────────────────────────────────────────────────────────────────
 

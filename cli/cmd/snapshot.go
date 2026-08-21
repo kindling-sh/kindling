@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -28,7 +29,10 @@ registry to your container registry via crane (no Docker daemon needed).
 
 With --deploy, the generated chart is deployed to a staging cluster
 in one step. The --context flag is required to specify the target cluster
-and --registry is required to make images accessible outside Kind.
+and --registry is required to make images accessible outside Kind. Unless
+--name/--namespace are set explicitly, --deploy derives both from the
+current git branch (or --branch), so concurrent branches deployed to the
+same shared staging cluster never collide.
 
 Examples:
   kindling snapshot                          # Helm chart in ./kindling-snapshot/
@@ -41,7 +45,10 @@ Examples:
   # Full graduation: snapshot + push images + deploy to staging
   kindling snapshot -r ghcr.io/myorg --deploy --context my-staging-cluster
   kindling snapshot -r ghcr.io/myorg --deploy --context staging --namespace staging
-  kindling snapshot -f kustomize -r ghcr.io/myorg --deploy --context staging`,
+  kindling snapshot -f kustomize -r ghcr.io/myorg --deploy --context staging
+
+  # PR branch → its own name-scoped staging environment, no collisions
+  kindling snapshot -r ghcr.io/myorg --deploy --context staging`,
 	RunE: runSnapshot,
 }
 
@@ -54,6 +61,7 @@ var (
 	snapshotDeploy    bool
 	snapshotContext   string
 	snapshotNamespace string
+	snapshotBranch    string
 )
 
 func init() {
@@ -65,7 +73,46 @@ func init() {
 	snapshotCmd.Flags().BoolVar(&snapshotDeploy, "deploy", false, "Deploy to a staging cluster after generating the chart")
 	snapshotCmd.Flags().StringVar(&snapshotContext, "context", "", "Kubeconfig context for the staging cluster (required with --deploy)")
 	snapshotCmd.Flags().StringVar(&snapshotNamespace, "namespace", "default", "Kubernetes namespace to deploy into (used with --deploy)")
+	snapshotCmd.Flags().StringVar(&snapshotBranch, "branch", "", "Git branch to derive the staging environment name from (default: current branch; used with --deploy)")
 	rootCmd.AddCommand(snapshotCmd)
+}
+
+// currentBranch returns the current git branch name, so 'kindling snapshot
+// --deploy' can derive a stable per-branch environment name with no extra
+// flag needed in the common case (both for a human on their own checkout
+// and for a CI job on a runner that already checked the branch out).
+func currentBranch() (string, error) {
+	out, err := core.RunCapture("git", "rev-parse", "--abbrev-ref", "HEAD")
+	if err != nil {
+		return "", fmt.Errorf("could not determine current git branch: %w", err)
+	}
+	return strings.TrimSpace(out), nil
+}
+
+// slugifyBranch converts a git branch name into a stable, RFC 1123-valid
+// Kubernetes name component. Deterministic: same branch name always
+// produces the same slug. main/master are not special-cased here on
+// purpose — if a workflow needs different treatment for those branches,
+// that's a decision at the call site (e.g. don't invoke --deploy from a
+// main push), not inside this pure function.
+func slugifyBranch(branch string) string {
+	s := strings.ToLower(branch)
+	// Replace anything that isn't a-z0-9 with a hyphen.
+	s = regexp.MustCompile(`[^a-z0-9]+`).ReplaceAllString(s, "-")
+	// Collapse repeated hyphens.
+	s = regexp.MustCompile(`-+`).ReplaceAllString(s, "-")
+	s = strings.Trim(s, "-")
+	// Reserve room for a "-staging" or service-name suffix elsewhere in the
+	// naming pipeline; 40 chars leaves headroom under the 63-char DNS label
+	// limit once composed with other segments.
+	const maxLen = 40
+	if len(s) > maxLen {
+		s = strings.Trim(s[:maxLen], "-")
+	}
+	if s == "" {
+		return "branch" // pathological case: branch name was all symbols
+	}
+	return s
 }
 
 // ── DSE reader ──────────────────────────────────────────────────
@@ -433,6 +480,7 @@ var depRegistry = map[string]depDefaults{
 
 func runSnapshot(cmd *cobra.Command, args []string) error {
 	// ── Validate --deploy prerequisites ────────────────────────
+	var branch, slug string
 	if snapshotDeploy {
 		if snapshotContext == "" {
 			return fmt.Errorf("--context is required when using --deploy")
@@ -442,6 +490,26 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 		}
 		if snapshotRegistry == "" {
 			return fmt.Errorf("--registry is required when using --deploy (images must be accessible from the staging cluster)")
+		}
+
+		// ── Branch-derived naming ────────────────────────────────
+		// Two branches deployed to the same shared staging cluster must
+		// not collide — in name, namespace, or (eventually) Ingress host.
+		// Only fills in defaults the user didn't already set explicitly.
+		branch = snapshotBranch
+		if branch == "" {
+			var err error
+			branch, err = currentBranch()
+			if err != nil {
+				return err
+			}
+		}
+		slug = slugifyBranch(branch)
+		if snapshotName == "" {
+			snapshotName = slug
+		}
+		if snapshotNamespace == "default" && !cmd.Flags().Changed("namespace") {
+			snapshotNamespace = slug
 		}
 	}
 
@@ -453,6 +521,10 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 	}
 
 	header("Exporting cluster snapshot")
+
+	if snapshotDeploy {
+		step("🌿", fmt.Sprintf("Branch %q → slug %q (used for any of --name/--namespace not set explicitly)", branch, slug))
+	}
 
 	step("📡", "Reading DevStagingEnvironments from cluster")
 	dses, err := readClusterDSEs()
