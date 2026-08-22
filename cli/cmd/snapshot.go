@@ -26,6 +26,10 @@ staging-ready Kubernetes manifests as a Helm chart or Kustomize overlay.
 
 With --registry, images are copied from the Kind cluster's in-cluster
 registry to your container registry via crane (no Docker daemon needed).
+Unless --tag is set explicitly, the image tag is auto-detected as the
+next sequential "<branch-slug>-N" for the current git branch (or --branch)
+— so concurrent branches pushing to the same shared registry get their
+own tag sequence instead of colliding on a single "snapshot-N" one.
 
 With --deploy, the generated chart is deployed to a staging cluster
 in one step. The --context flag is required to specify the target cluster
@@ -76,11 +80,11 @@ func init() {
 	snapshotCmd.Flags().StringVarP(&snapshotOutput, "output", "o", "", "Output directory (default: ./kindling-snapshot)")
 	snapshotCmd.Flags().StringVarP(&snapshotName, "name", "n", "", "Chart/project name (default: derived from cluster)")
 	snapshotCmd.Flags().StringVarP(&snapshotRegistry, "registry", "r", "", "Container registry (e.g. ghcr.io/myorg, 123456.dkr.ecr.us-east-1.amazonaws.com/myapp)")
-	snapshotCmd.Flags().StringVarP(&snapshotTag, "tag", "t", "", "Image tag (default: git SHA or 'latest')")
+	snapshotCmd.Flags().StringVarP(&snapshotTag, "tag", "t", "", "Image tag (default: next sequential '<branch-slug>-N', or 'snapshot-N' outside a git branch context)")
 	snapshotCmd.Flags().BoolVar(&snapshotDeploy, "deploy", false, "Deploy to a staging cluster after generating the chart")
 	snapshotCmd.Flags().StringVar(&snapshotContext, "context", "", "Kubeconfig context for the staging cluster (required with --deploy)")
 	snapshotCmd.Flags().StringVar(&snapshotNamespace, "namespace", "default", "Kubernetes namespace to deploy into (used with --deploy)")
-	snapshotCmd.Flags().StringVar(&snapshotBranch, "branch", "", "Git branch to derive the staging environment name from (default: current branch; used with --deploy)")
+	snapshotCmd.Flags().StringVar(&snapshotBranch, "branch", "", "Git branch to derive the staging environment name from (default: current branch; used with --deploy or --registry)")
 	snapshotCmd.Flags().StringVar(&snapshotStagingDomain, "staging-domain", "", "Base domain for branch-derived Ingress hosts, e.g. staging.example.com (required for --deploy if the DSE doesn't already set an Ingress host)")
 	rootCmd.AddCommand(snapshotCmd)
 }
@@ -555,6 +559,23 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 		if snapshotStagingDomain != "" {
 			derivedIngressHost = fmt.Sprintf("%s.%s", slug, snapshotStagingDomain)
 		}
+	} else if snapshotRegistry != "" {
+		// Not deploying, but still pushing to a registry — still derive a
+		// branch-scoped tag prefix so concurrent branches pushing to the
+		// same shared registry don't collide on the same "snapshot-N"
+		// sequence. Best-effort: this isn't a hard requirement outside
+		// --deploy, so fall back to the plain "snapshot" prefix (via
+		// detectNextTag's default) rather than failing a chart-only
+		// export just because this isn't a git checkout.
+		branch = snapshotBranch
+		if branch == "" {
+			if b, err := currentBranch(); err == nil {
+				branch = b
+			}
+		}
+		if branch != "" {
+			slug = slugifyBranch(branch)
+		}
 	}
 
 	// Fail fast on missing tools before reading cluster state or prompting
@@ -620,7 +641,11 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 	if snapshotRegistry != "" {
 		tag := snapshotTag
 		if tag == "" {
-			tag = detectNextTag(snapshotRegistry, dses[0].Name)
+			tagPrefix := "snapshot"
+			if slug != "" {
+				tagPrefix = slug
+			}
+			tag = detectNextTag(snapshotRegistry, dses[0].Name, tagPrefix)
 		}
 		step("🏷", fmt.Sprintf("Re-tagging images → %s (tag: %s)", snapshotRegistry, tag))
 
@@ -1856,28 +1881,38 @@ func detectGitTag() string {
 	return strings.TrimSpace(out)
 }
 
+// nextTagNumber scans existingTags for the highest existing "<prefix>-N"
+// tag and returns N+1 (or 1 if none match). Pure and unit-tested in
+// isolation — detectNextTag just supplies the tag list via `crane ls`.
+func nextTagNumber(existingTags []string, prefix string) int {
+	tagPrefix := prefix + "-"
+	max := 0
+	for _, tag := range existingTags {
+		tag = strings.TrimSpace(tag)
+		if !strings.HasPrefix(tag, tagPrefix) {
+			continue
+		}
+		if n, err := strconv.Atoi(strings.TrimPrefix(tag, tagPrefix)); err == nil && n > max {
+			max = n
+		}
+	}
+	return max + 1
+}
+
 // detectNextTag queries the target registry for the first service's existing
-// tags and returns the next sequential "snapshot-N" tag. Falls back to
-// "snapshot-1" if the registry is unreachable or has no prior snapshots.
-func detectNextTag(registry, sampleService string) string {
+// tags and returns the next sequential "<prefix>-N" tag. prefix is typically
+// the current branch's slug, so concurrent branches pushing to the same
+// shared registry get their own tag sequence instead of colliding on a
+// single "snapshot-N" one. Falls back to "<prefix>-1" if the registry is
+// unreachable or has no prior tags with that prefix.
+func detectNextTag(registry, sampleService, prefix string) string {
 	repo := strings.TrimRight(registry, "/") + "/" + helmSafe(sampleService)
 
 	out, err := runSilent("crane", "ls", repo)
 	if err != nil {
-		return "snapshot-1"
+		return fmt.Sprintf("%s-1", prefix)
 	}
-
-	max := 0
-	for _, line := range strings.Split(out, "\n") {
-		tag := strings.TrimSpace(line)
-		if strings.HasPrefix(tag, "snapshot-") {
-			numStr := strings.TrimPrefix(tag, "snapshot-")
-			if n, err := strconv.Atoi(numStr); err == nil && n > max {
-				max = n
-			}
-		}
-	}
-	return fmt.Sprintf("snapshot-%d", max+1)
+	return fmt.Sprintf("%s-%d", prefix, nextTagNumber(strings.Split(out, "\n"), prefix))
 }
 
 // registryPullRef rewrites an in-cluster image reference so it can be

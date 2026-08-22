@@ -618,6 +618,34 @@ func TestBuildConnectionURL(t *testing.T) {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// nextTagNumber
+// ────────────────────────────────────────────────────────────────────────────
+
+func TestNextTagNumber(t *testing.T) {
+	tests := []struct {
+		name   string
+		tags   []string
+		prefix string
+		want   int
+	}{
+		{"no existing tags", nil, "feature-checkout-retry", 1},
+		{"single prior tag", []string{"feature-checkout-retry-1"}, "feature-checkout-retry", 2},
+		{"picks the max, not the last", []string{"feature-checkout-retry-1", "feature-checkout-retry-3", "feature-checkout-retry-2"}, "feature-checkout-retry", 4},
+		{"ignores tags with a different prefix", []string{"main-1", "main-2", "other-branch-5"}, "feature-checkout-retry", 1},
+		{"ignores non-numeric suffixes", []string{"feature-checkout-retry-latest", "feature-checkout-retry-1"}, "feature-checkout-retry", 2},
+		{"tolerates blank lines from crane ls output", []string{"", "feature-checkout-retry-1", ""}, "feature-checkout-retry", 2},
+		{"default snapshot prefix unaffected by branch-prefixed tags", []string{"feature-checkout-retry-1", "snapshot-1"}, "snapshot", 2},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := nextTagNumber(tt.tags, tt.prefix); got != tt.want {
+				t.Errorf("nextTagNumber(%v, %q) = %d, want %d", tt.tags, tt.prefix, got, tt.want)
+			}
+		})
+	}
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // registryImage
 // ────────────────────────────────────────────────────────────────────────────
 

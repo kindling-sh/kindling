@@ -71,13 +71,13 @@ kindling snapshot \
 2. **Strips dev prefixes** — `jeff-vincent-gateway` becomes `gateway`
 3. **Derives a name/namespace/Ingress host from the current git branch** (unless `--name`/`--namespace`/an explicit `spec.ingress.host` are already set) — so concurrent branches never collide on the same shared staging cluster, and never end up with an unreachable environment
 4. **Generates Helm chart** — templates, values.yaml, values-live.yaml
-5. **Pushes images** — copies each image from `localhost:5001` to your registry using `crane copy`
+5. **Pushes images** — copies each image from `localhost:5001` to your registry using `crane copy`, tagged `<branch-slug>-N` by default (unless `--tag` is set) so concurrent branches don't share the same tag sequence on a shared registry
 6. **Installs chart** — runs `helm upgrade --install` on the staging cluster
 
 ### Common flags
 
 ```bash
-# Custom image tag (default: git SHA)
+# Custom image tag (default: next sequential <branch-slug>-N)
 kindling snapshot -r ghcr.io/myorg -t v1.2.0 --deploy --context my-staging
 
 # Deploy into a specific namespace
