@@ -96,6 +96,41 @@ func TestApplyBranchIngressHost_NeverOverridesExplicitHost(t *testing.T) {
 	}
 }
 
+func TestApplyBranchIngressHost_OverridesLocalDevLocalhostHost(t *testing.T) {
+	// The local dev convention (<name>.localhost, carried over from the
+	// Kind cluster's own DSE) is never meaningful staging intent — it's
+	// never resolvable outside Kind, and is frequently identical across
+	// branches (e.g. every branch's frontend DSE ends up "frontend.localhost"
+	// after stripDSEPrefix), which is exactly the collision this feature
+	// exists to prevent. It must be overridden, not treated as explicit.
+	dses := []snapshotDSE{
+		{Name: "frontend", Ingress: &snapshotIngress{Enabled: true, Host: "frontend.localhost"}},
+	}
+	derived, err := applyBranchIngressHost(dses, "feature-checkout-retry.staging.example.com")
+	if err != nil {
+		t.Fatalf("applyBranchIngressHost() error: %v", err)
+	}
+	if dses[0].Ingress.Host != "feature-checkout-retry.staging.example.com" {
+		t.Errorf("Ingress.Host = %q, want derived host to replace the local .localhost convention", dses[0].Ingress.Host)
+	}
+	if len(derived) != 1 || derived[0] != "frontend" {
+		t.Errorf(`derived = %v, want ["frontend"]`, derived)
+	}
+}
+
+func TestApplyBranchIngressHost_LocalhostHostWithNoStagingDomainErrors(t *testing.T) {
+	dses := []snapshotDSE{
+		{Name: "frontend", Ingress: &snapshotIngress{Enabled: true, Host: "frontend.localhost"}},
+	}
+	_, err := applyBranchIngressHost(dses, "")
+	if err == nil {
+		t.Fatal("expected an error when the only host is the local .localhost convention and no --staging-domain is set, got nil")
+	}
+	if !strings.Contains(err.Error(), "frontend") {
+		t.Errorf("error %q should name the affected DSE %q", err.Error(), "frontend")
+	}
+}
+
 func TestApplyBranchIngressHost_IgnoresDisabledOrNilIngress(t *testing.T) {
 	dses := []snapshotDSE{
 		{Name: "worker", Ingress: nil},
@@ -133,6 +168,7 @@ func TestApplyBranchIngressHost_MixedServices(t *testing.T) {
 	dses := []snapshotDSE{
 		{Name: "gateway", Ingress: &snapshotIngress{Enabled: true, Host: ""}},
 		{Name: "admin", Ingress: &snapshotIngress{Enabled: true, Host: "admin.example.com"}},
+		{Name: "frontend", Ingress: &snapshotIngress{Enabled: true, Host: "frontend.localhost"}},
 		{Name: "worker", Ingress: nil},
 	}
 	derived, err := applyBranchIngressHost(dses, "feature-checkout-retry.staging.example.com")
@@ -145,8 +181,11 @@ func TestApplyBranchIngressHost_MixedServices(t *testing.T) {
 	if dses[1].Ingress.Host != "admin.example.com" {
 		t.Errorf("admin Ingress.Host = %q, want unchanged", dses[1].Ingress.Host)
 	}
-	if len(derived) != 1 || derived[0] != "gateway" {
-		t.Errorf("derived = %v, want [\"gateway\"] only", derived)
+	if dses[2].Ingress.Host != "feature-checkout-retry.staging.example.com" {
+		t.Errorf("frontend Ingress.Host = %q, want the local .localhost convention replaced with the derived host", dses[2].Ingress.Host)
+	}
+	if len(derived) != 2 {
+		t.Errorf(`derived = %v, want ["gateway", "frontend"]`, derived)
 	}
 }
 

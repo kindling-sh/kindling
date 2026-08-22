@@ -124,19 +124,28 @@ func slugifyBranch(branch string) string {
 }
 
 // applyBranchIngressHost fills in the Ingress host for any DSE that has
-// Ingress enabled but no host set, using derivedHost (typically
-// "<branch-slug>.<staging-domain>"). An explicit spec.ingress.host is
-// never overridden — this only ever touches an empty one, the same
-// precedence --name/--namespace already follow. Returns the names of the
-// DSEs that got a host filled in, for caller-side logging. If a DSE needs
-// a host and derivedHost is empty (no --staging-domain and no explicit
-// host), returns an error naming that DSE rather than silently falling
-// through to an unreachable environment.
+// Ingress enabled but no *meaningful* host set, using derivedHost
+// (typically "<branch-slug>.<staging-domain>"). A host is considered
+// meaningful — and left untouched — only if it's non-empty and isn't the
+// local dev convention (<name>.localhost, carried straight over from the
+// local Kind cluster's DSE). That local host is never resolvable outside
+// Kind and is frequently identical across branches, so treating it as
+// "explicit intent" would silently keep every branch colliding on the
+// same host — the exact bug this function exists to fix. A genuinely
+// custom, non-localhost host is still never overridden. Returns the
+// names of the DSEs that got a host filled in, for caller-side logging.
+// If a DSE needs a host and derivedHost is empty (no --staging-domain and
+// no meaningful explicit host), returns an error naming that DSE rather
+// than silently falling through to an unreachable/colliding environment.
 func applyBranchIngressHost(dses []snapshotDSE, derivedHost string) ([]string, error) {
 	var derived []string
 	for i := range dses {
-		if dses[i].Ingress == nil || !dses[i].Ingress.Enabled || dses[i].Ingress.Host != "" {
+		if dses[i].Ingress == nil || !dses[i].Ingress.Enabled {
 			continue
+		}
+		host := dses[i].Ingress.Host
+		if host != "" && !strings.HasSuffix(host, ".localhost") {
+			continue // genuinely explicit, non-local host — never overridden
 		}
 		if derivedHost == "" {
 			return nil, fmt.Errorf("no Ingress host available for %q — set --staging-domain, or set spec.ingress.host explicitly in the DSE", dses[i].Name)
