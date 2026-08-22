@@ -69,7 +69,7 @@ kindling snapshot \
 
 1. **Reads cluster state** — discovers all DSEs, services, dependencies
 2. **Strips dev prefixes** — `jeff-vincent-gateway` becomes `gateway`
-3. **Derives a name/namespace from the current git branch** (unless `--name`/`--namespace` are set explicitly) — so concurrent branches never collide on the same shared staging cluster
+3. **Derives a name/namespace/Ingress host from the current git branch** (unless `--name`/`--namespace`/an explicit `spec.ingress.host` are already set) — so concurrent branches never collide on the same shared staging cluster, and never end up with an unreachable environment
 4. **Generates Helm chart** — templates, values.yaml, values-live.yaml
 5. **Pushes images** — copies each image from `localhost:5001` to your registry using `crane copy`
 6. **Installs chart** — runs `helm upgrade --install` on the staging cluster
@@ -91,6 +91,11 @@ kindling snapshot -r ghcr.io/myorg -n my-platform -o ./charts/staging --deploy -
 kindling snapshot -r ghcr.io/myorg --deploy --context my-staging
 # ...or override which branch to derive from explicitly
 kindling snapshot -r ghcr.io/myorg --deploy --context my-staging --branch feature/checkout-retry
+
+# Give each branch a real, resolvable Ingress host too (requires a
+# wildcard DNS/TLS setup on *.staging.example.com on the target cluster)
+kindling snapshot -r ghcr.io/myorg --deploy --context my-staging --staging-domain staging.example.com
+# -> feature-checkout-retry.staging.example.com, unique per branch
 ```
 
 ### Generate without deploying

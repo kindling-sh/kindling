@@ -32,7 +32,10 @@ in one step. The --context flag is required to specify the target cluster
 and --registry is required to make images accessible outside Kind. Unless
 --name/--namespace are set explicitly, --deploy derives both from the
 current git branch (or --branch), so concurrent branches deployed to the
-same shared staging cluster never collide.
+same shared staging cluster never collide. Any DSE with Ingress enabled
+but no host set gets a branch-derived host too, via --staging-domain
+(<branch-slug>.<staging-domain>) — an explicit spec.ingress.host always
+wins over the derived one.
 
 Examples:
   kindling snapshot                          # Helm chart in ./kindling-snapshot/
@@ -48,20 +51,24 @@ Examples:
   kindling snapshot -f kustomize -r ghcr.io/myorg --deploy --context staging
 
   # PR branch → its own name-scoped staging environment, no collisions
-  kindling snapshot -r ghcr.io/myorg --deploy --context staging`,
+  kindling snapshot -r ghcr.io/myorg --deploy --context staging
+
+  # ...with a branch-derived, resolvable Ingress host too
+  kindling snapshot -r ghcr.io/myorg --deploy --context staging --staging-domain staging.example.com`,
 	RunE: runSnapshot,
 }
 
 var (
-	snapshotFormat    string
-	snapshotOutput    string
-	snapshotName      string
-	snapshotRegistry  string
-	snapshotTag       string
-	snapshotDeploy    bool
-	snapshotContext   string
-	snapshotNamespace string
-	snapshotBranch    string
+	snapshotFormat        string
+	snapshotOutput        string
+	snapshotName          string
+	snapshotRegistry      string
+	snapshotTag           string
+	snapshotDeploy        bool
+	snapshotContext       string
+	snapshotNamespace     string
+	snapshotBranch        string
+	snapshotStagingDomain string
 )
 
 func init() {
@@ -74,6 +81,7 @@ func init() {
 	snapshotCmd.Flags().StringVar(&snapshotContext, "context", "", "Kubeconfig context for the staging cluster (required with --deploy)")
 	snapshotCmd.Flags().StringVar(&snapshotNamespace, "namespace", "default", "Kubernetes namespace to deploy into (used with --deploy)")
 	snapshotCmd.Flags().StringVar(&snapshotBranch, "branch", "", "Git branch to derive the staging environment name from (default: current branch; used with --deploy)")
+	snapshotCmd.Flags().StringVar(&snapshotStagingDomain, "staging-domain", "", "Base domain for branch-derived Ingress hosts, e.g. staging.example.com (required for --deploy if the DSE doesn't already set an Ingress host)")
 	rootCmd.AddCommand(snapshotCmd)
 }
 
@@ -113,6 +121,30 @@ func slugifyBranch(branch string) string {
 		return "branch" // pathological case: branch name was all symbols
 	}
 	return s
+}
+
+// applyBranchIngressHost fills in the Ingress host for any DSE that has
+// Ingress enabled but no host set, using derivedHost (typically
+// "<branch-slug>.<staging-domain>"). An explicit spec.ingress.host is
+// never overridden — this only ever touches an empty one, the same
+// precedence --name/--namespace already follow. Returns the names of the
+// DSEs that got a host filled in, for caller-side logging. If a DSE needs
+// a host and derivedHost is empty (no --staging-domain and no explicit
+// host), returns an error naming that DSE rather than silently falling
+// through to an unreachable environment.
+func applyBranchIngressHost(dses []snapshotDSE, derivedHost string) ([]string, error) {
+	var derived []string
+	for i := range dses {
+		if dses[i].Ingress == nil || !dses[i].Ingress.Enabled || dses[i].Ingress.Host != "" {
+			continue
+		}
+		if derivedHost == "" {
+			return nil, fmt.Errorf("no Ingress host available for %q — set --staging-domain, or set spec.ingress.host explicitly in the DSE", dses[i].Name)
+		}
+		dses[i].Ingress.Host = derivedHost
+		derived = append(derived, dses[i].Name)
+	}
+	return derived, nil
 }
 
 // ── DSE reader ──────────────────────────────────────────────────
@@ -480,7 +512,7 @@ var depRegistry = map[string]depDefaults{
 
 func runSnapshot(cmd *cobra.Command, args []string) error {
 	// ── Validate --deploy prerequisites ────────────────────────
-	var branch, slug string
+	var branch, slug, derivedIngressHost string
 	if snapshotDeploy {
 		if snapshotContext == "" {
 			return fmt.Errorf("--context is required when using --deploy")
@@ -494,7 +526,7 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 
 		// ── Branch-derived naming ────────────────────────────────
 		// Two branches deployed to the same shared staging cluster must
-		// not collide — in name, namespace, or (eventually) Ingress host.
+		// not collide — in name, namespace, or Ingress host.
 		// Only fills in defaults the user didn't already set explicitly.
 		branch = snapshotBranch
 		if branch == "" {
@@ -510,6 +542,9 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 		}
 		if snapshotNamespace == "default" && !cmd.Flags().Changed("namespace") {
 			snapshotNamespace = slug
+		}
+		if snapshotStagingDomain != "" {
+			derivedIngressHost = fmt.Sprintf("%s.%s", slug, snapshotStagingDomain)
 		}
 	}
 
@@ -541,6 +576,23 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 	userPrefix := stripDSEPrefix(dses)
 	if userPrefix != "" {
 		step("✂️", fmt.Sprintf("Stripping user prefix %q from service names", strings.TrimSuffix(userPrefix, "-")))
+	}
+
+	// ── Branch-derived Ingress host ──────────────────────────────
+	// Any DSE that already has Ingress enabled but no host set gets the
+	// same branch-derived treatment as --name/--namespace — an explicit
+	// spec.ingress.host is never overridden. Without --staging-domain,
+	// a genuinely missing host fails the build instead of silently
+	// producing an unreachable environment (the previous "# TODO: set
+	// your staging hostname" placeholder behavior).
+	if snapshotDeploy {
+		derived, err := applyBranchIngressHost(dses, derivedIngressHost)
+		if err != nil {
+			return err
+		}
+		for _, name := range derived {
+			step("🌐", fmt.Sprintf("%s: derived Ingress host %s", name, derivedIngressHost))
+		}
 	}
 
 	chartName := snapshotName
@@ -706,7 +758,22 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 			vk := helmValuesKey(dse.Name)
 			if selectedSet[dse.Name] {
 				helmArgs = append(helmArgs, "--set", fmt.Sprintf("%s.ingress.enabled=true", vk))
-				helmArgs = append(helmArgs, "--set", fmt.Sprintf("%s.ingress.host=", vk))
+				// Prefer the host already resolved onto this DSE (explicit
+				// spec.ingress.host, or the branch-derived fallback applied
+				// above); only fall back to derivedIngressHost directly for
+				// a service selected here that had no Ingress config at all
+				// in dev. Never force it blank — that silently breaks
+				// Host-based routing on the shared staging cluster.
+				host := ""
+				if dse.Ingress != nil {
+					host = dse.Ingress.Host
+				}
+				if host == "" {
+					host = derivedIngressHost
+				}
+				if host != "" {
+					helmArgs = append(helmArgs, "--set", fmt.Sprintf("%s.ingress.host=%s", vk, host))
+				}
 				if ingClass != "" {
 					helmArgs = append(helmArgs, "--set", fmt.Sprintf("%s.ingress.ingressClassName=%s", vk, ingClass))
 				}
