@@ -482,7 +482,7 @@ Export a Helm chart or Kustomize overlay from the current cluster state, optiona
 
 **Steps:** read all DSEs → strip actor prefix from names → generate chart with `values.yaml` (clean defaults) + `values-live.yaml` (dev values) → optionally push images via `crane copy` → optionally `helm install` on staging cluster.
 
-With `--deploy`, unless `--name`/`--namespace` are set explicitly, both are derived from the current git branch (or `--branch`) via a stable slug — so concurrent branches deployed to the same shared staging cluster (e.g. multiple open PRs) never collide. Any DSE with Ingress enabled but no host set gets a branch-derived host too, via `--staging-domain` (`<branch-slug>.<staging-domain>`) — an explicit `spec.ingress.host` always wins over the derived one, and `--deploy` fails fast if neither is available rather than producing an unreachable environment.
+With `--deploy`, unless `--name`/`--namespace` are set explicitly, both are derived from the current git branch (or `--branch`) via a stable slug — so concurrent branches deployed to the same shared staging cluster (e.g. multiple open PRs) never collide. Any DSE with Ingress enabled but no host set gets a branch-derived host too, via `--staging-domain` (result: `<branch-slug>.staging.<domain>`) — an explicit `spec.ingress.host` always wins over the derived one, and `--deploy` fails fast if neither is available rather than producing an unreachable environment.
 
 Unless `--tag` is set explicitly, `--registry` pushes (with or without `--deploy`) auto-detect the next sequential `<branch-slug>-N` tag for the current branch, so concurrent branches pushing to the same shared registry get their own tag sequence instead of colliding on a single `snapshot-N` one.
 
@@ -499,7 +499,7 @@ Unless `--tag` is set explicitly, `--registry` pushes (with or without `--deploy
 | `--context` | | — | Kubeconfig context for staging cluster |
 | `--namespace` | | `default` (or branch slug with `--deploy`) | Namespace to deploy into |
 | `--branch` | | current git branch | Git branch to derive the staging name/namespace/Ingress host/image tag from (used with `--deploy` or `--registry`) |
-| `--staging-domain` | | — | Base domain for branch-derived Ingress hosts, e.g. `staging.example.com` (required for `--deploy` if the DSE doesn't already set an Ingress host) |
+| `--staging-domain` | | — | Base domain for branch-derived Ingress hosts — result is `<branch-slug>.staging.<domain>`, e.g. `subnode1.xyz` (required for `--deploy` if the DSE doesn't already set an Ingress host) |
 
 **Examples:**
 
@@ -519,7 +519,7 @@ kindling snapshot -r ghcr.io/myorg --deploy --context do-staging
 
 # ...with a branch-derived, resolvable Ingress host too
 # (-> feature-checkout-retry.staging.example.com)
-kindling snapshot -r ghcr.io/myorg --deploy --context do-staging --staging-domain staging.example.com
+kindling snapshot -r ghcr.io/myorg --deploy --context do-staging --staging-domain example.com
 ```
 
 **Manual usage:**
