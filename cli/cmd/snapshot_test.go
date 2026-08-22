@@ -55,6 +55,141 @@ func TestSlugifyBranch_Deterministic(t *testing.T) {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// applyBranchIngressHost
+// ────────────────────────────────────────────────────────────────────────────
+
+func TestApplyBranchIngressHost_DerivesFromBranchAndDomain(t *testing.T) {
+	branch := "feature/checkout-retry"
+	domain := "staging.example.com"
+	slug := slugifyBranch(branch)
+	derivedHost := slug + "." + domain
+
+	dses := []snapshotDSE{
+		{Name: "gateway", Ingress: &snapshotIngress{Enabled: true, Host: ""}},
+	}
+	derived, err := applyBranchIngressHost(dses, derivedHost)
+	if err != nil {
+		t.Fatalf("applyBranchIngressHost() error: %v", err)
+	}
+	want := "feature-checkout-retry.staging.example.com"
+	if dses[0].Ingress.Host != want {
+		t.Errorf("Ingress.Host = %q, want %q", dses[0].Ingress.Host, want)
+	}
+	if len(derived) != 1 || derived[0] != "gateway" {
+		t.Errorf("derived = %v, want [\"gateway\"]", derived)
+	}
+}
+
+func TestApplyBranchIngressHost_NeverOverridesExplicitHost(t *testing.T) {
+	dses := []snapshotDSE{
+		{Name: "gateway", Ingress: &snapshotIngress{Enabled: true, Host: "custom.example.com"}},
+	}
+	derived, err := applyBranchIngressHost(dses, "feature-checkout-retry.staging.example.com")
+	if err != nil {
+		t.Fatalf("applyBranchIngressHost() error: %v", err)
+	}
+	if dses[0].Ingress.Host != "custom.example.com" {
+		t.Errorf("Ingress.Host = %q, want unchanged %q", dses[0].Ingress.Host, "custom.example.com")
+	}
+	if len(derived) != 0 {
+		t.Errorf("derived = %v, want none (explicit host should not be reported as derived)", derived)
+	}
+}
+
+func TestApplyBranchIngressHost_OverridesLocalDevLocalhostHost(t *testing.T) {
+	// The local dev convention (<name>.localhost, carried over from the
+	// Kind cluster's own DSE) is never meaningful staging intent — it's
+	// never resolvable outside Kind, and is frequently identical across
+	// branches (e.g. every branch's frontend DSE ends up "frontend.localhost"
+	// after stripDSEPrefix), which is exactly the collision this feature
+	// exists to prevent. It must be overridden, not treated as explicit.
+	dses := []snapshotDSE{
+		{Name: "frontend", Ingress: &snapshotIngress{Enabled: true, Host: "frontend.localhost"}},
+	}
+	derived, err := applyBranchIngressHost(dses, "feature-checkout-retry.staging.example.com")
+	if err != nil {
+		t.Fatalf("applyBranchIngressHost() error: %v", err)
+	}
+	if dses[0].Ingress.Host != "feature-checkout-retry.staging.example.com" {
+		t.Errorf("Ingress.Host = %q, want derived host to replace the local .localhost convention", dses[0].Ingress.Host)
+	}
+	if len(derived) != 1 || derived[0] != "frontend" {
+		t.Errorf(`derived = %v, want ["frontend"]`, derived)
+	}
+}
+
+func TestApplyBranchIngressHost_LocalhostHostWithNoStagingDomainErrors(t *testing.T) {
+	dses := []snapshotDSE{
+		{Name: "frontend", Ingress: &snapshotIngress{Enabled: true, Host: "frontend.localhost"}},
+	}
+	_, err := applyBranchIngressHost(dses, "")
+	if err == nil {
+		t.Fatal("expected an error when the only host is the local .localhost convention and no --staging-domain is set, got nil")
+	}
+	if !strings.Contains(err.Error(), "frontend") {
+		t.Errorf("error %q should name the affected DSE %q", err.Error(), "frontend")
+	}
+}
+
+func TestApplyBranchIngressHost_IgnoresDisabledOrNilIngress(t *testing.T) {
+	dses := []snapshotDSE{
+		{Name: "worker", Ingress: nil},
+		{Name: "internal-api", Ingress: &snapshotIngress{Enabled: false, Host: ""}},
+	}
+	derived, err := applyBranchIngressHost(dses, "feature-checkout-retry.staging.example.com")
+	if err != nil {
+		t.Fatalf("applyBranchIngressHost() error: %v", err)
+	}
+	if len(derived) != 0 {
+		t.Errorf("derived = %v, want none", derived)
+	}
+	if dses[1].Ingress.Host != "" {
+		t.Errorf("Ingress.Host = %q, want unchanged empty (Ingress not enabled)", dses[1].Ingress.Host)
+	}
+}
+
+func TestApplyBranchIngressHost_ErrorsWithNoHostAvailable(t *testing.T) {
+	dses := []snapshotDSE{
+		{Name: "gateway", Ingress: &snapshotIngress{Enabled: true, Host: ""}},
+	}
+	_, err := applyBranchIngressHost(dses, "")
+	if err == nil {
+		t.Fatal("expected an error when no --staging-domain and no explicit host are available, got nil")
+	}
+	if !strings.Contains(err.Error(), "gateway") {
+		t.Errorf("error %q should name the affected DSE %q", err.Error(), "gateway")
+	}
+	if !strings.Contains(err.Error(), "--staging-domain") {
+		t.Errorf("error %q should mention --staging-domain as the fix", err.Error())
+	}
+}
+
+func TestApplyBranchIngressHost_MixedServices(t *testing.T) {
+	dses := []snapshotDSE{
+		{Name: "gateway", Ingress: &snapshotIngress{Enabled: true, Host: ""}},
+		{Name: "admin", Ingress: &snapshotIngress{Enabled: true, Host: "admin.example.com"}},
+		{Name: "frontend", Ingress: &snapshotIngress{Enabled: true, Host: "frontend.localhost"}},
+		{Name: "worker", Ingress: nil},
+	}
+	derived, err := applyBranchIngressHost(dses, "feature-checkout-retry.staging.example.com")
+	if err != nil {
+		t.Fatalf("applyBranchIngressHost() error: %v", err)
+	}
+	if dses[0].Ingress.Host != "feature-checkout-retry.staging.example.com" {
+		t.Errorf("gateway Ingress.Host = %q, want derived host", dses[0].Ingress.Host)
+	}
+	if dses[1].Ingress.Host != "admin.example.com" {
+		t.Errorf("admin Ingress.Host = %q, want unchanged", dses[1].Ingress.Host)
+	}
+	if dses[2].Ingress.Host != "feature-checkout-retry.staging.example.com" {
+		t.Errorf("frontend Ingress.Host = %q, want the local .localhost convention replaced with the derived host", dses[2].Ingress.Host)
+	}
+	if len(derived) != 2 {
+		t.Errorf(`derived = %v, want ["gateway", "frontend"]`, derived)
+	}
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // currentBranch
 // ────────────────────────────────────────────────────────────────────────────
 
@@ -477,6 +612,34 @@ func TestBuildConnectionURL(t *testing.T) {
 			url := buildConnectionURL("test-chart", tt.depType, helmSafe(tt.depType), def)
 			if !strings.Contains(url, tt.contains) {
 				t.Errorf("buildConnectionURL(%q) = %q, want to contain %q", tt.depType, url, tt.contains)
+			}
+		})
+	}
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// nextTagNumber
+// ────────────────────────────────────────────────────────────────────────────
+
+func TestNextTagNumber(t *testing.T) {
+	tests := []struct {
+		name   string
+		tags   []string
+		prefix string
+		want   int
+	}{
+		{"no existing tags", nil, "feature-checkout-retry", 1},
+		{"single prior tag", []string{"feature-checkout-retry-1"}, "feature-checkout-retry", 2},
+		{"picks the max, not the last", []string{"feature-checkout-retry-1", "feature-checkout-retry-3", "feature-checkout-retry-2"}, "feature-checkout-retry", 4},
+		{"ignores tags with a different prefix", []string{"main-1", "main-2", "other-branch-5"}, "feature-checkout-retry", 1},
+		{"ignores non-numeric suffixes", []string{"feature-checkout-retry-latest", "feature-checkout-retry-1"}, "feature-checkout-retry", 2},
+		{"tolerates blank lines from crane ls output", []string{"", "feature-checkout-retry-1", ""}, "feature-checkout-retry", 2},
+		{"default snapshot prefix unaffected by branch-prefixed tags", []string{"feature-checkout-retry-1", "snapshot-1"}, "snapshot", 2},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := nextTagNumber(tt.tags, tt.prefix); got != tt.want {
+				t.Errorf("nextTagNumber(%v, %q) = %d, want %d", tt.tags, tt.prefix, got, tt.want)
 			}
 		})
 	}

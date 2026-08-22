@@ -26,13 +26,20 @@ staging-ready Kubernetes manifests as a Helm chart or Kustomize overlay.
 
 With --registry, images are copied from the Kind cluster's in-cluster
 registry to your container registry via crane (no Docker daemon needed).
+Unless --tag is set explicitly, the image tag is auto-detected as the
+next sequential "<branch-slug>-N" for the current git branch (or --branch)
+— so concurrent branches pushing to the same shared registry get their
+own tag sequence instead of colliding on a single "snapshot-N" one.
 
 With --deploy, the generated chart is deployed to a staging cluster
 in one step. The --context flag is required to specify the target cluster
 and --registry is required to make images accessible outside Kind. Unless
 --name/--namespace are set explicitly, --deploy derives both from the
 current git branch (or --branch), so concurrent branches deployed to the
-same shared staging cluster never collide.
+same shared staging cluster never collide. Any DSE with Ingress enabled
+but no host set gets a branch-derived host too, via --staging-domain
+(<branch-slug>.<staging-domain>) — an explicit spec.ingress.host always
+wins over the derived one.
 
 Examples:
   kindling snapshot                          # Helm chart in ./kindling-snapshot/
@@ -48,20 +55,24 @@ Examples:
   kindling snapshot -f kustomize -r ghcr.io/myorg --deploy --context staging
 
   # PR branch → its own name-scoped staging environment, no collisions
-  kindling snapshot -r ghcr.io/myorg --deploy --context staging`,
+  kindling snapshot -r ghcr.io/myorg --deploy --context staging
+
+  # ...with a branch-derived, resolvable Ingress host too
+  kindling snapshot -r ghcr.io/myorg --deploy --context staging --staging-domain staging.example.com`,
 	RunE: runSnapshot,
 }
 
 var (
-	snapshotFormat    string
-	snapshotOutput    string
-	snapshotName      string
-	snapshotRegistry  string
-	snapshotTag       string
-	snapshotDeploy    bool
-	snapshotContext   string
-	snapshotNamespace string
-	snapshotBranch    string
+	snapshotFormat        string
+	snapshotOutput        string
+	snapshotName          string
+	snapshotRegistry      string
+	snapshotTag           string
+	snapshotDeploy        bool
+	snapshotContext       string
+	snapshotNamespace     string
+	snapshotBranch        string
+	snapshotStagingDomain string
 )
 
 func init() {
@@ -69,11 +80,12 @@ func init() {
 	snapshotCmd.Flags().StringVarP(&snapshotOutput, "output", "o", "", "Output directory (default: ./kindling-snapshot)")
 	snapshotCmd.Flags().StringVarP(&snapshotName, "name", "n", "", "Chart/project name (default: derived from cluster)")
 	snapshotCmd.Flags().StringVarP(&snapshotRegistry, "registry", "r", "", "Container registry (e.g. ghcr.io/myorg, 123456.dkr.ecr.us-east-1.amazonaws.com/myapp)")
-	snapshotCmd.Flags().StringVarP(&snapshotTag, "tag", "t", "", "Image tag (default: git SHA or 'latest')")
+	snapshotCmd.Flags().StringVarP(&snapshotTag, "tag", "t", "", "Image tag (default: next sequential '<branch-slug>-N', or 'snapshot-N' outside a git branch context)")
 	snapshotCmd.Flags().BoolVar(&snapshotDeploy, "deploy", false, "Deploy to a staging cluster after generating the chart")
 	snapshotCmd.Flags().StringVar(&snapshotContext, "context", "", "Kubeconfig context for the staging cluster (required with --deploy)")
 	snapshotCmd.Flags().StringVar(&snapshotNamespace, "namespace", "default", "Kubernetes namespace to deploy into (used with --deploy)")
-	snapshotCmd.Flags().StringVar(&snapshotBranch, "branch", "", "Git branch to derive the staging environment name from (default: current branch; used with --deploy)")
+	snapshotCmd.Flags().StringVar(&snapshotBranch, "branch", "", "Git branch to derive the staging environment name from (default: current branch; used with --deploy or --registry)")
+	snapshotCmd.Flags().StringVar(&snapshotStagingDomain, "staging-domain", "", "Base domain for branch-derived Ingress hosts, e.g. staging.example.com (required for --deploy if the DSE doesn't already set an Ingress host)")
 	rootCmd.AddCommand(snapshotCmd)
 }
 
@@ -113,6 +125,39 @@ func slugifyBranch(branch string) string {
 		return "branch" // pathological case: branch name was all symbols
 	}
 	return s
+}
+
+// applyBranchIngressHost fills in the Ingress host for any DSE that has
+// Ingress enabled but no *meaningful* host set, using derivedHost
+// (typically "<branch-slug>.<staging-domain>"). A host is considered
+// meaningful — and left untouched — only if it's non-empty and isn't the
+// local dev convention (<name>.localhost, carried straight over from the
+// local Kind cluster's DSE). That local host is never resolvable outside
+// Kind and is frequently identical across branches, so treating it as
+// "explicit intent" would silently keep every branch colliding on the
+// same host — the exact bug this function exists to fix. A genuinely
+// custom, non-localhost host is still never overridden. Returns the
+// names of the DSEs that got a host filled in, for caller-side logging.
+// If a DSE needs a host and derivedHost is empty (no --staging-domain and
+// no meaningful explicit host), returns an error naming that DSE rather
+// than silently falling through to an unreachable/colliding environment.
+func applyBranchIngressHost(dses []snapshotDSE, derivedHost string) ([]string, error) {
+	var derived []string
+	for i := range dses {
+		if dses[i].Ingress == nil || !dses[i].Ingress.Enabled {
+			continue
+		}
+		host := dses[i].Ingress.Host
+		if host != "" && !strings.HasSuffix(host, ".localhost") {
+			continue // genuinely explicit, non-local host — never overridden
+		}
+		if derivedHost == "" {
+			return nil, fmt.Errorf("no Ingress host available for %q — set --staging-domain, or set spec.ingress.host explicitly in the DSE", dses[i].Name)
+		}
+		dses[i].Ingress.Host = derivedHost
+		derived = append(derived, dses[i].Name)
+	}
+	return derived, nil
 }
 
 // ── DSE reader ──────────────────────────────────────────────────
@@ -480,7 +525,7 @@ var depRegistry = map[string]depDefaults{
 
 func runSnapshot(cmd *cobra.Command, args []string) error {
 	// ── Validate --deploy prerequisites ────────────────────────
-	var branch, slug string
+	var branch, slug, derivedIngressHost string
 	if snapshotDeploy {
 		if snapshotContext == "" {
 			return fmt.Errorf("--context is required when using --deploy")
@@ -494,7 +539,7 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 
 		// ── Branch-derived naming ────────────────────────────────
 		// Two branches deployed to the same shared staging cluster must
-		// not collide — in name, namespace, or (eventually) Ingress host.
+		// not collide — in name, namespace, or Ingress host.
 		// Only fills in defaults the user didn't already set explicitly.
 		branch = snapshotBranch
 		if branch == "" {
@@ -510,6 +555,26 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 		}
 		if snapshotNamespace == "default" && !cmd.Flags().Changed("namespace") {
 			snapshotNamespace = slug
+		}
+		if snapshotStagingDomain != "" {
+			derivedIngressHost = fmt.Sprintf("%s.%s", slug, snapshotStagingDomain)
+		}
+	} else if snapshotRegistry != "" {
+		// Not deploying, but still pushing to a registry — still derive a
+		// branch-scoped tag prefix so concurrent branches pushing to the
+		// same shared registry don't collide on the same "snapshot-N"
+		// sequence. Best-effort: this isn't a hard requirement outside
+		// --deploy, so fall back to the plain "snapshot" prefix (via
+		// detectNextTag's default) rather than failing a chart-only
+		// export just because this isn't a git checkout.
+		branch = snapshotBranch
+		if branch == "" {
+			if b, err := currentBranch(); err == nil {
+				branch = b
+			}
+		}
+		if branch != "" {
+			slug = slugifyBranch(branch)
 		}
 	}
 
@@ -543,6 +608,23 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 		step("✂️", fmt.Sprintf("Stripping user prefix %q from service names", strings.TrimSuffix(userPrefix, "-")))
 	}
 
+	// ── Branch-derived Ingress host ──────────────────────────────
+	// Any DSE that already has Ingress enabled but no host set gets the
+	// same branch-derived treatment as --name/--namespace — an explicit
+	// spec.ingress.host is never overridden. Without --staging-domain,
+	// a genuinely missing host fails the build instead of silently
+	// producing an unreachable environment (the previous "# TODO: set
+	// your staging hostname" placeholder behavior).
+	if snapshotDeploy {
+		derived, err := applyBranchIngressHost(dses, derivedIngressHost)
+		if err != nil {
+			return err
+		}
+		for _, name := range derived {
+			step("🌐", fmt.Sprintf("%s: derived Ingress host %s", name, derivedIngressHost))
+		}
+	}
+
 	chartName := snapshotName
 	if chartName == "" {
 		chartName = "kindling-snapshot"
@@ -559,7 +641,11 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 	if snapshotRegistry != "" {
 		tag := snapshotTag
 		if tag == "" {
-			tag = detectNextTag(snapshotRegistry, dses[0].Name)
+			tagPrefix := "snapshot"
+			if slug != "" {
+				tagPrefix = slug
+			}
+			tag = detectNextTag(snapshotRegistry, dses[0].Name, tagPrefix)
 		}
 		step("🏷", fmt.Sprintf("Re-tagging images → %s (tag: %s)", snapshotRegistry, tag))
 
@@ -706,7 +792,22 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 			vk := helmValuesKey(dse.Name)
 			if selectedSet[dse.Name] {
 				helmArgs = append(helmArgs, "--set", fmt.Sprintf("%s.ingress.enabled=true", vk))
-				helmArgs = append(helmArgs, "--set", fmt.Sprintf("%s.ingress.host=", vk))
+				// Prefer the host already resolved onto this DSE (explicit
+				// spec.ingress.host, or the branch-derived fallback applied
+				// above); only fall back to derivedIngressHost directly for
+				// a service selected here that had no Ingress config at all
+				// in dev. Never force it blank — that silently breaks
+				// Host-based routing on the shared staging cluster.
+				host := ""
+				if dse.Ingress != nil {
+					host = dse.Ingress.Host
+				}
+				if host == "" {
+					host = derivedIngressHost
+				}
+				if host != "" {
+					helmArgs = append(helmArgs, "--set", fmt.Sprintf("%s.ingress.host=%s", vk, host))
+				}
 				if ingClass != "" {
 					helmArgs = append(helmArgs, "--set", fmt.Sprintf("%s.ingress.ingressClassName=%s", vk, ingClass))
 				}
@@ -1780,28 +1881,38 @@ func detectGitTag() string {
 	return strings.TrimSpace(out)
 }
 
+// nextTagNumber scans existingTags for the highest existing "<prefix>-N"
+// tag and returns N+1 (or 1 if none match). Pure and unit-tested in
+// isolation — detectNextTag just supplies the tag list via `crane ls`.
+func nextTagNumber(existingTags []string, prefix string) int {
+	tagPrefix := prefix + "-"
+	max := 0
+	for _, tag := range existingTags {
+		tag = strings.TrimSpace(tag)
+		if !strings.HasPrefix(tag, tagPrefix) {
+			continue
+		}
+		if n, err := strconv.Atoi(strings.TrimPrefix(tag, tagPrefix)); err == nil && n > max {
+			max = n
+		}
+	}
+	return max + 1
+}
+
 // detectNextTag queries the target registry for the first service's existing
-// tags and returns the next sequential "snapshot-N" tag. Falls back to
-// "snapshot-1" if the registry is unreachable or has no prior snapshots.
-func detectNextTag(registry, sampleService string) string {
+// tags and returns the next sequential "<prefix>-N" tag. prefix is typically
+// the current branch's slug, so concurrent branches pushing to the same
+// shared registry get their own tag sequence instead of colliding on a
+// single "snapshot-N" one. Falls back to "<prefix>-1" if the registry is
+// unreachable or has no prior tags with that prefix.
+func detectNextTag(registry, sampleService, prefix string) string {
 	repo := strings.TrimRight(registry, "/") + "/" + helmSafe(sampleService)
 
 	out, err := runSilent("crane", "ls", repo)
 	if err != nil {
-		return "snapshot-1"
+		return fmt.Sprintf("%s-1", prefix)
 	}
-
-	max := 0
-	for _, line := range strings.Split(out, "\n") {
-		tag := strings.TrimSpace(line)
-		if strings.HasPrefix(tag, "snapshot-") {
-			numStr := strings.TrimPrefix(tag, "snapshot-")
-			if n, err := strconv.Atoi(numStr); err == nil && n > max {
-				max = n
-			}
-		}
-	}
-	return fmt.Sprintf("snapshot-%d", max+1)
+	return fmt.Sprintf("%s-%d", prefix, nextTagNumber(strings.Split(out, "\n"), prefix))
 }
 
 // registryPullRef rewrites an in-cluster image reference so it can be
