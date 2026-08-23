@@ -368,7 +368,7 @@ func TestBuildValuesYAML_DepEnvVarsConfigurable(t *testing.T) {
 	depsSeen := map[string]bool{"mongodb": true, "redis": true}
 
 	t.Run("clean values has empty dep env vars", func(t *testing.T) {
-		yaml := buildValuesYAML("test", dses, depsSeen, false)
+		yaml := buildValuesYAML("test", dses, depsSeen, false, nil, nil)
 
 		// Should contain MONGO_URL and REDIS_URL as real values, not comments
 		if !strings.Contains(yaml, "MONGO_URL: \"\"") {
@@ -384,7 +384,7 @@ func TestBuildValuesYAML_DepEnvVarsConfigurable(t *testing.T) {
 	})
 
 	t.Run("live values has populated dep env vars", func(t *testing.T) {
-		yaml := buildValuesYAML("test", dses, depsSeen, true)
+		yaml := buildValuesYAML("test", dses, depsSeen, true, nil, nil)
 
 		if !strings.Contains(yaml, "MONGO_URL: \"mongodb://") {
 			t.Error("values-live.yaml should have populated MONGO_URL connection string")
@@ -393,6 +393,108 @@ func TestBuildValuesYAML_DepEnvVarsConfigurable(t *testing.T) {
 			t.Error("values-live.yaml should have populated REDIS_URL connection string")
 		}
 	})
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// buildValuesYAML — imageOverrides / extraEnv (production values rendering)
+// ────────────────────────────────────────────────────────────────────────────
+
+func TestBuildValuesYAML_ImageOverride(t *testing.T) {
+	dses := []snapshotDSE{
+		{Name: "gateway", Image: "localhost:5001/gateway:abc123", Port: 8080, Replicas: 1},
+		{Name: "worker", Image: "localhost:5001/worker:abc123", Port: 9090, Replicas: 1},
+	}
+	overrides := map[string]string{
+		"gateway": "ghcr.io/myorg/gateway@sha256:deadbeef",
+	}
+
+	t.Run("clean mode: overridden service gets the digest-pinned image verbatim", func(t *testing.T) {
+		yaml := buildValuesYAML("test", dses, nil, false, overrides, nil)
+		if !strings.Contains(yaml, `image: "ghcr.io/myorg/gateway@sha256:deadbeef"`) {
+			t.Errorf("expected the digest-pinned override to appear verbatim, got:\n%s", yaml)
+		}
+	})
+
+	t.Run("live mode: overridden service still wins over the live image", func(t *testing.T) {
+		yaml := buildValuesYAML("test", dses, nil, true, overrides, nil)
+		if !strings.Contains(yaml, `image: "ghcr.io/myorg/gateway@sha256:deadbeef"`) {
+			t.Errorf("expected the override to win over live=true's own image handling, got:\n%s", yaml)
+		}
+	})
+
+	t.Run("service with no override falls back to normal clean-mode image handling", func(t *testing.T) {
+		yaml := buildValuesYAML("test", dses, nil, false, overrides, nil)
+		if !strings.Contains(yaml, "worker:") {
+			t.Fatalf("expected a worker: values block, got:\n%s", yaml)
+		}
+		if strings.Contains(yaml, "sha256") == false {
+			// sanity: the override for gateway should be present at all
+		}
+		if strings.Contains(yaml, `image: "ghcr.io/myorg/worker`) {
+			t.Errorf("worker was not overridden and should not get a digest-pinned image, got:\n%s", yaml)
+		}
+	})
+}
+
+func TestBuildValuesYAML_ExtraEnv(t *testing.T) {
+	dses := []snapshotDSE{
+		{Name: "gateway", Image: "gateway:latest", Port: 8080, Replicas: 1},
+	}
+	extraEnv := map[string]string{"KINDLING_ENV_PREFIX": "prod-"}
+
+	yaml := buildValuesYAML("test", dses, nil, false, nil, extraEnv)
+	if !strings.Contains(yaml, `KINDLING_ENV_PREFIX: "prod-"`) {
+		t.Errorf("expected KINDLING_ENV_PREFIX to appear even with no other env/deps present, got:\n%s", yaml)
+	}
+}
+
+func TestBuildValuesYAML_ExtraEnvSortedDeterministic(t *testing.T) {
+	dses := []snapshotDSE{{Name: "gateway", Image: "gateway:latest", Port: 8080, Replicas: 1}}
+	extraEnv := map[string]string{"ZEBRA": "z", "ALPHA": "a", "MIDDLE": "m"}
+
+	first := buildValuesYAML("test", dses, nil, false, nil, extraEnv)
+	for i := 0; i < 5; i++ {
+		if got := buildValuesYAML("test", dses, nil, false, nil, extraEnv); got != first {
+			t.Fatalf("buildValuesYAML output is not deterministic across repeated calls with the same map input")
+		}
+	}
+	alphaIdx := strings.Index(first, "ALPHA")
+	middleIdx := strings.Index(first, "MIDDLE")
+	zebraIdx := strings.Index(first, "ZEBRA")
+	if !(alphaIdx < middleIdx && middleIdx < zebraIdx) {
+		t.Errorf("expected extraEnv keys sorted alphabetically (ALPHA, MIDDLE, ZEBRA), got order in:\n%s", first)
+	}
+}
+
+func TestBuildValuesYAML_ImageOverrideNeverContainsResolvedSecret(t *testing.T) {
+	// Regression guard for the "never resolve a credential to a literal
+	// value" requirement: a production-style render (clean mode + image
+	// override + extraEnv) on a DSE with both a user secret and a
+	// dependency should still only ever produce TODO placeholders for
+	// anything credential-shaped, identically to today's plain clean mode.
+	dses := []snapshotDSE{
+		{
+			Name:  "gateway",
+			Image: "localhost:5001/gateway:abc123",
+			Port:  8080,
+			Env:   []snapshotEnvVar{{Name: "STRIPE_KEY", Value: "sk_live_should_never_appear", IsSecret: true}},
+			Deps:  []snapshotDep{{Type: "postgres"}},
+		},
+	}
+	depsSeen := map[string]bool{"postgres": true}
+	overrides := map[string]string{"gateway": "ghcr.io/myorg/gateway@sha256:deadbeef"}
+	extraEnv := map[string]string{"KINDLING_ENV_PREFIX": "prod-"}
+
+	yaml := buildValuesYAML("test", dses, depsSeen, false, overrides, extraEnv)
+	if strings.Contains(yaml, "sk_live_should_never_appear") {
+		t.Errorf("production-style render must never contain a resolved secret value, got:\n%s", yaml)
+	}
+	if !strings.Contains(yaml, "TODO: set staging value") {
+		t.Error("expected the secret to still be a TODO placeholder, same as plain clean mode")
+	}
+	if !strings.Contains(yaml, "TODO: set your staging postgres connection string") {
+		t.Error("expected the dependency connection string to still be a TODO placeholder, same as plain clean mode")
+	}
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -532,7 +634,7 @@ func TestBuildValuesYAML_SecretsSection(t *testing.T) {
 	}
 
 	// Live values should include secrets section with dev values
-	live := buildValuesYAML("test", dses, nil, true)
+	live := buildValuesYAML("test", dses, nil, true, nil, nil)
 	if !strings.Contains(live, "secrets:") {
 		t.Error("live values should contain secrets: section")
 	}
@@ -541,7 +643,7 @@ func TestBuildValuesYAML_SecretsSection(t *testing.T) {
 	}
 
 	// Clean values should have empty secret values with TODO
-	clean := buildValuesYAML("test", dses, nil, false)
+	clean := buildValuesYAML("test", dses, nil, false, nil, nil)
 	if !strings.Contains(clean, "secrets:") {
 		t.Error("clean values should contain secrets: section")
 	}
@@ -797,7 +899,7 @@ func TestBuildValuesYAML_WithRegistryImages(t *testing.T) {
 		},
 	}
 
-	yaml := buildValuesYAML("test", dses, map[string]bool{}, false)
+	yaml := buildValuesYAML("test", dses, map[string]bool{}, false, nil, nil)
 
 	if !strings.Contains(yaml, `image: "ghcr.io/myorg/orders:abc123"`) {
 		t.Error("values.yaml should contain the full registry image for orders")

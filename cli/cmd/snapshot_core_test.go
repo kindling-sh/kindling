@@ -269,7 +269,7 @@ func TestBuildValuesYAML_ComputeTag(t *testing.T) {
 		},
 	}
 
-	yaml := buildValuesYAML("test", dses, map[string]bool{}, false)
+	yaml := buildValuesYAML("test", dses, map[string]bool{}, false, nil, nil)
 
 	// Service with compute tag should have it set
 	if !strings.Contains(yaml, `compute: "gpu"`) {
@@ -293,7 +293,7 @@ func TestBuildValuesYAML_ComputeLive(t *testing.T) {
 		},
 	}
 
-	yaml := buildValuesYAML("test", dses, map[string]bool{}, true)
+	yaml := buildValuesYAML("test", dses, map[string]bool{}, true, nil, nil)
 
 	if !strings.Contains(yaml, `compute: "high-memory"`) {
 		t.Error("live values should contain compute tag")
