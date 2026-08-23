@@ -55,6 +55,30 @@ func TestSlugifyBranch_Deterministic(t *testing.T) {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// deriveIngressHost
+// ────────────────────────────────────────────────────────────────────────────
+
+func TestDeriveIngressHost(t *testing.T) {
+	tests := []struct {
+		name   string
+		slug   string
+		domain string
+		want   string
+	}{
+		{"bare domain gets staging. inserted", "example-branch", "subnode1.xyz", "example-branch.staging.subnode1.xyz"},
+		{"domain already prefixed with staging. is not doubled", "example-branch", "staging.subnode1.xyz", "example-branch.staging.subnode1.xyz"},
+		{"multi-part branch slug", "feature-checkout-retry", "example.com", "feature-checkout-retry.staging.example.com"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := deriveIngressHost(tt.slug, tt.domain); got != tt.want {
+				t.Errorf("deriveIngressHost(%q, %q) = %q, want %q", tt.slug, tt.domain, got, tt.want)
+			}
+		})
+	}
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // applyBranchIngressHost
 // ────────────────────────────────────────────────────────────────────────────
 

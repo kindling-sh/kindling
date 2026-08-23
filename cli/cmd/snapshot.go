@@ -38,7 +38,7 @@ and --registry is required to make images accessible outside Kind. Unless
 current git branch (or --branch), so concurrent branches deployed to the
 same shared staging cluster never collide. Any DSE with Ingress enabled
 but no host set gets a branch-derived host too, via --staging-domain
-(<branch-slug>.<staging-domain>) — an explicit spec.ingress.host always
+(<branch-slug>.staging.<domain>) — an explicit spec.ingress.host always
 wins over the derived one.
 
 Examples:
@@ -58,7 +58,8 @@ Examples:
   kindling snapshot -r ghcr.io/myorg --deploy --context staging
 
   # ...with a branch-derived, resolvable Ingress host too
-  kindling snapshot -r ghcr.io/myorg --deploy --context staging --staging-domain staging.example.com`,
+  # (-> feature-checkout-retry.staging.example.com)
+  kindling snapshot -r ghcr.io/myorg --deploy --context staging --staging-domain example.com`,
 	RunE: runSnapshot,
 }
 
@@ -85,7 +86,7 @@ func init() {
 	snapshotCmd.Flags().StringVar(&snapshotContext, "context", "", "Kubeconfig context for the staging cluster (required with --deploy)")
 	snapshotCmd.Flags().StringVar(&snapshotNamespace, "namespace", "default", "Kubernetes namespace to deploy into (used with --deploy)")
 	snapshotCmd.Flags().StringVar(&snapshotBranch, "branch", "", "Git branch to derive the staging environment name from (default: current branch; used with --deploy or --registry)")
-	snapshotCmd.Flags().StringVar(&snapshotStagingDomain, "staging-domain", "", "Base domain for branch-derived Ingress hosts, e.g. staging.example.com (required for --deploy if the DSE doesn't already set an Ingress host)")
+	snapshotCmd.Flags().StringVar(&snapshotStagingDomain, "staging-domain", "", "Base domain for branch-derived Ingress hosts -- result is '<branch-slug>.staging.<domain>', e.g. subnode1.xyz (required for --deploy if the DSE doesn't already set an Ingress host)")
 	rootCmd.AddCommand(snapshotCmd)
 }
 
@@ -125,6 +126,19 @@ func slugifyBranch(branch string) string {
 		return "branch" // pathological case: branch name was all symbols
 	}
 	return s
+}
+
+// deriveIngressHost composes the branch-scoped Ingress host as
+// "<slug>.staging.<domain>". The "staging." segment is always inserted —
+// not just whatever the caller happened to pass as --staging-domain —
+// so every derived host predictably lives under one wildcard-coverable
+// subdomain (matching a shared staging cluster's *.staging.<domain>
+// DNS/TLS setup) regardless of whether --staging-domain was given as a
+// bare domain (subnode1.xyz) or already included "staging." out of habit
+// (staging.subnode1.xyz, silently de-duplicated rather than doubled up).
+func deriveIngressHost(slug, domain string) string {
+	domain = strings.TrimPrefix(domain, "staging.")
+	return fmt.Sprintf("%s.staging.%s", slug, domain)
 }
 
 // applyBranchIngressHost fills in the Ingress host for any DSE that has
@@ -557,7 +571,7 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 			snapshotNamespace = slug
 		}
 		if snapshotStagingDomain != "" {
-			derivedIngressHost = fmt.Sprintf("%s.%s", slug, snapshotStagingDomain)
+			derivedIngressHost = deriveIngressHost(slug, snapshotStagingDomain)
 		}
 	} else if snapshotRegistry != "" {
 		// Not deploying, but still pushing to a registry — still derive a

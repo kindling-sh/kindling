@@ -94,7 +94,7 @@ kindling snapshot -r ghcr.io/myorg --deploy --context my-staging --branch featur
 
 # Give each branch a real, resolvable Ingress host too (requires a
 # wildcard DNS/TLS setup on *.staging.example.com on the target cluster)
-kindling snapshot -r ghcr.io/myorg --deploy --context my-staging --staging-domain staging.example.com
+kindling snapshot -r ghcr.io/myorg --deploy --context my-staging --staging-domain example.com
 # -> feature-checkout-retry.staging.example.com, unique per branch
 ```
 
