@@ -486,6 +486,8 @@ With `--deploy`, unless `--name`/`--namespace` are set explicitly, both are deri
 
 Unless `--tag` is set explicitly, `--registry` pushes (with or without `--deploy`) auto-detect the next sequential `<branch-slug>-N` tag for the current branch, so concurrent branches pushing to the same shared registry get their own tag sequence instead of colliding on a single `snapshot-N` one.
 
+With `--render-prod-values` (requires `--registry` in the same invocation), an additional `values-prod.yaml` is written alongside the chart: the same clean-defaults values every service already gets (TODO placeholders for anything credential-shaped, dependency connection strings included), except each service's `image` is pinned to the exact digest just pushed (`registry/name@sha256:...`, never a mutable tag) and `KINDLING_ENV_PREFIX` (default `prod-`, override with `--prod-env-prefix`) is added to every service's env. Kindling never generates, resolves, or stores an actual credential value here — the chart's Deployment template already wires every secret-backed env var to a `secretKeyRef` against a chart-managed Secret, identically for staging and production since both deploy the same chart; filling in the real value is a manual step (or whatever process your team already uses), by design, not something `--render-prod-values` does.
+
 **Flags:**
 
 | Flag | Short | Default | Description |
@@ -500,6 +502,8 @@ Unless `--tag` is set explicitly, `--registry` pushes (with or without `--deploy
 | `--namespace` | | `default` (or branch slug with `--deploy`) | Namespace to deploy into |
 | `--branch` | | current git branch | Git branch to derive the staging name/namespace/Ingress host/image tag from (used with `--deploy` or `--registry`) |
 | `--staging-domain` | | — | Base domain for branch-derived Ingress hosts — result is `<branch-slug>.staging.<domain>`, e.g. `subnode1.xyz` (required for `--deploy` if the DSE doesn't already set an Ingress host) |
+| `--render-prod-values` | | `false` | Write a `values-prod.yaml` with the promoted image digest pinned in, alongside the chart (requires `--registry`) |
+| `--prod-env-prefix` | | `prod-` | `KINDLING_ENV_PREFIX` value injected into every service's env when using `--render-prod-values` |
 
 **Examples:**
 
@@ -520,6 +524,10 @@ kindling snapshot -r ghcr.io/myorg --deploy --context do-staging
 # ...with a branch-derived, resolvable Ingress host too
 # (-> feature-checkout-retry.staging.example.com)
 kindling snapshot -r ghcr.io/myorg --deploy --context do-staging --staging-domain example.com
+
+# Push images and also write values-prod.yaml, pinned to the pushed digest
+# (no deploy — kindling never touches a production cluster or credential)
+kindling snapshot -r ghcr.io/myorg --render-prod-values
 ```
 
 **Manual usage:**

@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -64,16 +65,18 @@ Examples:
 }
 
 var (
-	snapshotFormat        string
-	snapshotOutput        string
-	snapshotName          string
-	snapshotRegistry      string
-	snapshotTag           string
-	snapshotDeploy        bool
-	snapshotContext       string
-	snapshotNamespace     string
-	snapshotBranch        string
-	snapshotStagingDomain string
+	snapshotFormat           string
+	snapshotOutput           string
+	snapshotName             string
+	snapshotRegistry         string
+	snapshotTag              string
+	snapshotDeploy           bool
+	snapshotContext          string
+	snapshotNamespace        string
+	snapshotBranch           string
+	snapshotStagingDomain    string
+	snapshotRenderProdValues bool
+	snapshotProdEnvPrefix    string
 )
 
 func init() {
@@ -87,6 +90,8 @@ func init() {
 	snapshotCmd.Flags().StringVar(&snapshotNamespace, "namespace", "default", "Kubernetes namespace to deploy into (used with --deploy)")
 	snapshotCmd.Flags().StringVar(&snapshotBranch, "branch", "", "Git branch to derive the staging environment name from (default: current branch; used with --deploy or --registry)")
 	snapshotCmd.Flags().StringVar(&snapshotStagingDomain, "staging-domain", "", "Base domain for branch-derived Ingress hosts -- result is '<branch-slug>.staging.<domain>', e.g. subnode1.xyz (required for --deploy if the DSE doesn't already set an Ingress host)")
+	snapshotCmd.Flags().BoolVar(&snapshotRenderProdValues, "render-prod-values", false, "Render a values-prod.yaml (chart's normal clean-value placeholders for anything credential-shaped, plus the pinned image digest) alongside the chart -- requires --registry in the same invocation")
+	snapshotCmd.Flags().StringVar(&snapshotProdEnvPrefix, "prod-env-prefix", "prod-", "KINDLING_ENV_PREFIX value to inject for the production environment (used with --render-prod-values)")
 	rootCmd.AddCommand(snapshotCmd)
 }
 
@@ -538,6 +543,10 @@ var depRegistry = map[string]depDefaults{
 // ── Main command ────────────────────────────────────────────────
 
 func runSnapshot(cmd *cobra.Command, args []string) error {
+	if snapshotRenderProdValues && snapshotRegistry == "" {
+		return fmt.Errorf("--registry is required with --render-prod-values (production values need a promoted image digest, which only exists once images are pushed)")
+	}
+
 	// ── Validate --deploy prerequisites ────────────────────────
 	var branch, slug, derivedIngressHost string
 	if snapshotDeploy {
@@ -652,6 +661,7 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 
 	// ── Registry: re-tag and push images ────────────────────────
 	var regUser, regPass string
+	var pushedDigests map[string]string // dse.Name -> "sha256:...", populated when --registry pushes
 	if snapshotRegistry != "" {
 		tag := snapshotTag
 		if tag == "" {
@@ -681,9 +691,11 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("registry credentials cancelled: %w", err)
 		}
 
-		if err := craneCopyImages(dses, snapshotRegistry, tag, userPrefix, regUser, regPass); err != nil {
+		digests, err := craneCopyImages(dses, snapshotRegistry, tag, userPrefix, regUser, regPass)
+		if err != nil {
 			return fmt.Errorf("image push failed: %w", err)
 		}
+		pushedDigests = digests
 	}
 
 	// ── Prompt for secret values ────────────────────────────────
@@ -695,6 +707,53 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 
 	if err := exportSnapshot(snapshotFormat, outDir, chartName, dses); err != nil {
 		return err
+	}
+
+	// ── Production values (secretKeyRef + pinned image digest only) ──
+	// Deliberately reuses the same "clean" values.yaml this chart already
+	// produces for staging (buildValuesYAML with live=false) rather than
+	// inventing a new credential-reference convention: that output never
+	// contains a resolved secret today (TODO-placeholder for anything
+	// credential-shaped), and the chart's Deployment template already
+	// wires every IsSecret env var to a secretKeyRef against a chart-
+	// managed Secret, identically for staging and production since both
+	// deploy the same chart. The only things this adds are a concrete,
+	// digest-pinned image (a resolved value, not a placeholder — that's
+	// the whole point of promoting a specific build) and an env-prefix
+	// marker. Real production credential values are never generated,
+	// stored, or seen by kindling — filling in the chart-managed Secret
+	// (or wiring an external one) is entirely up to whatever process the
+	// team already uses, deliberately out of scope here.
+	if snapshotRenderProdValues {
+		header("Rendering production values")
+
+		imageOverrides := make(map[string]string, len(dses))
+		var missingDigest []string
+		for _, dse := range dses {
+			digest, ok := pushedDigests[dse.Name]
+			if !ok {
+				missingDigest = append(missingDigest, dse.Name)
+				continue
+			}
+			imageOverrides[dse.Name] = fmt.Sprintf("%s/%s@%s",
+				strings.TrimRight(snapshotRegistry, "/"), helmSafe(dse.Name), digest)
+		}
+		if len(missingDigest) > 0 {
+			return fmt.Errorf("no promoted digest found for %s — did the --registry push run for these services in this same invocation?",
+				strings.Join(missingDigest, ", "))
+		}
+
+		depsSeen := make(map[string]bool)
+		for _, dse := range dses {
+			for _, dep := range dse.Deps {
+				depsSeen[dep.Type] = true
+			}
+		}
+
+		prodValues := buildValuesYAML(chartName, dses, depsSeen, false, imageOverrides,
+			map[string]string{"KINDLING_ENV_PREFIX": snapshotProdEnvPrefix})
+		writeSnapshotFile(outDir, "values-prod.yaml", prodValues)
+		success(fmt.Sprintf("Production values written to %s", filepath.Join(outDir, "values-prod.yaml")))
 	}
 
 	// ── Deploy to staging cluster ───────────────────────────
@@ -899,11 +958,11 @@ tmp
 	writeSnapshotFile(outDir, ".helmignore", helmIgnore)
 
 	// ── values.yaml (clean chart with commented examples) ───────
-	valuesYAML := buildValuesYAML(chartName, dses, depsSeen, false)
+	valuesYAML := buildValuesYAML(chartName, dses, depsSeen, false, nil, nil)
 	writeSnapshotFile(outDir, "values.yaml", valuesYAML)
 
 	// ── values-live.yaml (populated from current cluster) ───────
-	liveYAML := buildValuesYAML(chartName, dses, depsSeen, true)
+	liveYAML := buildValuesYAML(chartName, dses, depsSeen, true, nil, nil)
 	writeSnapshotFile(outDir, "values-live.yaml", liveYAML)
 
 	// ── Templates: service deployments ──────────────────────────
@@ -960,7 +1019,17 @@ app.kubernetes.io/part-of: %s
 
 // buildValuesYAML generates either a clean values.yaml with commented examples (live=false)
 // or a fully-populated values-live.yaml with actual running values (live=true).
-func buildValuesYAML(chartName string, dses []snapshotDSE, depsSeen map[string]bool, live bool) string {
+// buildValuesYAML renders a chart's values.yaml (live=true: current cluster
+// values; live=false: clean defaults with TODO placeholders for anything
+// credential-shaped, safe to commit). imageOverrides, keyed by DSE name,
+// replaces a service's image wholesale when present (used to pin a
+// production render to a digest — e.g. "registry/name@sha256:..." — rather
+// than the tag-based staging image); nil means no override for any service.
+// extraEnv adds literal, non-secret env vars to every service (e.g.
+// KINDLING_ENV_PREFIX for a production render); nil/empty adds nothing.
+// Iterated in sorted key order so output stays deterministic regardless of
+// map iteration order.
+func buildValuesYAML(chartName string, dses []snapshotDSE, depsSeen map[string]bool, live bool, imageOverrides map[string]string, extraEnv map[string]string) string {
 	var buf strings.Builder
 
 	if live {
@@ -983,7 +1052,11 @@ func buildValuesYAML(chartName string, dses []snapshotDSE, depsSeen map[string]b
 
 		buf.WriteString(fmt.Sprintf("%s:\n", vk))
 
-		if live {
+		if override, ok := imageOverrides[dse.Name]; ok {
+			// A concrete, digest-pinned image is a resolved value, not a
+			// placeholder — write it verbatim regardless of live/clean mode.
+			buf.WriteString(fmt.Sprintf("  image: \"%s\"\n", override))
+		} else if live {
 			buf.WriteString(fmt.Sprintf("  image: \"%s\"\n", liveImage))
 		} else {
 			buf.WriteString(fmt.Sprintf("  image: \"%s\"", stagingImg))
@@ -1011,7 +1084,7 @@ func buildValuesYAML(chartName string, dses []snapshotDSE, depsSeen map[string]b
 				break
 			}
 		}
-		if hasPlainEnv || len(dse.Deps) > 0 {
+		if hasPlainEnv || len(dse.Deps) > 0 || len(extraEnv) > 0 {
 			buf.WriteString("  env:\n")
 			// Non-secret user env vars
 			for _, e := range dse.Env {
@@ -1023,6 +1096,17 @@ func buildValuesYAML(chartName string, dses []snapshotDSE, depsSeen map[string]b
 				} else {
 					buf.WriteString(fmt.Sprintf("    %s: \"%s\"  # ← live value\n", e.Name, e.Value))
 				}
+			}
+			// Extra literal env vars supplied by the caller (e.g.
+			// KINDLING_ENV_PREFIX for a production render) — sorted for
+			// deterministic output, since map iteration order isn't.
+			extraKeys := make([]string, 0, len(extraEnv))
+			for k := range extraEnv {
+				extraKeys = append(extraKeys, k)
+			}
+			sort.Strings(extraKeys)
+			for _, k := range extraKeys {
+				buf.WriteString(fmt.Sprintf("    %s: \"%s\"\n", k, extraEnv[k]))
 			}
 			// Dependency connection strings — real configurable values
 			for _, dep := range dse.Deps {
@@ -2031,10 +2115,10 @@ func startRegistryPortForward() (int, func(), error) {
 // stripped from DSE names. It's needed to find images in the Docker daemon
 // because `kindling load` tags them with the original prefixed name
 // (e.g. "jeff-vincent-gateway:12345").
-func craneCopyImages(dses []snapshotDSE, registry, tag, userPrefix, regUser, regPass string) error {
+func craneCopyImages(dses []snapshotDSE, registry, tag, userPrefix, regUser, regPass string) (map[string]string, error) {
 	// Check crane is installed
 	if _, err := exec.LookPath("crane"); err != nil {
-		return fmt.Errorf("crane is required for --registry (brew install crane)")
+		return nil, fmt.Errorf("crane is required for --registry (brew install crane)")
 	}
 
 	// Build a temporary Docker config dir so crane bypasses
@@ -2044,13 +2128,13 @@ func craneCopyImages(dses []snapshotDSE, registry, tag, userPrefix, regUser, reg
 	if regUser != "" && regPass != "" {
 		tmpDir, err := os.MkdirTemp("", "kindling-crane-*")
 		if err != nil {
-			return fmt.Errorf("cannot create temp docker config: %w", err)
+			return nil, fmt.Errorf("cannot create temp docker config: %w", err)
 		}
 		defer os.RemoveAll(tmpDir)
 
 		// Write a minimal config with no credsStore
 		if err := os.WriteFile(filepath.Join(tmpDir, "config.json"), []byte(`{"auths":{}}`), 0600); err != nil {
-			return fmt.Errorf("cannot write temp docker config: %w", err)
+			return nil, fmt.Errorf("cannot write temp docker config: %w", err)
 		}
 
 		craneEnv = []string{"DOCKER_CONFIG=" + tmpDir}
@@ -2059,7 +2143,7 @@ func craneCopyImages(dses []snapshotDSE, registry, tag, userPrefix, regUser, reg
 		loginCmd := exec.Command("crane", "auth", "login", regHost, "-u", regUser, "-p", regPass)
 		loginCmd.Env = append(os.Environ(), craneEnv...)
 		if out, err := loginCmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("crane auth login failed for %s: %w (output: %s)", regHost, err, string(out))
+			return nil, fmt.Errorf("crane auth login failed for %s: %w (output: %s)", regHost, err, string(out))
 		}
 		step("🔑", fmt.Sprintf("Authenticated to %s", regHost))
 	}
@@ -2091,18 +2175,36 @@ func craneCopyImages(dses []snapshotDSE, registry, tag, userPrefix, regUser, reg
 		var err error
 		localPort, cleanup, err = startRegistryPortForward()
 		if err != nil {
-			return fmt.Errorf("cannot reach registry: %w", err)
+			return nil, fmt.Errorf("cannot reach registry: %w", err)
 		}
 		defer cleanup()
 	}
 
-	seen := make(map[string]bool)
+	// attempted marks every unique source image string already pushed (or
+	// attempted), same dedup semantics as before this function also
+	// started returning digests. dstFor/digestFor let a second DSE
+	// sharing the exact same source image (e.g. a shared monorepo build)
+	// reuse the first one's push result — Image rewrite and digest both
+	// — instead of being silently left pointed at the pre-push image.
+	attempted := make(map[string]bool)
+	dstFor := make(map[string]string)
+	digestFor := make(map[string]string) // dst -> digest
+	digests := make(map[string]string)   // dse.Name -> digest
 	var failed []string
 	for i := range dses {
-		if dses[i].Image == "" || seen[dses[i].Image] {
+		if dses[i].Image == "" {
 			continue
 		}
-		seen[dses[i].Image] = true
+		srcImage := dses[i].Image
+
+		if attempted[srcImage] {
+			if dst, ok := dstFor[srcImage]; ok {
+				dses[i].Image = dst
+				digests[dses[i].Name] = digestFor[dst]
+			}
+			continue
+		}
+		attempted[srcImage] = true
 
 		dst := registryImage(dses[i].Name, registry, tag)
 		step("📤", fmt.Sprintf("%s → %s", dses[i].Name, dst))
@@ -2113,8 +2215,8 @@ func craneCopyImages(dses []snapshotDSE, registry, tag, userPrefix, regUser, reg
 		// the CI runner are linux/amd64 regardless of host arch. Docker
 		// daemon images may be the host arch (arm64 on Apple Silicon)
 		// which would cause "exec format error" on amd64 prod nodes.
-		if !pushed && isClusterRegistryImage(dses[i].Image) {
-			src := registryPullRef(dses[i].Image, localPort)
+		if !pushed && isClusterRegistryImage(srcImage) {
+			src := registryPullRef(srcImage, localPort)
 			if out, err := runCrane("copy", "--insecure", src, dst); err == nil {
 				pushed = true
 			} else {
@@ -2145,17 +2247,32 @@ func craneCopyImages(dses []snapshotDSE, registry, tag, userPrefix, regUser, reg
 			continue
 		}
 
+		// Resolve the digest of what's now actually at dst — works
+		// identically regardless of which push path above succeeded,
+		// since it's a registry read against the destination, not
+		// something parsed from either push mechanism's own output
+		// (crane copy doesn't reliably print one, and docker push's
+		// format differs from crane's entirely).
+		digest, err := runCrane("digest", dst)
+		if err != nil {
+			warn(fmt.Sprintf("Pushed %s but could not resolve its digest: %v — production values.yaml rendering (--render-prod-values) will fail for this service", dses[i].Name, err))
+		} else {
+			digests[dses[i].Name] = digest
+			digestFor[dst] = digest
+		}
+
 		// Only rewrite the image ref once the push has actually succeeded.
 		dses[i].Image = dst
+		dstFor[srcImage] = dst
 	}
 
 	if len(failed) > 0 {
-		return fmt.Errorf("%d/%d image(s) could not be pushed: %s — refusing to deploy, since the destination tag(s) may already reference a stale or wrong-architecture image",
-			len(failed), len(seen), strings.Join(failed, ", "))
+		return nil, fmt.Errorf("%d/%d image(s) could not be pushed: %s — refusing to deploy, since the destination tag(s) may already reference a stale or wrong-architecture image",
+			len(failed), len(attempted), strings.Join(failed, ", "))
 	}
 
 	success("Images pushed to registry")
-	return nil
+	return digests, nil
 }
 
 // findDockerImage searches the local Docker daemon for the most recent

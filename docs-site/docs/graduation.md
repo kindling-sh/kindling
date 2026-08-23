@@ -115,6 +115,16 @@ helm install my-app ./kindling-snapshot \
   --set gateway.env.DATABASE_URL=postgres://staging-host:5432/mydb
 ```
 
+### Rendering values for production — without deploying anything
+
+`--render-prod-values` writes a `values-prod.yaml` alongside the chart, for handing off to whatever process takes a chart the rest of the way into production (a GitOps controller, a platform team's own pipeline, `helm install` run by someone else with a production credential kindling never holds):
+
+```bash
+kindling snapshot -r ghcr.io/myorg --render-prod-values
+```
+
+This is the same clean-defaults `values.yaml` every service already gets — TODO placeholders for anything credential-shaped, dependency connection strings included — except each service's `image` is pinned to the exact digest that was just pushed (`registry/name@sha256:...`, never a mutable tag), and `KINDLING_ENV_PREFIX` (default `prod-`, override with `--prod-env-prefix`) is added to every service's env. Kindling never generates, resolves, or stores a real credential anywhere in this path — the chart's Deployment template already wires every secret-backed env var to a `secretKeyRef` against a chart-managed Secret, identically for staging and production since both deploy the same chart. Filling in the real value in that Secret (or wiring an external one) is entirely up to your own process, by design.
+
 ---
 
 ## Step 2: Configure TLS

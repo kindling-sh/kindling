@@ -55,7 +55,7 @@ func pushSnapshotImages(dses []snapshotDSE, registry, tag, userPrefix, regUser, 
 
 	progress(fmt.Sprintf("Pushing images to %s (tag: %s)", registry, tag))
 
-	if err := craneCopyImages(dses, registry, tag, userPrefix, regUser, regPass); err != nil {
+	if _, err := craneCopyImages(dses, registry, tag, userPrefix, regUser, regPass); err != nil {
 		return err
 	}
 
