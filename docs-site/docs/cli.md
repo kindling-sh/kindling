@@ -488,6 +488,8 @@ Unless `--tag` is set explicitly, `--registry` pushes (with or without `--deploy
 
 With `--render-prod-values` (requires `--registry` in the same invocation), an additional `values-prod.yaml` is written alongside the chart: the same clean-defaults values every service already gets (TODO placeholders for anything credential-shaped, dependency connection strings included), except each service's `image` is pinned to the exact digest just pushed (`registry/name@sha256:...`, never a mutable tag) and `KINDLING_ENV_PREFIX` (default `prod-`, override with `--prod-env-prefix`) is added to every service's env. Kindling never generates, resolves, or stores an actual credential value here — the chart's Deployment template already wires every secret-backed env var to a `secretKeyRef` against a chart-managed Secret, identically for staging and production since both deploy the same chart; filling in the real value is a manual step (or whatever process your team already uses), by design, not something `--render-prod-values` does.
 
+Combine `--render-prod-values` with `--deploy` in one call for the typical CI shape (a GH Actions job on `pull_request`): the production values are only written **after** the staging deploy actually succeeds, so a failed staging deploy never produces a `values-prod.yaml` — a later workflow step can use the file's mere existence as a pass/fail signal, then diff it against `environments/production/values.yaml` to flag whatever secrets the new build now needs before anyone merges.
+
 **Flags:**
 
 | Flag | Short | Default | Description |
@@ -528,6 +530,10 @@ kindling snapshot -r ghcr.io/myorg --deploy --context do-staging --staging-domai
 # Push images and also write values-prod.yaml, pinned to the pushed digest
 # (no deploy — kindling never touches a production cluster or credential)
 kindling snapshot -r ghcr.io/myorg --render-prod-values
+
+# Typical CI shape: deploy to staging, then (only if that succeeded)
+# write values-prod.yaml for a later workflow step to diff/review
+kindling snapshot -r ghcr.io/myorg --deploy --context do-staging --render-prod-values
 ```
 
 **Manual usage:**

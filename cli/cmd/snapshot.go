@@ -42,6 +42,16 @@ but no host set gets a branch-derived host too, via --staging-domain
 (<branch-slug>.staging.<domain>) — an explicit spec.ingress.host always
 wins over the derived one.
 
+With --render-prod-values (requires --registry), a values-prod.yaml is
+also written — the chart's usual clean-value placeholders, plus each
+service's image pinned to the exact digest just pushed. Combine it with
+--deploy in one call (the common case: a GH Actions job on pull_request)
+and it only runs after the staging deploy actually succeeds — a failed
+staging deploy never produces a values-prod.yaml, so a later workflow
+step can rely on its mere existence as a pass/fail signal, then diff it
+against environments/production/values.yaml to flag whatever secrets
+the new build now needs before anyone merges.
+
 Examples:
   kindling snapshot                          # Helm chart in ./kindling-snapshot/
   kindling snapshot --format kustomize       # Kustomize overlay
@@ -60,7 +70,11 @@ Examples:
 
   # ...with a branch-derived, resolvable Ingress host too
   # (-> feature-checkout-retry.staging.example.com)
-  kindling snapshot -r ghcr.io/myorg --deploy --context staging --staging-domain example.com`,
+  kindling snapshot -r ghcr.io/myorg --deploy --context staging --staging-domain example.com
+
+  # Typical CI shape: deploy to staging, then (only if that succeeded)
+  # write values-prod.yaml for a later step to diff/review
+  kindling snapshot -r ghcr.io/myorg --deploy --context staging --render-prod-values`,
 	RunE: runSnapshot,
 }
 
@@ -90,7 +104,7 @@ func init() {
 	snapshotCmd.Flags().StringVar(&snapshotNamespace, "namespace", "default", "Kubernetes namespace to deploy into (used with --deploy)")
 	snapshotCmd.Flags().StringVar(&snapshotBranch, "branch", "", "Git branch to derive the staging environment name from (default: current branch; used with --deploy or --registry)")
 	snapshotCmd.Flags().StringVar(&snapshotStagingDomain, "staging-domain", "", "Base domain for branch-derived Ingress hosts -- result is '<branch-slug>.staging.<domain>', e.g. subnode1.xyz (required for --deploy if the DSE doesn't already set an Ingress host)")
-	snapshotCmd.Flags().BoolVar(&snapshotRenderProdValues, "render-prod-values", false, "Render a values-prod.yaml (chart's normal clean-value placeholders for anything credential-shaped, plus the pinned image digest) alongside the chart -- requires --registry in the same invocation")
+	snapshotCmd.Flags().BoolVar(&snapshotRenderProdValues, "render-prod-values", false, "Render a values-prod.yaml (chart's normal clean-value placeholders for anything credential-shaped, plus the pinned image digest) alongside the chart -- requires --registry; with --deploy, only runs after the staging deploy succeeds")
 	snapshotCmd.Flags().StringVar(&snapshotProdEnvPrefix, "prod-env-prefix", "prod-", "KINDLING_ENV_PREFIX value to inject for the production environment (used with --render-prod-values)")
 	rootCmd.AddCommand(snapshotCmd)
 }
@@ -724,7 +738,20 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 	// stored, or seen by kindling — filling in the chart-managed Secret
 	// (or wiring an external one) is entirely up to whatever process the
 	// team already uses, deliberately out of scope here.
-	if snapshotRenderProdValues {
+	//
+	// Deliberately a closure, not called inline here: with --deploy also
+	// set, this only runs after the staging deploy itself has actually
+	// succeeded (see below) — a GH Actions workflow step later in the
+	// same job can trust that a values-prod.yaml showing up means staging
+	// deployed cleanly, a simple fast-fail wiring point between "push to
+	// staging" and "diff/review what would ship to production," in one
+	// invocation. Without --deploy, it still runs right here — same
+	// output either way, just gated on whether there was a staging
+	// deploy to wait on first.
+	renderProdValues := func() error {
+		if !snapshotRenderProdValues {
+			return nil
+		}
 		header("Rendering production values")
 
 		imageOverrides := make(map[string]string, len(dses))
@@ -754,11 +781,12 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 			map[string]string{"KINDLING_ENV_PREFIX": snapshotProdEnvPrefix})
 		writeSnapshotFile(outDir, "values-prod.yaml", prodValues)
 		success(fmt.Sprintf("Production values written to %s", filepath.Join(outDir, "values-prod.yaml")))
+		return nil
 	}
 
 	// ── Deploy to staging cluster ───────────────────────────
 	if !snapshotDeploy {
-		return nil
+		return renderProdValues()
 	}
 
 	header("Deploying to staging")
@@ -901,6 +929,15 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 	}
 
 	success("Deployed to staging")
+
+	// Only render production values once the staging deploy above has
+	// actually succeeded (every error path up to here already returned) —
+	// this is the fast-fail behavior: a failed staging deploy never
+	// produces a values-prod.yaml for a later workflow step to diff.
+	if err := renderProdValues(); err != nil {
+		return err
+	}
+
 	fmt.Println()
 	fmt.Printf("  Check pods:     %skubectl --context %s -n %s get pods%s\n", colorCyan, snapshotContext, snapshotNamespace, colorReset)
 	fmt.Printf("  Check services: %skubectl --context %s -n %s get svc%s\n", colorCyan, snapshotContext, snapshotNamespace, colorReset)
