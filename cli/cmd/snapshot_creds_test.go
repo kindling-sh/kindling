@@ -666,3 +666,127 @@ func TestDeriveEncryptionKey_Stable(t *testing.T) {
 		t.Error("key derivation should be deterministic")
 	}
 }
+
+// ════════════════════════════════════════════════════════════════
+// resolveDeployCredentials (unified resolution)
+// ════════════════════════════════════════════════════════════════
+
+func TestResolveDeployCredentials_ConfigFileTakesPrecedence(t *testing.T) {
+	dses := []snapshotDSE{
+		{Name: "orders", Deps: []snapshotDep{{Type: "postgres"}}},
+	}
+	cfg := &resolvedCredsConfig{values: map[string]string{
+		"DATABASE_URL": "postgres://staging-real@db:5432/app",
+	}}
+
+	overrides, missing, err := resolveDeployCredentials("test-chart", "", dses, cfg, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(missing) != 0 {
+		t.Errorf("expected no missing credentials, got %v", missing)
+	}
+	vk := helmValuesKey("orders")
+	if overrides[vk]["DATABASE_URL"].Value != "postgres://staging-real@db:5432/app" {
+		t.Errorf("expected config value to win, got %q", overrides[vk]["DATABASE_URL"].Value)
+	}
+}
+
+func TestResolveDeployCredentials_DevValueAutomaticNonInteractive(t *testing.T) {
+	dses := []snapshotDSE{
+		{Name: "orders", Deps: []snapshotDep{{Type: "postgres"}}},
+	}
+
+	overrides, missing, err := resolveDeployCredentials("test-chart", "", dses, nil, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(missing) != 0 {
+		t.Errorf("expected no missing credentials (dev value should apply automatically), got %v", missing)
+	}
+	// No config, no interactive override -> dev default is used implicitly
+	// (no explicit override needed since the chart already bakes it in).
+	vk := helmValuesKey("orders")
+	if _, ok := overrides[vk]; ok {
+		t.Errorf("expected no explicit override for a plain dev-default credential, got %v", overrides[vk])
+	}
+}
+
+func TestResolveDeployCredentials_MissingNeverFails(t *testing.T) {
+	dses := []snapshotDSE{
+		{Name: "gateway", Env: []snapshotEnvVar{{Name: "STRIPE_KEY", Value: "", IsSecret: true}}},
+	}
+
+	overrides, missing, err := resolveDeployCredentials("test-chart", "", dses, nil, false)
+	if err != nil {
+		t.Fatalf("expected missing credentials to never fail the deploy, got error: %v", err)
+	}
+	if len(missing) != 1 {
+		t.Fatalf("expected 1 missing credential, got %d", len(missing))
+	}
+	if missing[0].EnvVarName != "STRIPE_KEY" {
+		t.Errorf("expected STRIPE_KEY missing, got %q", missing[0].EnvVarName)
+	}
+	if len(missing[0].Services) != 1 || missing[0].Services[0] != "gateway" {
+		t.Errorf("expected gateway listed as affected service, got %v", missing[0].Services)
+	}
+	if len(overrides) != 0 {
+		t.Errorf("expected no overrides for a missing credential, got %v", overrides)
+	}
+}
+
+func TestResolveDeployCredentials_SharedCredentialResolvedOnce(t *testing.T) {
+	// Five services sharing one dependency type must produce exactly one
+	// resolution entry, not five -- regression guard for the old
+	// double-prompt / no-dedup bugs.
+	var dses []snapshotDSE
+	for _, name := range []string{"a", "b", "c", "d", "e"} {
+		dses = append(dses, snapshotDSE{Name: name, Deps: []snapshotDep{{Type: "postgres"}}})
+	}
+	cfg := &resolvedCredsConfig{values: map[string]string{"DATABASE_URL": "postgres://shared@db/app"}}
+
+	overrides, missing, err := resolveDeployCredentials("test-chart", "", dses, cfg, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(missing) != 0 {
+		t.Errorf("expected no missing credentials, got %v", missing)
+	}
+	// All five services should get the same resolved value.
+	for _, name := range []string{"a", "b", "c", "d", "e"} {
+		vk := helmValuesKey(name)
+		if overrides[vk]["DATABASE_URL"].Value != "postgres://shared@db/app" {
+			t.Errorf("service %s: expected shared value, got %q", name, overrides[vk]["DATABASE_URL"].Value)
+		}
+	}
+}
+
+func TestResolveDeployCredentials_UnusedConfigKeyDoesNotError(t *testing.T) {
+	dses := []snapshotDSE{
+		{Name: "orders", Deps: []snapshotDep{{Type: "postgres"}}},
+	}
+	cfg := &resolvedCredsConfig{values: map[string]string{
+		"DATABASE_URL":       "postgres://staging@db/app",
+		"SOME_UNRELATED_KEY": "unused",
+	}}
+
+	_, missing, err := resolveDeployCredentials("test-chart", "", dses, cfg, false)
+	if err != nil {
+		t.Fatalf("unused config key should warn, not error: %v", err)
+	}
+	if len(missing) != 0 {
+		t.Errorf("expected no missing credentials, got %v", missing)
+	}
+}
+
+func TestResolveDeployCredentials_NoCredentialsNeeded(t *testing.T) {
+	dses := []snapshotDSE{{Name: "static-site"}}
+
+	overrides, missing, err := resolveDeployCredentials("test-chart", "", dses, nil, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(overrides) != 0 || len(missing) != 0 {
+		t.Errorf("expected no overrides or missing credentials, got overrides=%v missing=%v", overrides, missing)
+	}
+}

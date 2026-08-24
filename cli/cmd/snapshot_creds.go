@@ -229,23 +229,49 @@ func clearCredCache(context string) {
 	os.Remove(credsCacheFile(context))
 }
 
-// ── Interactive prompt ──────────────────────────────────────────
-
-// resolveStagingCredentials is the main entry point for the credential
-// flow. It detects dev credentials, checks the cache, prompts the user,
-// and returns a map of helm values overrides to apply.
+// ── Unified credential resolution ────────────────────────────────
 //
-// Returns:
-//   - overrides: map[valuesKey]map[envVarName]stagingValue for helm --set
-//   - error if the user cancels or something fails
+// resolveDeployCredentials is the single entry point for all staging
+// credential resolution -- it replaces two things that used to be
+// separate, overlapping mechanisms: the dependency dev-default
+// connection-string flow that used to live here (deploy-only), and the
+// per-service secretKeyRef prompt that used to run unconditionally on
+// every invocation (promptSnapshotSecrets, since removed). Both are
+// unified into one pass, resolved once per distinct credential -- never
+// once per (service, credential) pair -- in this order:
 //
-// If the user chooses to skip, overrides is nil (deploy with dev creds).
-func resolveStagingCredentials(chartName, context string, dses []snapshotDSE) (map[string]map[string]credOverride, error) {
+//  1. --creds-config, if the credential is listed there.
+//  2. The dev-cluster value, applied automatically with no prompt --
+//     this is what makes "every dev credential carries over to staging
+//     unless overridden" true with zero user action required.
+//  3. An interactive override (human path only, skipped entirely when
+//     not interactive) -- leaving a field blank keeps the dev value,
+//     exactly like today's "leave blank to use dev default" behavior.
+//  4. Missing -- dev value is empty, no config entry, no override.
+//     Never fails the deploy; surfaced to the caller via `missing` so
+//     it can warn and write a report instead.
+//
+// Returns the deploy-time Helm values overrides (same shape as before,
+// consumed by writeCredsOverrideFile) and the list of credentials that
+// resolved to "missing".
+func resolveDeployCredentials(chartName, context string, dses []snapshotDSE, credsConfig *resolvedCredsConfig, interactive bool) (map[string]map[string]credOverride, []missingCredential, error) {
 	entries := detectDevCredentials(chartName, dses)
 	secretEntries := detectUserSecrets(dses)
 	entries = append(entries, secretEntries...)
 	if len(entries) == 0 {
-		return nil, nil
+		return nil, nil, nil
+	}
+
+	if credsConfig != nil {
+		used := make(map[string]bool, len(entries))
+		for _, e := range entries {
+			used[e.EnvVarName] = true
+		}
+		for name := range credsConfig.values {
+			if !used[name] {
+				warn(fmt.Sprintf("--creds-config: %q does not match any credential used by this cluster's services -- ignoring", name))
+			}
+		}
 	}
 
 	// Show what we found
@@ -266,73 +292,134 @@ func resolveStagingCredentials(chartName, context string, dses []snapshotDSE) (m
 	}
 	fmt.Fprintln(os.Stderr)
 
-	// Check cache
-	cached := loadCredCache(context)
-
-	// Build choice options
-	var choice string
-	var options []huh.Option[string]
-
-	if cached != nil {
-		cachedCount := 0
-		for _, e := range entries {
-			if v, ok := cached.Creds[e.EnvVarName]; ok && v != "" {
-				cachedCount++
+	// Step 1: --creds-config always wins, for any credential it covers.
+	// Everything else falls through to the dev-default / interactive /
+	// missing handling below.
+	creds := make(map[string]string)
+	var remaining []stagingCredEntry
+	for _, e := range entries {
+		if credsConfig != nil {
+			if v, ok := credsConfig.values[e.EnvVarName]; ok {
+				creds[e.EnvVarName] = v
+				step("⚙️", fmt.Sprintf("%s → from --creds-config", e.EnvVarName))
+				continue
 			}
 		}
-		if cachedCount > 0 {
+		remaining = append(remaining, e)
+	}
+
+	if len(remaining) > 0 {
+		if !interactive {
+			step("🤖", "Non-interactive -- using dev-cluster defaults for anything not in --creds-config")
+		} else {
+			// Check cache
+			cached := loadCredCache(context)
+
+			var choice string
+			var options []huh.Option[string]
+
+			if cached != nil {
+				cachedCount := 0
+				for _, e := range remaining {
+					if v, ok := cached.Creds[e.EnvVarName]; ok && v != "" {
+						cachedCount++
+					}
+				}
+				if cachedCount > 0 {
+					options = append(options,
+						huh.NewOption[string](
+							fmt.Sprintf("Use cached credentials (%d saved, %s)",
+								cachedCount, cached.UpdatedAt.Format("Jan 2 15:04")),
+							"cached"),
+					)
+				}
+			}
 			options = append(options,
-				huh.NewOption[string](
-					fmt.Sprintf("Use cached credentials (%d saved, %s)",
-						cachedCount, cached.UpdatedAt.Format("Jan 2 15:04")),
-					"cached"),
+				huh.NewOption[string]("Configure staging credentials", "configure"),
+				huh.NewOption[string]("Deploy with dev credentials (insecure)", "skip"),
 			)
-		}
-	}
-	options = append(options,
-		huh.NewOption[string]("Configure staging credentials", "configure"),
-		huh.NewOption[string]("Deploy with dev credentials (insecure)", "skip"),
-	)
 
-	form := huh.NewForm(
-		huh.NewGroup(
-			huh.NewSelect[string]().
-				Title("Staging Credentials").
-				Description("Dependencies have dev-default passwords (devuser/devpass).\nConfigure staging connection strings for a secure deployment.").
-				Options(options...).
-				Value(&choice),
-		),
-	)
-	if err := form.Run(); err != nil {
-		return nil, fmt.Errorf("credential prompt cancelled: %w", err)
-	}
+			form := huh.NewForm(
+				huh.NewGroup(
+					huh.NewSelect[string]().
+						Title("Staging Credentials").
+						Description("Dependencies have dev-default passwords (devuser/devpass).\nConfigure staging connection strings for a secure deployment.").
+						Options(options...).
+						Value(&choice),
+				),
+			)
+			if err := form.Run(); err != nil {
+				return nil, nil, fmt.Errorf("credential prompt cancelled: %w", err)
+			}
 
-	switch choice {
-	case "skip":
-		warn("Deploying with dev credentials — not recommended for staging")
-		return nil, nil
+			switch choice {
+			case "skip":
+				warn("Deploying with dev credentials — not recommended for staging")
 
-	case "cached":
-		step("🔑", "Using cached staging credentials")
-		return buildOverrideMap(entries, dses, cached.Creds), nil
+			case "cached":
+				step("🔑", "Using cached staging credentials")
+				for _, e := range remaining {
+					if v, ok := cached.Creds[e.EnvVarName]; ok && v != "" {
+						creds[e.EnvVarName] = v
+					}
+				}
 
-	case "configure":
-		creds, err := promptCredentialValues(entries, cached)
-		if err != nil {
-			return nil, err
-		}
-		// Save to encrypted cache
-		if len(creds) > 0 {
-			if err := saveCredCache(context, chartName, creds); err != nil {
-				warn(fmt.Sprintf("Could not cache credentials: %v", err))
-			} else {
-				step("💾", "Credentials cached (encrypted) for future deploys")
+			case "configure":
+				typed, err := promptCredentialValues(remaining, cached)
+				if err != nil {
+					return nil, nil, err
+				}
+				for k, v := range typed {
+					creds[k] = v
+				}
+				if len(typed) > 0 {
+					if err := saveCredCache(context, chartName, typed); err != nil {
+						warn(fmt.Sprintf("Could not cache credentials: %v", err))
+					} else {
+						step("💾", "Credentials cached (encrypted) for future deploys")
+					}
+				}
 			}
 		}
-		return buildOverrideMap(entries, dses, creds), nil
 	}
 
-	return nil, nil
+	var missing []missingCredential
+	for _, e := range entries {
+		val, ok := creds[e.EnvVarName]
+		if !ok {
+			val = e.DevValue
+		}
+		if val == "" {
+			missing = append(missing, missingCredential{EnvVarName: e.EnvVarName, Services: e.Services})
+		}
+	}
+
+	return buildOverrideMap(entries, dses, creds), missing, nil
+}
+
+// applyCredOverridesToDSEs writes resolved secret-backed credential
+// values back onto the DSE structs themselves (not just the deploy-time
+// override file), so the exported chart's baked-in values.yaml/
+// values-live.yaml stay consistent with what was actually resolved --
+// e.g. for the case where someone hands the exported chart to a
+// teammate to deploy manually later. Mirrors what the old, now-removed
+// promptSnapshotSecrets used to do.
+func applyCredOverridesToDSEs(dses []snapshotDSE, overrides map[string]map[string]credOverride) {
+	for i, dse := range dses {
+		vk := helmValuesKey(dse.Name)
+		svcOverrides, ok := overrides[vk]
+		if !ok {
+			continue
+		}
+		for j, e := range dse.Env {
+			if !e.IsSecret {
+				continue
+			}
+			if co, ok := svcOverrides[e.Name]; ok && co.IsSecret {
+				dses[i].Env[j].Value = co.Value
+			}
+		}
+	}
 }
 
 // promptCredentialValues shows input fields for each credential.

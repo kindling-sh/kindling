@@ -490,6 +490,10 @@ With `--render-prod-values` (requires `--registry` in the same invocation), an a
 
 Combine `--render-prod-values` with `--deploy` in one call for the typical CI shape (a GH Actions job on `pull_request`): the production values are only written **after** the staging deploy actually succeeds, so a failed staging deploy never produces a `values-prod.yaml` — a later workflow step can use the file's mere existence as a pass/fail signal, then diff it against `environments/production/values.yaml` to flag whatever secrets the new build now needs before anyone merges.
 
+Credential resolution (`--deploy`) is a single, unified pass, resolved once per distinct credential — never once per service, and never twice for the same one. In order: `--creds-config` (a committed YAML file mapping credential env var names to where their staging value actually lives — almost always `fromEnv: SOME_ENV_VAR`, a reference to an environment variable a CI job already populated from a GH Actions secret, never a literal value; plain non-secret values may use `value: ...` directly) always wins; anything the config file doesn't cover falls back automatically to the corresponding dev-cluster value, with no prompt — this is what makes every dev credential carry over to staging by default; a credential with no value anywhere (not in the config, and the dev-cluster value is itself empty) never fails the deploy — it's warned about immediately and, once the deploy succeeds, listed in `MISSING_CREDENTIALS.md` in the output directory for a later workflow step to check for and act on.
+
+`--non-interactive` (also auto-enabled whenever stdin isn't a TTY, e.g. any GH Actions runner) makes the whole command safe to run unattended: no `huh` form is ever shown, for credentials, registry auth, or Ingress selection. Registry auth comes from `--registry-username`/`KINDLING_REGISTRY_USERNAME` and the `KINDLING_REGISTRY_PASSWORD` env var — deliberately no `--registry-password` flag, since a password passed as a plain CLI argument would be visible via `ps`/shell history. `--ingress-services` (a comma-separated service list, or an explicitly-empty string to disable Ingress for all) replaces the interactive multi-select; when omitted in non-interactive mode, it defaults to whatever was already enabled in the dev cluster.
+
 **Flags:**
 
 | Flag | Short | Default | Description |
@@ -506,6 +510,10 @@ Combine `--render-prod-values` with `--deploy` in one call for the typical CI sh
 | `--staging-domain` | | — | Base domain for branch-derived Ingress hosts — result is `<branch-slug>.staging.<domain>`, e.g. `subnode1.xyz` (required for `--deploy` if the DSE doesn't already set an Ingress host) |
 | `--render-prod-values` | | `false` | Write a `values-prod.yaml` with the promoted image digest pinned in, alongside the chart (requires `--registry`) |
 | `--prod-env-prefix` | | `prod-` | `KINDLING_ENV_PREFIX` value injected into every service's env when using `--render-prod-values` |
+| `--creds-config` | | — | Path to a YAML file mapping credential env vars to staging values (`fromEnv`/`value`) — safe to commit, no literal secrets when using `fromEnv` |
+| `--non-interactive` | | `false` | Never prompt (fail fast instead if a required value can't be resolved from flags/env/config) — for CI; auto-enabled when stdin isn't a TTY |
+| `--registry-username` | | — | Registry username (falls back to `KINDLING_REGISTRY_USERNAME`; password must come from `KINDLING_REGISTRY_PASSWORD` or an interactive prompt, never a flag) |
+| `--ingress-services` | | — | Comma-separated list of services to enable public Ingress for (pass an empty string to disable Ingress for all) — skips the interactive prompt when set |
 
 **Examples:**
 
@@ -534,6 +542,13 @@ kindling snapshot -r ghcr.io/myorg --render-prod-values
 # Typical CI shape: deploy to staging, then (only if that succeeded)
 # write values-prod.yaml for a later workflow step to diff/review
 kindling snapshot -r ghcr.io/myorg --deploy --context do-staging --render-prod-values
+
+# Fully unattended, from a GH Actions job (KINDLING_REGISTRY_USERNAME/
+# KINDLING_REGISTRY_PASSWORD populated from ${{ secrets.* }}) -- no prompt
+# is ever shown, for credentials, registry auth, or Ingress selection
+kindling snapshot -r ghcr.io/myorg --deploy --context do-staging \
+  --non-interactive --creds-config deploy/staging-credentials.yaml \
+  --ingress-services frontend,api
 ```
 
 **Manual usage:**

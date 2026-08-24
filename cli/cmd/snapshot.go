@@ -14,7 +14,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/huh"
 	"github.com/jeffvincent/kindling/cli/core"
 	"github.com/spf13/cobra"
 )
@@ -52,6 +51,26 @@ step can rely on its mere existence as a pass/fail signal, then diff it
 against environments/production/values.yaml to flag whatever secrets
 the new build now needs before anyone merges.
 
+Credential resolution (--deploy) is unified into a single pass, resolved
+once per distinct credential (never once per service): --creds-config, a
+committed YAML file mapping credential env vars to staging values (almost
+always a reference to an env var a CI job already populated from a GH
+secret, never a literal value) always wins; anything not listed there
+falls back automatically to the dev-cluster's own value, with no prompt;
+a credential with no value anywhere never fails the deploy -- it's
+warned about and, once the deploy succeeds, written to
+MISSING_CREDENTIALS.md for a later workflow step to act on.
+
+--non-interactive (auto-enabled when stdin isn't a TTY) makes the whole
+command safe to run unattended from CI: no prompt is ever shown for
+credentials, registry auth, or Ingress selection. Registry auth comes
+from --registry-username/KINDLING_REGISTRY_USERNAME and
+KINDLING_REGISTRY_PASSWORD (never a --registry-password flag, to avoid
+leaking a secret via ps/shell history); --ingress-services picks which
+services get public Ingress without the interactive multi-select
+(defaults to whatever was already enabled in dev when omitted and
+non-interactive).
+
 Examples:
   kindling snapshot                          # Helm chart in ./kindling-snapshot/
   kindling snapshot --format kustomize       # Kustomize overlay
@@ -74,7 +93,13 @@ Examples:
 
   # Typical CI shape: deploy to staging, then (only if that succeeded)
   # write values-prod.yaml for a later step to diff/review
-  kindling snapshot -r ghcr.io/myorg --deploy --context staging --render-prod-values`,
+  kindling snapshot -r ghcr.io/myorg --deploy --context staging --render-prod-values
+
+  # Fully unattended, from a GH Actions job (env vars populated from
+  # secrets: KINDLING_REGISTRY_USERNAME/KINDLING_REGISTRY_PASSWORD)
+  kindling snapshot -r ghcr.io/myorg --deploy --context staging \
+    --non-interactive --creds-config deploy/staging-credentials.yaml \
+    --ingress-services frontend,api`,
 	RunE: runSnapshot,
 }
 
@@ -91,6 +116,10 @@ var (
 	snapshotStagingDomain    string
 	snapshotRenderProdValues bool
 	snapshotProdEnvPrefix    string
+	snapshotCredsConfig      string
+	snapshotNonInteractive   bool
+	snapshotRegistryUsername string
+	snapshotIngressServices  string
 )
 
 func init() {
@@ -106,6 +135,10 @@ func init() {
 	snapshotCmd.Flags().StringVar(&snapshotStagingDomain, "staging-domain", "", "Base domain for branch-derived Ingress hosts -- result is '<branch-slug>.staging.<domain>', e.g. subnode1.xyz (required for --deploy if the DSE doesn't already set an Ingress host)")
 	snapshotCmd.Flags().BoolVar(&snapshotRenderProdValues, "render-prod-values", false, "Render a values-prod.yaml (chart's normal clean-value placeholders for anything credential-shaped, plus the pinned image digest) alongside the chart -- requires --registry; with --deploy, only runs after the staging deploy succeeds")
 	snapshotCmd.Flags().StringVar(&snapshotProdEnvPrefix, "prod-env-prefix", "prod-", "KINDLING_ENV_PREFIX value to inject for the production environment (used with --render-prod-values)")
+	snapshotCmd.Flags().StringVar(&snapshotCredsConfig, "creds-config", "", "Path to a YAML file mapping credential env vars to staging values (see docs) -- safe to commit, no literal secrets when using fromEnv")
+	snapshotCmd.Flags().BoolVar(&snapshotNonInteractive, "non-interactive", false, "Never prompt (fail fast instead if a required value can't be resolved from flags/env/config) -- for CI; auto-enabled when stdin isn't a TTY")
+	snapshotCmd.Flags().StringVar(&snapshotRegistryUsername, "registry-username", "", "Registry username (falls back to KINDLING_REGISTRY_USERNAME env var; password must come from KINDLING_REGISTRY_PASSWORD or an interactive prompt, never a flag)")
+	snapshotCmd.Flags().StringVar(&snapshotIngressServices, "ingress-services", "", "Comma-separated list of services to enable public Ingress for (pass an empty string to disable Ingress for all) -- skips the interactive prompt when set, used with --deploy")
 	rootCmd.AddCommand(snapshotCmd)
 }
 
@@ -404,92 +437,6 @@ func resolveSecretValue(secretName, key, namespace string) string {
 	return ""
 }
 
-// promptSnapshotSecrets prompts the user for staging values for all
-// secret-backed env vars. The dev cluster values are shown as defaults.
-// The user can press Enter to accept the default or type a new value.
-// Updated values are written back into the DSE structs so they appear
-// in the generated chart (values-live.yaml and the credential override).
-func promptSnapshotSecrets(dses []snapshotDSE) error {
-	// Collect all secret env vars across services
-	type secretField struct {
-		dseIdx int
-		envIdx int
-		name   string
-		devVal string
-		svc    string
-	}
-	var fields []secretField
-	for i, dse := range dses {
-		for j, e := range dse.Env {
-			if e.IsSecret {
-				fields = append(fields, secretField{
-					dseIdx: i, envIdx: j,
-					name: e.Name, devVal: e.Value,
-					svc: dse.Name,
-				})
-			}
-		}
-	}
-	if len(fields) == 0 {
-		return nil
-	}
-
-	fmt.Fprintln(os.Stderr)
-	step("🔑", fmt.Sprintf("Found %d %s from K8s secrets",
-		len(fields), pluralize(len(fields), "env var", "env vars")))
-	fmt.Fprintln(os.Stderr, "       Accept the dev defaults (press Enter) or enter staging values.")
-	fmt.Fprintln(os.Stderr)
-
-	// Build form fields — one input per secret
-	type fieldRef struct {
-		idx   int
-		value *string
-	}
-	var refs []fieldRef
-	var huhFields []huh.Field
-
-	for i, f := range fields {
-		val := new(string)
-		*val = f.devVal // pre-fill with dev value
-
-		desc := fmt.Sprintf("Service: %s", f.svc)
-		if f.devVal != "" {
-			desc += fmt.Sprintf("\nDev value: %s", truncateStr(f.devVal, 60))
-		}
-
-		huhFields = append(huhFields, huh.NewInput().
-			Title(f.name).
-			Description(desc).
-			Value(val))
-
-		refs = append(refs, fieldRef{idx: i, value: val})
-	}
-
-	form := huh.NewForm(huh.NewGroup(huhFields...))
-	if err := form.Run(); err != nil {
-		return fmt.Errorf("secret configuration cancelled: %w", err)
-	}
-
-	// Write values back into DSE structs
-	changed := 0
-	for _, ref := range refs {
-		f := fields[ref.idx]
-		newVal := *ref.value
-		if newVal != f.devVal {
-			changed++
-		}
-		dses[f.dseIdx].Env[f.envIdx].Value = newVal
-	}
-
-	if changed > 0 {
-		step("✓", fmt.Sprintf("Updated %d %s with staging values",
-			changed, pluralize(changed, "secret", "secrets")))
-	} else {
-		step("✓", "Using dev values for all secrets")
-	}
-	return nil
-}
-
 // detectUserPrefix finds the GitHub actor prefix (e.g. "jeff-vincent-")
 // that is common to the majority of DSE names. The CI workflow names
 // every DSE as "${{ github.actor }}-<service-name>", so this prefix
@@ -559,6 +506,21 @@ var depRegistry = map[string]depDefaults{
 func runSnapshot(cmd *cobra.Command, args []string) error {
 	if snapshotRenderProdValues && snapshotRegistry == "" {
 		return fmt.Errorf("--registry is required with --render-prod-values (production values need a promoted image digest, which only exists once images are pushed)")
+	}
+
+	// interactive gates every prompt in this command -- explicit
+	// --non-interactive always wins, otherwise auto-detected from stdin.
+	// --creds-config is loaded (and any fromEnv references resolved) here,
+	// before any cluster/deploy work starts, so a CI misconfiguration
+	// fails fast rather than partway through a deploy.
+	interactive := isInteractive()
+	var credsConfig *resolvedCredsConfig
+	if snapshotCredsConfig != "" {
+		cfg, err := loadCredsConfig(snapshotCredsConfig)
+		if err != nil {
+			return err
+		}
+		credsConfig = cfg
 	}
 
 	// ── Validate --deploy prerequisites ────────────────────────
@@ -674,7 +636,6 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 	outDir, _ = filepath.Abs(outDir)
 
 	// ── Registry: re-tag and push images ────────────────────────
-	var regUser, regPass string
 	var pushedDigests map[string]string // dse.Name -> "sha256:...", populated when --registry pushes
 	if snapshotRegistry != "" {
 		tag := snapshotTag
@@ -687,22 +648,14 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 		}
 		step("🏷", fmt.Sprintf("Re-tagging images → %s (tag: %s)", snapshotRegistry, tag))
 
-		// Prompt for registry credentials
+		// Registry credentials: flag/env-var driven, falling back to an
+		// interactive prompt only when running interactively (see
+		// resolveRegistryCredentials for the full precedence).
 		regHost := registryHost(snapshotRegistry)
 		step("🔑", fmt.Sprintf("Registry credentials for %s", regHost))
-		form := huh.NewForm(
-			huh.NewGroup(
-				huh.NewInput().
-					Title("Username").
-					Value(&regUser),
-				huh.NewInput().
-					Title("Password / Token").
-					EchoMode(huh.EchoModePassword).
-					Value(&regPass),
-			),
-		)
-		if err := form.Run(); err != nil {
-			return fmt.Errorf("registry credentials cancelled: %w", err)
+		regUser, regPass, err := resolveRegistryCredentials(interactive)
+		if err != nil {
+			return err
 		}
 
 		digests, err := craneCopyImages(dses, snapshotRegistry, tag, userPrefix, regUser, regPass)
@@ -712,11 +665,21 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 		pushedDigests = digests
 	}
 
-	// ── Prompt for secret values ────────────────────────────────
-	// If any services have secretKeyRef env vars, prompt the user to
-	// accept the dev defaults or enter staging-specific values.
-	if err := promptSnapshotSecrets(dses); err != nil {
-		return err
+	// ── Resolve staging credentials ─────────────────────────────
+	// Unifies what used to be two separate, overlapping prompts (one per
+	// secret-backed env var per service, plus a second one for dependency
+	// dev-default connection strings, deploy-only) into a single pass,
+	// resolved once per distinct credential, never once per service. Runs
+	// for every invocation (not just --deploy) so the exported chart's
+	// values-live.yaml is always consistent with whatever was resolved.
+	credOverrides, missingCreds, err := resolveDeployCredentials(chartName, snapshotContext, dses, credsConfig, interactive)
+	if err != nil {
+		return fmt.Errorf("credential configuration failed: %w", err)
+	}
+	applyCredOverridesToDSEs(dses, credOverrides)
+	for _, m := range missingCreds {
+		warn(fmt.Sprintf("%s (used by %s): no staging value configured and no dev-cluster default found -- deploying without it",
+			m.EnvVarName, strings.Join(m.Services, ", ")))
 	}
 
 	if err := exportSnapshot(snapshotFormat, outDir, chartName, dses); err != nil {
@@ -806,35 +769,12 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 	}
 
 	// ── Ingress selector ──────────────────────────────────────
-	// Offer ALL services for ingress selection, pre-selecting ones
-	// that already had ingress enabled in dev.
-	var selectedIngress []string
-	if len(dses) > 0 {
-		options := make([]huh.Option[string], len(dses))
-		var preSelected []string
-		for i, dse := range dses {
-			label := dse.Name
-			if dse.Ingress != nil && dse.Ingress.Enabled {
-				label += " (ingress in dev)"
-				preSelected = append(preSelected, dse.Name)
-			}
-			options[i] = huh.NewOption(label, dse.Name)
-		}
-		selectedIngress = preSelected
-
-		form := huh.NewForm(
-			huh.NewGroup(
-				huh.NewMultiSelect[string]().
-					Title("Which services should be publicly accessible?").
-					Description("Selected services will have Ingress enabled.\nUse space to toggle, enter to confirm.").
-					Options(options...).
-					Value(&selectedIngress),
-			),
-		)
-
-		if err := form.Run(); err != nil {
-			return fmt.Errorf("ingress selection cancelled: %w", err)
-		}
+	// Resolution order: explicit --ingress-services (skips any prompt) ->
+	// non-interactive default (whatever was already enabled in dev, no
+	// prompt) -> interactive multi-select, pre-selected the same way.
+	selectedIngress, err := resolveIngressSelection(cmd, dses, interactive)
+	if err != nil {
+		return err
 	}
 
 	// Build a set of selected ingress services for quick lookup
@@ -854,12 +794,10 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 		step("🌐", fmt.Sprintf("Using IngressClass: %s", ingClass))
 	}
 
-	// ── Staging credentials ──────────────────────────────────
-	// Detect dev-default connection strings and prompt for staging values.
-	credOverrides, err := resolveStagingCredentials(chartName, snapshotContext, dses)
-	if err != nil {
-		return fmt.Errorf("credential configuration failed: %w", err)
-	}
+	// ── Staging credential overrides file ─────────────────────
+	// credOverrides was already resolved earlier (before exportSnapshot),
+	// via the same unified pass used for both --deploy and non-deploy
+	// invocations.
 	var credsFile string
 	if len(credOverrides) > 0 {
 		path, err := writeCredsOverrideFile(credOverrides)
@@ -929,6 +867,19 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 	}
 
 	success("Deployed to staging")
+
+	// Only write the missing-credentials report once the deploy has
+	// actually succeeded — a GH Actions step later in the job can check
+	// for this file's existence (e.g. to post a PR comment) without
+	// kindling itself ever failing the deploy over a missing credential.
+	if len(missingCreds) > 0 {
+		path, ferr := writeMissingCredentialsFile(outDir, missingCreds)
+		if ferr != nil {
+			warn(fmt.Sprintf("Could not write missing-credentials report: %v", ferr))
+		} else {
+			warn(fmt.Sprintf("%d credential(s) missing -- see %s", len(missingCreds), path))
+		}
+	}
 
 	// Only render production values once the staging deploy above has
 	// actually succeeded (every error path up to here already returned) —
