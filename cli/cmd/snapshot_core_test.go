@@ -104,6 +104,38 @@ func TestStripDSEPrefix_NilIngress(t *testing.T) {
 	}
 }
 
+// Regression: an Ingress's extra routes (spec.ingress.routes[].service)
+// reference sibling services by their raw, actor-prefixed dev-cluster
+// name -- same as Ingress.Host and env var values, this must be
+// stripped too, or the deployed chart's Ingress ends up pointing at a
+// service name ("jeff-vincent-auth") that only ever existed in the dev
+// cluster, never in the staging deploy.
+func TestStripDSEPrefix_StripsIngressRouteServiceNames(t *testing.T) {
+	dses := []snapshotDSE{
+		{
+			Name: "jeff-vincent-frontend",
+			Ingress: &snapshotIngress{
+				Enabled: true,
+				Routes: []snapshotRoute{
+					{Path: "/auth", Service: "jeff-vincent-auth", Port: 8000},
+					{Path: "/orgs", Service: "jeff-vincent-orgs", Port: 8000},
+				},
+			},
+		},
+		{Name: "jeff-vincent-auth"},
+		{Name: "jeff-vincent-orgs"},
+	}
+
+	stripDSEPrefix(dses)
+
+	if got := dses[0].Ingress.Routes[0].Service; got != "auth" {
+		t.Errorf("expected route service %q, got %q", "auth", got)
+	}
+	if got := dses[0].Ingress.Routes[1].Service; got != "orgs" {
+		t.Errorf("expected route service %q, got %q", "orgs", got)
+	}
+}
+
 // ════════════════════════════════════════════════════════════════
 // buildConnectionURL — releasePrefix parameter
 // ════════════════════════════════════════════════════════════════
