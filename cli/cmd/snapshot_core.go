@@ -32,6 +32,13 @@ func stripDSEPrefix(dses []snapshotDSE) string {
 		if dses[i].Ingress != nil && dses[i].Ingress.Host != "" {
 			dses[i].Ingress.Host = strings.TrimPrefix(dses[i].Ingress.Host, prefix)
 		}
+		if dses[i].Ingress != nil {
+			for j := range dses[i].Ingress.Routes {
+				if stripped := strings.TrimPrefix(dses[i].Ingress.Routes[j].Service, prefix); stripped != "" {
+					dses[i].Ingress.Routes[j].Service = stripped
+				}
+			}
+		}
 		for j := range dses[i].Env {
 			dses[i].Env[j].Value = strings.ReplaceAll(dses[i].Env[j].Value, prefix, "")
 		}

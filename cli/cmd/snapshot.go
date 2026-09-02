@@ -1163,7 +1163,15 @@ func buildValuesYAML(chartName string, dses []snapshotDSE, depsSeen map[string]b
 				for _, route := range dse.Ingress.Routes {
 					buf.WriteString(fmt.Sprintf("    - path: \"%s\"\n", route.Path))
 					buf.WriteString(fmt.Sprintf("      pathType: \"%s\"\n", route.PathType))
-					buf.WriteString(fmt.Sprintf("      service: \"%s\"\n", route.Service))
+					// Stored as the bare, chart-safe service name (not a
+					// literal cluster service name) -- helmIngressTemplate
+					// prefixes it with {{ .Release.Name }}- at render time,
+					// matching how every other service's own Service
+					// resource is named. Writing the raw dev-cluster name
+					// here verbatim would point at a Service that only
+					// ever existed in the dev cluster, never in the
+					// deployed chart (the actual bug this fixes).
+					buf.WriteString(fmt.Sprintf("      service: \"%s\"\n", helmSafe(route.Service)))
 					buf.WriteString(fmt.Sprintf("      port: %d\n", route.Port))
 				}
 			} else {
@@ -1515,7 +1523,7 @@ spec:
         pathType: {{ .pathType }}
         backend:
           service:
-            name: {{ .service }}
+            name: {{ $.Release.Name }}-{{ .service }}
             port:
               number: {{ .port }}
       {{- end }}

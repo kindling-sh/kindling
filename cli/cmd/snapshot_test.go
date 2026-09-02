@@ -355,6 +355,54 @@ func TestStagingImageClean(t *testing.T) {
 // buildValuesYAML — dep env vars are real configurable values
 // ────────────────────────────────────────────────────────────────────────────
 
+// ────────────────────────────────────────────────────────────────────────────
+// buildValuesYAML / helmIngressTemplate — Ingress route backend naming
+// ────────────────────────────────────────────────────────────────────────────
+
+// Regression: an Ingress's extra routes must resolve to the actual
+// deployed Service name ({{ .Release.Name }}-<safe-name>), not the raw
+// dev-cluster service name -- writing the latter verbatim produced a
+// "services \"jeff-vincent-auth\" not found" backend in a real staging
+// deploy, since no such Service is ever created by the chart.
+func TestBuildValuesYAML_IngressRouteServiceIsHelmSafe(t *testing.T) {
+	dses := []snapshotDSE{
+		{
+			Name: "frontend",
+			Ingress: &snapshotIngress{
+				Enabled: true,
+				Host:    "frontend.example.com",
+				Routes:  []snapshotRoute{{Path: "/auth", PathType: "Prefix", Service: "Auth_Service", Port: 8000}},
+			},
+		},
+	}
+
+	yaml := buildValuesYAML("test", dses, map[string]bool{}, false, nil, nil)
+
+	if !strings.Contains(yaml, `service: "auth-service"`) {
+		t.Errorf("expected route service to be written in helm-safe form, got:\n%s", yaml)
+	}
+	if strings.Contains(yaml, "Auth_Service") {
+		t.Error("raw, non-helm-safe service name should not appear in values.yaml")
+	}
+}
+
+func TestHelmIngressTemplate_RoutesUseReleaseNamePrefix(t *testing.T) {
+	dse := snapshotDSE{
+		Name: "frontend",
+		Ingress: &snapshotIngress{
+			Enabled: true,
+			Host:    "frontend.example.com",
+			Routes:  []snapshotRoute{{Path: "/auth", PathType: "Prefix", Service: "auth", Port: 8000}},
+		},
+	}
+
+	tmpl := helmIngressTemplate(dse, "test-chart")
+
+	if !strings.Contains(tmpl, "name: {{ $.Release.Name }}-{{ .service }}") {
+		t.Errorf("expected route backend name to be prefixed with {{ $.Release.Name }}-, got:\n%s", tmpl)
+	}
+}
+
 func TestBuildValuesYAML_DepEnvVarsConfigurable(t *testing.T) {
 	dses := []snapshotDSE{
 		{
