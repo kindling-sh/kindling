@@ -200,10 +200,9 @@ runner, via the same build-agent sidecar.
 This action only works on a `CIRunnerPool` with `spec.enableSnapshotDeploy: true`
 and `spec.localClusterName` set — that swaps the sidecar's image for one
 that also has `helm`, `crane`, and the `kindling` CLI installed, and adds
-the `.snapshot-deploy` signal handler to its polling loop. See
-[`snapshot-deploy-runner-sidecar.md`](https://github.com/kindling-sh/kindling/blob/main/snapshot-deploy-runner-sidecar.md)
-for the full design. Pools that don't set this flag keep the plain
-`kubectl`-only sidecar and can't run this action.
+the `.snapshot-deploy` signal handler to its polling loop. Pools that
+don't set this flag keep the plain `kubectl`-only sidecar and can't run
+this action.
 :::
 
 ### Inputs

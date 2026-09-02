@@ -119,10 +119,10 @@ This gives you a 4-service app (Go, Python, Node.js, React) with Postgres, Redis
 ## The journey
 
 ```
-analyze → generate → dev loop → promote
-   ↓          ↓          ↓          ↓
- readiness  workflow   push/sync  production
- check      via AI     iterate    (coming soon)
+analyze → generate → dev loop → snapshot --deploy → render-prod-values
+   ↓          ↓          ↓             ↓                    ↓
+readiness  workflow   push/sync    shared staging     GitOps-ready
+ check     via AI      iterate    (multi-tenant)      production chart
 ```
 
 Every `git push` rebuilds and redeploys. `kindling sync` gives you sub-second iteration. No cloud CI minutes. No Docker Hub. No YAML by hand.
@@ -137,4 +137,5 @@ Every `git push` rebuilds and redeploys. `kindling sync` gives you sub-second it
 | Set up OAuth callbacks | [OAuth & Tunnels](oauth-tunnels.md) |
 | Deploy without GitHub Actions | [Manual Deploy](guides/manual-deploy.md) |
 | See all 15 dependency types | [Dependency Reference](dependencies.md) |
+| Graduate to a shared staging cluster | [Graduation Guide](graduation.md) |
 | Understand the internals | [Architecture](architecture.md) |

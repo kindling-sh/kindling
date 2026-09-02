@@ -125,6 +125,32 @@ kindling snapshot -r ghcr.io/myorg --render-prod-values
 
 This is the same clean-defaults `values.yaml` every service already gets — TODO placeholders for anything credential-shaped, dependency connection strings included — except each service's `image` is pinned to the exact digest that was just pushed (`registry/name@sha256:...`, never a mutable tag), and `KINDLING_ENV_PREFIX` (default `prod-`, override with `--prod-env-prefix`) is added to every service's env. Kindling never generates, resolves, or stores a real credential anywhere in this path — the chart's Deployment template already wires every secret-backed env var to a `secretKeyRef` against a chart-managed Secret, identically for staging and production since both deploy the same chart. Filling in the real value in that Secret (or wiring an external one) is entirely up to your own process, by design.
 
+### Running this from CI, non-interactively
+
+Everything above works unattended too — `--non-interactive` (also
+auto-detected when stdin isn't a TTY) skips every prompt. Registry auth
+comes from `--registry-username`/`KINDLING_REGISTRY_USERNAME` +
+`KINDLING_REGISTRY_PASSWORD`; staging credentials resolve from
+`--creds-config` (a committed YAML file mapping credential env vars to
+where their staging value actually lives — almost always a reference to
+an env var a CI job already populated from a secret, never a literal
+value) with the dev-cluster value as an automatic fallback. Anything
+genuinely unresolvable never fails the deploy — it's warned about and
+written to `MISSING_CREDENTIALS.md` for a later workflow step to check:
+
+```bash
+kindling snapshot -r ghcr.io/myorg --deploy --context staging \
+  --non-interactive --creds-config deploy/staging-credentials.yaml
+```
+
+A `CIRunnerPool` with `spec.enableSnapshotDeploy: true` can run this
+exact command from its own self-hosted runner via the
+[`kindling-snapshot-deploy`](github-actions.md#kindling-snapshot-deploy)
+composite action — the whole graduation step then happens inside the
+same GH Actions job that already builds and deploys your dev
+environment, with the staging cluster's kubeconfig supplied as a GitHub
+Actions secret. No laptop, no human at a TTY, required.
+
 ---
 
 ## Step 2: Configure TLS

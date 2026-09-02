@@ -25,35 +25,44 @@
 
 ## The Journey
 
-kindling is a complete development lifecycle tool. It takes your project from first commit to production deployment — whether you're starting fresh or bringing an existing app.
+kindling takes a project from first commit to a production-ready Helm
+chart, in four stages: **dev locally** (with best-practice guardrails
+built in), **CI-first** from the very first push, **graduate to a
+shared staging cluster** with zero collisions between branches, then
+**hand off a production-ready chart** at the git boundary — kindling
+never touches production itself.
 
 ```
-  Have a project?                              Starting fresh?
-       │                                            │
-       ▼                                            ▼
-  kindling analyze                          kindling scaffold
-  (check readiness)                       (minimal app creation)
-       │                                            │
-       ▼                                            ▼
-  kindling generate ◄───────────────────────────────┘
-  (AI-writes your CI workflow)
+  kindling analyze
+  (readiness check — Dockerfiles, secrets, health checks, best-practice guardrails)
        │
        ▼
-  ┌─────────────────── Dev Loop ───────────────────┐
-  │                                                │
-  │  push → build → deploy (outer loop)            │
-  │       ↕                                        │
-  │  edit → sync → reload (inner loop)             │
-  │       ↕                                        │
-  │  expose → test OAuth / webhooks                │
-  │       ↕                                        │
-  │  add services → debug → iterate                │
-  │                                                │
-  └────────────────────────────────────────────────┘
+  kindling generate
+  (AI-writes your CI workflow — CI-first from commit 1, zero cloud CI minutes)
        │
        ▼
-  kindling promote (coming soon)
-  (graduate to production with TLS)
+  ┌─────────────────── Dev Loop (every push runs real CI) ─────────┐
+  │                                                                │
+  │  push → build (Kaniko) → deploy (outer loop)                  │
+  │       ↕                                                       │
+  │  edit → sync → reload (inner loop, sub-second)                │
+  │       ↕                                                       │
+  │  expose → test OAuth / webhooks                                │
+  │       ↕                                                       │
+  │  add services → debug → iterate                                │
+  │                                                                │
+  └────────────────────────────────────────────────────────────────┘
+       │
+       ▼
+  kindling snapshot --deploy
+  (graduate to a shared, multi-tenant staging cluster — branch-scoped
+   name/namespace/Ingress so concurrent branches never collide; fully
+   non-interactive when run from CI)
+       │
+       ▼
+  kindling snapshot --render-prod-values
+  (production-ready Helm chart + values-prod.yaml, pinned image
+   digests — hand off to your GitOps controller at the git boundary)
 ```
 
 Zero cloud CI minutes. Immediate iteration. Full Kubernetes everything.
@@ -173,15 +182,66 @@ kindling dev -d my-frontend              # frontend hot reload + cluster APIs
 
 ---
 
-## 4. Graduate to Production *(coming soon)*
+## 4. Snapshot & Deploy — Graduate to Shared Staging
 
-Once your app works in the dev loop, promote it to a real cluster:
+Once your app works in the dev loop, `kindling snapshot` reads every
+`DevStagingEnvironment` in your cluster and generates a staging-ready
+Helm chart (or Kustomize overlay). With `--registry` it copies images
+out of the in-cluster registry via `crane` — no Docker daemon needed.
+With `--deploy`, it pushes that chart straight to any real Kubernetes
+cluster you point it at:
 
 ```bash
-kindling promote                         # dev → production
+kindling snapshot -r ghcr.io/myorg --deploy --context staging
 ```
 
-Scans your dev cluster, pushes images to your production registry, deploys with TLS certificates, and gives you live URLs. No YAML surgery — kindling generates production-ready manifests from your running dev environment.
+**Multi-tenant by default** — `--name`/`--namespace`/Ingress host are
+all derived from the current git branch, so concurrent branches
+deployed to the same *shared* staging cluster never collide:
+
+```bash
+# PR branch → its own name-scoped staging environment, no collisions
+kindling snapshot -r ghcr.io/myorg --deploy --context staging \
+  --staging-domain example.com
+```
+
+**Fully non-interactive from CI** — no form ever blocks on stdin.
+Registry auth and staging credentials resolve from flags, env vars, or
+a committed `--creds-config` file (never a literal secret in the repo);
+anything genuinely unresolvable is warned about and written to
+`MISSING_CREDENTIALS.md` — it never fails the deploy:
+
+```bash
+kindling snapshot -r ghcr.io/myorg --deploy --context staging \
+  --non-interactive --creds-config deploy/staging-credentials.yaml
+```
+
+A `CIRunnerPool` with `enableSnapshotDeploy: true` runs this same
+command from the self-hosted runner that already builds and deploys
+your dev environment — the whole graduation step happens inside a GH
+Actions job, no laptop required (see
+[kindling-snapshot-deploy](https://kindling.sh/docs/github-actions#kindling-snapshot-deploy)).
+
+### Hand off a production-ready Helm chart
+
+`--render-prod-values` (combined with `--deploy`, only runs after the
+staging deploy actually succeeds) writes `values-prod.yaml` alongside
+the chart — the same clean, credential-free values every export
+produces, plus each service's image pinned to the exact digest just
+pushed:
+
+```bash
+kindling snapshot -r ghcr.io/myorg --deploy --context staging \
+  --render-prod-values
+```
+
+kindling never holds a production credential and never calls a
+production cluster's API server. The resulting chart + values file is
+meant to be committed and picked up by whatever GitOps controller
+(Argo CD, Flux, etc.) already owns your production deploys, at the git
+boundary — not driven by kindling itself.
+
+→ [Full Graduation Guide](https://kindling.sh/docs/graduation)
 
 ---
 
@@ -211,9 +271,12 @@ kindling dashboard
 
 # Start live sync on a service
 kindling sync -d <user>-my-app --restart
+
+# Graduate to a shared staging cluster (from your laptop or CI)
+kindling snapshot -r ghcr.io/myorg --deploy --context staging
 ```
 
-→ [Full Getting Started Guide](docs/getting-started.md)
+→ [Full Getting Started Guide](https://kindling.sh/docs/quickstart)
 
 ---
 
@@ -261,7 +324,7 @@ Declare dependencies in your workflow. The operator provisions them and injects 
 | influxdb | `INFLUXDB_URL` |
 | jaeger | `JAEGER_ENDPOINT` |
 
-→ [Dependency Reference](docs/dependencies.md)
+→ [Dependency Reference](https://kindling.sh/docs/dependencies)
 
 ---
 
@@ -275,7 +338,7 @@ kindling secrets restore                            # restore after cluster rebu
 
 Secrets are stored as Kubernetes Secrets with automatic local backup. They survive cluster rebuilds.
 
-→ [docs/secrets.md](docs/secrets.md)
+→ [Secrets Guide](https://kindling.sh/docs/secrets)
 
 ---
 
@@ -329,7 +392,7 @@ spec:
     - type: redis
 ```
 
-→ [CRD Reference](docs/crd-reference.md)
+→ [CRD Reference](https://kindling.sh/docs/crd-reference)
 
 ---
 
@@ -363,7 +426,24 @@ Generates and applies a DevStagingEnvironment CR:
         version: "16"
 ```
 
-→ [GitHub Actions Reference](docs/github-actions.md)
+### `kindling-snapshot-deploy`
+
+Runs `kindling snapshot --deploy` from a `CIRunnerPool` with
+`enableSnapshotDeploy: true` — image copy to a real registry plus a
+Helm install against a separate, shared staging cluster, entirely from
+the self-hosted runner (no laptop required):
+
+```yaml
+- uses: kindling-sh/kindling/.github/actions/kindling-snapshot-deploy@main
+  with:
+    name: checkout-staging
+    registry: ghcr.io/myorg
+    staging-context: staging
+    staging-kubeconfig: ${{ secrets.STAGING_KUBECONFIG }}
+    extra-args: "--creds-config deploy/staging-credentials.yaml --non-interactive"
+```
+
+→ [GitHub Actions Reference](https://kindling.sh/docs/github-actions)
 
 ---
 
@@ -441,7 +521,6 @@ sudo mv bin/kindling /usr/local/bin/
 | **Onboarding** | |
 | `kindling analyze` | Check project readiness — git, Dockerfiles, secrets, cluster |
 | `kindling generate` | AI-generate a CI workflow |
-| `kindling scaffold` | *(coming soon)* Generate opinionated project structure |
 | **Dev Loop** | |
 | `kindling push` | Git push with selective service rebuild |
 | `kindling sync` | Live-sync files + hot reload |
@@ -454,13 +533,14 @@ sudo mv bin/kindling /usr/local/bin/
 | `kindling logs` | Tail operator logs |
 | `kindling secrets` | Manage external credentials |
 | `kindling env` | Set/list/unset env vars on deployments |
-| `kindling snapshot` | Export Helm chart or Kustomize overlay from cluster state |
+| **Staging & Production Handoff** | |
+| `kindling snapshot` | Export a Helm chart/Kustomize overlay; `--deploy` graduates to a shared staging cluster (non-interactive-safe for CI); `--render-prod-values` writes a GitOps-ready production chart |
+| `kindling staging tls` | Wildcard DNS-01 TLS for a shared staging cluster |
 | **Lifecycle** | |
-| `kindling promote` | *(coming soon)* Graduate to production with TLS |
 | `kindling reset` | Remove runner pool (keep cluster) |
 | `kindling destroy` | Tear down the cluster |
 
-→ [Full CLI Reference](docs/cli.md)
+→ [Full CLI Reference](https://kindling.sh/docs/cli)
 
 ---
 
@@ -473,12 +553,13 @@ sudo mv bin/kindling /usr/local/bin/
 - [x] `kindling analyze` — deterministic project readiness checking
 - [x] `kindling sync` — live file sync with 30+ language-aware restart strategies
 - [x] `kindling dashboard` — web UI with topology map, sync/load, runtime detection
-- [x] `kindling snapshot` — export Helm charts or Kustomize overlays from running cluster
+- [x] `kindling snapshot --deploy` — graduate to a shared, multi-tenant staging cluster (branch-scoped naming, non-interactive-safe for CI)
+- [x] `kindling snapshot --render-prod-values` — GitOps-ready production Helm chart with pinned image digests
+- [x] `CIRunnerPool` snapshot-deploy sidecar — run `kindling snapshot --deploy` entirely from a self-hosted GH Actions runner, no laptop required
+- [x] Wildcard DNS-01 TLS for shared staging clusters
 - [x] `kindling explain` — on-demand kindling concepts/workflow guidance for coding agents
 - [x] Secrets management with local backup across cluster rebuilds
 - [x] Public HTTPS tunnels for OAuth
-- [ ] `kindling scaffold` — opinionated project structure with service templates
-- [ ] `kindling promote` — graduate to production with TLS and DNS
 - [ ] Topology map: drag-and-drop service/dependency editor
 - [ ] Interactive service health resolution in dashboard
 

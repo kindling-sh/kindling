@@ -27,10 +27,10 @@ For user-facing documentation, see [`docs-site/`](../docs-site/).
 ## Architecture at a glance
 
 ```
-analyze → generate → dev loop → promote
-   ↓          ↓          ↓          ↓
- readiness  workflow   push/sync  production
- check      via AI     iterate    (coming soon)
+analyze → generate → dev loop → snapshot --deploy → render-prod-values
+   ↓          ↓          ↓             ↓                    ↓
+readiness  workflow   push/sync    shared staging     GitOps-ready
+ check     via AI      iterate    (multi-tenant)      production chart
 ```
 
 kindling is a Kubernetes operator + CLI that runs your entire dev
@@ -38,7 +38,11 @@ environment locally on a Kind cluster. The operator reconciles
 `DevStagingEnvironment` CRs into Deployments, Services, Ingresses,
 and auto-provisioned dependencies. The CLI wraps the full developer
 workflow from project analysis through CI workflow generation,
-building, deploying, live-syncing, and tunneling.
+building, deploying, live-syncing, tunneling, and graduating a
+snapshot to a shared staging cluster. Production itself is out of
+scope by design — `kindling snapshot --render-prod-values` hands off a
+credential-free, digest-pinned Helm chart for a GitOps controller to
+pick up at the git boundary.
 
 ## Module layout
 
