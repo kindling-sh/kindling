@@ -179,6 +179,80 @@ var _ = Describe("buildRunnerDeployment", func() {
 	})
 })
 
+var _ = Describe("buildRunnerDeployment with EnableSnapshotDeploy", func() {
+	var r *CIRunnerPoolReconciler
+
+	BeforeEach(func() {
+		r = &CIRunnerPoolReconciler{}
+	})
+
+	buildAgentContainer := func(cr *appsv1alpha1.CIRunnerPool) corev1.Container {
+		deploy := r.buildRunnerDeployment(cr)
+		for _, c := range deploy.Spec.Template.Spec.Containers {
+			if c.Name == "build-agent" {
+				return c
+			}
+		}
+		Fail("build-agent container not found")
+		return corev1.Container{}
+	}
+
+	It("uses the plain kubectl image and script when unset (default false)", func() {
+		cr := newTestRunnerPool("test-pool", "jeff", "jeff/repo")
+		c := buildAgentContainer(cr)
+		Expect(c.Image).To(Equal("bitnami/kubectl:latest"))
+		Expect(c.Command[2]).NotTo(ContainSubstring(".snapshot-deploy"))
+		Expect(c.Env).To(BeEmpty())
+	})
+
+	It("uses the snapshot-deploy-capable image and script when enabled", func() {
+		cr := newTestRunnerPool("test-pool", "jeff", "jeff/repo")
+		cr.Spec.EnableSnapshotDeploy = true
+		cr.Spec.LocalClusterName = "kindling"
+		c := buildAgentContainer(cr)
+		Expect(c.Image).To(Equal("ghcr.io/kindling-sh/build-agent:latest"))
+		Expect(c.Command[2]).To(ContainSubstring(".snapshot-deploy"))
+		Expect(c.Command[2]).To(ContainSubstring("kind-${LOCAL_CLUSTER_NAME}"))
+		Expect(findEnvVar(c.Env, "LOCAL_CLUSTER_NAME")).To(Equal("kindling"))
+	})
+
+	It("honors BuildAgentImage as an override", func() {
+		cr := newTestRunnerPool("test-pool", "jeff", "jeff/repo")
+		cr.Spec.EnableSnapshotDeploy = true
+		cr.Spec.LocalClusterName = "kindling"
+		cr.Spec.BuildAgentImage = "ghcr.io/myorg/build-agent:v2"
+		c := buildAgentContainer(cr)
+		Expect(c.Image).To(Equal("ghcr.io/myorg/build-agent:v2"))
+	})
+
+	It("leaves the runner container and every other pod field unchanged", func() {
+		crBefore := newTestRunnerPool("test-pool", "jeff", "jeff/repo")
+		before := r.buildRunnerDeployment(crBefore)
+
+		crAfter := newTestRunnerPool("test-pool", "jeff", "jeff/repo")
+		crAfter.Spec.EnableSnapshotDeploy = true
+		crAfter.Spec.LocalClusterName = "kindling"
+		after := r.buildRunnerDeployment(crAfter)
+
+		Expect(after.Spec.Template.Spec.Containers[0]).To(Equal(before.Spec.Template.Spec.Containers[0]))
+		Expect(after.Spec.Template.Spec.ServiceAccountName).To(Equal(before.Spec.Template.Spec.ServiceAccountName))
+		Expect(after.Spec.Template.Spec.Volumes).To(Equal(before.Spec.Template.Spec.Volumes))
+	})
+
+	It("changes the spec-hash annotation when the flag flips", func() {
+		crOff := newTestRunnerPool("test-pool", "jeff", "jeff/repo")
+		offDeploy := r.buildRunnerDeployment(crOff)
+
+		crOn := newTestRunnerPool("test-pool", "jeff", "jeff/repo")
+		crOn.Spec.EnableSnapshotDeploy = true
+		crOn.Spec.LocalClusterName = "kindling"
+		onDeploy := r.buildRunnerDeployment(crOn)
+
+		Expect(onDeploy.Annotations[runnerPoolHashAnnotation]).
+			NotTo(Equal(offDeploy.Annotations[runnerPoolHashAnnotation]))
+	})
+})
+
 // ────────────────────────────────────────────────────────────────────────────
 // Integration tests (envtest)
 // ────────────────────────────────────────────────────────────────────────────

@@ -34,6 +34,7 @@ CONTEXT.md
 TODO.md
 wildcard-dns.md
 snapshot-cli-credentials-improvements.md
+snapshot-deploy-runner-sidecar.md
 .cursor/
 .windsurfrules
 **/.github/copilot-instructions.md

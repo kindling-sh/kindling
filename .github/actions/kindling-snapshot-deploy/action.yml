@@ -1,0 +1,90 @@
+# ─────────────────────────────────────────────────────────────────
+# kindling-snapshot-deploy — Reusable composite action for running
+# `kindling snapshot --deploy` via the snapshot-deploy-capable
+# build-agent sidecar (see snapshot-deploy-runner-sidecar.md).
+#
+# Requires a CIRunnerPool with spec.enableSnapshotDeploy: true (and
+# spec.localClusterName set). Hides the /builds signal-file protocol
+# the same way kindling-build and kindling-deploy already do -- this
+# action is the only place a workflow needs to know that protocol
+# exists at all.
+#
+# The staging-kubeconfig input should always come from a GH Actions
+# secret (e.g. ${{ secrets.STAGING_KUBECONFIG }}), never a literal --
+# it's written straight to the shared /builds volume (mode 0600) and
+# removed by the sidecar immediately after the deploy completes,
+# success or failure. It is never logged, echoed, or persisted
+# anywhere else.
+# ─────────────────────────────────────────────────────────────────
+name: "kindling-snapshot-deploy"
+description: "Run `kindling snapshot --deploy` via the build-agent sidecar"
+
+inputs:
+  name:
+    description: "Unique request name (used for signal files: /builds/<name>.*)"
+    required: true
+  registry:
+    description: "Target container registry (passed through as --registry)"
+    required: true
+  staging-context:
+    description: "Kubeconfig context name for the staging cluster (passed through as --context)"
+    required: true
+  staging-kubeconfig:
+    description: "Full kubeconfig YAML for the staging cluster -- pass ${{ secrets.STAGING_KUBECONFIG }}, never a literal value"
+    required: true
+  extra-args:
+    description: "Additional `kindling snapshot` flags (e.g. --creds-config, --namespace, --ingress-services). --deploy/--registry/--context/--non-interactive are always added automatically."
+    required: false
+    default: ""
+  timeout:
+    description: "Max seconds to wait for the deploy to complete"
+    required: false
+    default: "600"
+
+runs:
+  using: "composite"
+  steps:
+    - name: "snapshot --deploy (${{ inputs.name }})"
+      shell: bash
+      env:
+        REQ_NAME: ${{ inputs.name }}
+        REGISTRY: ${{ inputs.registry }}
+        STAGING_CONTEXT: ${{ inputs.staging-context }}
+        STAGING_KUBECONFIG: ${{ inputs.staging-kubeconfig }}
+        EXTRA_ARGS: ${{ inputs.extra-args }}
+        DEPLOY_TIMEOUT: ${{ inputs.timeout }}
+      run: |
+        echo "🚀 Requesting snapshot-deploy: ${REQ_NAME}"
+
+        # ── Write the staging kubeconfig secret to the shared /builds
+        # volume -- the sole channel the build-agent sidecar can read
+        # from. Never echoed, never written anywhere else.
+        umask 077
+        printf '%s' "${STAGING_KUBECONFIG}" > "/builds/${REQ_NAME}.staging-kubeconfig"
+
+        # ── Write the (non-secret) kindling snapshot args and trigger
+        # the sidecar's .snapshot-deploy handler.
+        printf '%s' "--deploy --registry ${REGISTRY} --context ${STAGING_CONTEXT} --non-interactive ${EXTRA_ARGS}" \
+          > "/builds/${REQ_NAME}.snapshot-deploy-args"
+        touch "/builds/${REQ_NAME}.snapshot-deploy"
+
+        # ── Wait for completion ──────────────────────────────────
+        WAITED=0
+        while [ ! -f "/builds/${REQ_NAME}.snapshot-deploy-done" ]; do
+          sleep 2
+          WAITED=$((WAITED+2))
+          if [ ${WAITED} -ge ${DEPLOY_TIMEOUT} ]; then
+            echo "❌ snapshot-deploy ${REQ_NAME} timed out after ${DEPLOY_TIMEOUT}s"
+            cat "/builds/${REQ_NAME}.snapshot-deploy-log" 2>/dev/null || true
+            exit 1
+          fi
+        done
+
+        # ── Check result ─────────────────────────────────────────
+        cat "/builds/${REQ_NAME}.snapshot-deploy-log"
+        EXIT_CODE=$(cat "/builds/${REQ_NAME}.snapshot-deploy-exitcode")
+        if [ "${EXIT_CODE}" != "0" ]; then
+          echo "❌ snapshot-deploy ${REQ_NAME} failed (exit ${EXIT_CODE})"
+          exit "${EXIT_CODE}"
+        fi
+        echo "✅ snapshot-deploy ${REQ_NAME} complete"

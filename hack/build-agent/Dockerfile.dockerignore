@@ -1,0 +1,22 @@
+# Build-context ignore file for hack/build-agent/Dockerfile specifically.
+# BuildKit prefers "<dockerfile>.dockerignore" over the root .dockerignore
+# when present, which is needed here since the root .dockerignore excludes
+# cli/ and hack/ (irrelevant to the operator manager image, but this image
+# needs both).
+
+.git
+.gitignore
+docs/
+docs-site/
+examples/
+.kindling/
+.github/
+homebrew-tap/
+.vscode/
+.idea/
+*.swp
+*.swo
+test/
+assets/
+kind-config.yaml
+setup-ingress.sh

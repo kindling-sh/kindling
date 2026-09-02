@@ -6,13 +6,14 @@ description: Documentation for kindling-build and kindling-deploy reusable compo
 
 # GitHub Actions Reference
 
-kindling ships two **reusable composite actions** that replace 15+ lines
+kindling ships three **reusable composite actions** that replace 15+ lines
 of signal-file boilerplate with a single `uses:` step. These actions
 live in the kindling repo under `.github/actions/` and are referenced as:
 
 ```
 kindling-sh/kindling/.github/actions/kindling-build@main
 kindling-sh/kindling/.github/actions/kindling-deploy@main
+kindling-sh/kindling/.github/actions/kindling-snapshot-deploy@main
 ```
 
 ---
@@ -185,6 +186,62 @@ without standing up separate Ingresses:
         service: "${{ github.actor }}-auth"
         port: 8081
         pathType: Exact
+```
+
+---
+
+## kindling-snapshot-deploy
+
+Run `kindling snapshot --deploy` — image copy to a real registry plus a
+Helm install against a separate staging cluster — from a self-hosted
+runner, via the same build-agent sidecar.
+
+:::warning Requires an opted-in CIRunnerPool
+This action only works on a `CIRunnerPool` with `spec.enableSnapshotDeploy: true`
+and `spec.localClusterName` set — that swaps the sidecar's image for one
+that also has `helm`, `crane`, and the `kindling` CLI installed, and adds
+the `.snapshot-deploy` signal handler to its polling loop. See
+[`snapshot-deploy-runner-sidecar.md`](https://github.com/kindling-sh/kindling/blob/main/snapshot-deploy-runner-sidecar.md)
+for the full design. Pools that don't set this flag keep the plain
+`kubectl`-only sidecar and can't run this action.
+:::
+
+### Inputs
+
+| Input | Required | Default | Description |
+|---|---|---|---|
+| `name` | ✅ | — | Unique request name (used for signal files: `/builds/<name>.*`) |
+| `registry` | ✅ | — | Target container registry (passed through as `--registry`) |
+| `staging-context` | ✅ | — | Kubeconfig context name for the staging cluster (passed through as `--context`) |
+| `staging-kubeconfig` | ✅ | — | Full kubeconfig YAML for the staging cluster — pass `${{ secrets.STAGING_KUBECONFIG }}`, never a literal value |
+| `extra-args` | ❌ | `""` | Additional `kindling snapshot` flags (e.g. `--creds-config`, `--namespace`, `--ingress-services`). `--deploy`/`--registry`/`--context`/`--non-interactive` are always added automatically. |
+| `timeout` | ❌ | `600` | Max seconds to wait for the deploy to complete |
+
+### What it does
+
+1. Writes the staging kubeconfig secret to `/builds/<name>.staging-kubeconfig`
+   (mode `0600`) — the only place this value is ever written to disk
+2. Writes the (non-secret) `kindling snapshot` flags to `/builds/<name>.snapshot-deploy-args`
+3. Touches `/builds/<name>.snapshot-deploy` to trigger the sidecar
+4. Polls for `/builds/<name>.snapshot-deploy-done` (up to `timeout` seconds)
+5. Checks `/builds/<name>.snapshot-deploy-exitcode` — exits non-zero on failure
+
+The sidecar removes both the raw staging kubeconfig and the merged
+kubeconfig it builds from it immediately after the `kindling snapshot`
+subprocess exits, success or failure — neither ever outlives the single
+triggering request.
+
+### Usage
+
+```yaml
+- name: Deploy checkout to staging
+  uses: kindling-sh/kindling/.github/actions/kindling-snapshot-deploy@main
+  with:
+    name: checkout-staging
+    registry: ghcr.io/myorg
+    staging-context: staging
+    staging-kubeconfig: ${{ secrets.STAGING_KUBECONFIG }}
+    extra-args: "--creds-config deploy/staging-credentials.yaml"
 ```
 
 ---
