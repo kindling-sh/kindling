@@ -246,9 +246,9 @@ const features: FeatureItem[] = [
   },
   {
     icon: <IconGlobe />,
-    title: "Localhost to Staging",
+    title: "Localhost to Staging — Multi-Tenant, GitOps-Ready",
     description:
-      "Dev on localhost with instant staging. Need OAuth callbacks? kindling expose creates a public HTTPS tunnel. Ready to ship? kindling snapshot graduates to any staging cluster.",
+      "Dev on localhost with instant staging. Need OAuth callbacks? kindling expose creates a public HTTPS tunnel. Ready to ship? kindling snapshot --deploy graduates to a shared staging cluster with branch-scoped naming, then --render-prod-values hands off a production-ready Helm chart for your GitOps controller.",
   },
   {
     icon: <IconShield />,
@@ -328,8 +328,11 @@ function HowItWorksSection() {
             <h3>Snapshot & Deploy</h3>
             <p>
               <code>kindling snapshot --deploy</code> copies images to your
-              registry, generates a Helm chart, and deploys to any staging
-              cluster.
+              registry and deploys to a shared, multi-tenant staging
+              cluster — branch-scoped so concurrent PRs never collide, and
+              non-interactive-safe so it can run from CI. Add
+              <code>--render-prod-values</code> for a production-ready Helm
+              chart your GitOps controller picks up at the git boundary.
             </p>
           </div>
         </div>

@@ -371,9 +371,8 @@ With `spec.enableSnapshotDeploy: true`, the build-agent sidecar's image
 is swapped for one that also has `helm`, `crane`, and the `kindling` CLI
 installed (`ghcr.io/kindling-sh/build-agent`, built from
 `hack/build-agent/Dockerfile`), and its watcher loop gains a
-`.snapshot-deploy` signal handler alongside `.request`/`.apply`/`.kubectl`
-— see [snapshot-deploy-runner-sidecar.md](https://github.com/kindling-sh/kindling/blob/main/snapshot-deploy-runner-sidecar.md)
-for the full design. No RBAC changes are needed for this — `pods/portforward`
+`.snapshot-deploy` signal handler alongside `.request`/`.apply`/`.kubectl`.
+No RBAC changes are needed for this — `pods/portforward`
 (needed for `kindling snapshot`'s local-registry access) is already
 granted to the runner ClusterRole. Pools that don't set the flag are
 unaffected: same image, same script, same everything.
