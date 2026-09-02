@@ -109,6 +109,35 @@ type CIRunnerPoolSpec struct {
 	//+kubebuilder:validation:Enum=github;gitlab;""
 	//+optional
 	CIProvider string `json:"ciProvider,omitempty"`
+
+	// EnableSnapshotDeploy, when true, uses the snapshot-deploy-capable
+	// build-agent image (kubectl + helm + crane + the kindling CLI) and
+	// adds a ".snapshot-deploy" signal handler to its polling loop, so
+	// workflows on this pool can run `kindling snapshot --deploy` via the
+	// kindling-snapshot-deploy composite action (see
+	// snapshot-deploy-runner-sidecar.md). Defaults to false — no image or
+	// script change for pools that don't opt in.
+	//+kubebuilder:default=false
+	//+optional
+	EnableSnapshotDeploy bool `json:"enableSnapshotDeploy,omitempty"`
+
+	// LocalClusterName is this developer's own Kind cluster name (the
+	// value `kindling init` used, i.e. what "kind-<name>" resolves to).
+	// Required when EnableSnapshotDeploy is true — without it the merged
+	// kubeconfig built by the .snapshot-deploy handler has no way to name
+	// a context matching what `kindling snapshot`'s local-registry
+	// port-forward expects (it always dials "kind-<clusterName>"
+	// explicitly, never an implicit current-context).
+	//+optional
+	LocalClusterName string `json:"localClusterName,omitempty"`
+
+	// BuildAgentImage overrides the default build-agent sidecar image.
+	// Only meaningful with EnableSnapshotDeploy: true — the plain
+	// (non-snapshot-deploy) build-agent image is not currently
+	// overridable via the spec. Defaults to the published
+	// snapshot-deploy-capable image (kubectl + helm + crane + kindling).
+	//+optional
+	BuildAgentImage string `json:"buildAgentImage,omitempty"`
 }
 
 // SecretKeyRef references a key within a Secret.

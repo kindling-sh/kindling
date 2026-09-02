@@ -97,6 +97,17 @@ func toK8sEnvVars(envVars []ci.ContainerEnvVar) []corev1.EnvVar {
 
 const runnerPoolHashAnnotation = "apps.example.com/runner-pool-spec-hash"
 
+// defaultBuildAgentImage is used for every pool that hasn't opted into
+// EnableSnapshotDeploy — plain kubectl, exactly as today.
+const defaultBuildAgentImage = "bitnami/kubectl:latest"
+
+// defaultSnapshotDeployBuildAgentImage layers helm, crane, and the
+// kindling CLI onto the same kubectl base (see hack/build-agent/Dockerfile),
+// so a pool with EnableSnapshotDeploy: true can run `kindling snapshot
+// --deploy` from its .snapshot-deploy signal handler. Overridable per-pool
+// via spec.buildAgentImage.
+const defaultSnapshotDeployBuildAgentImage = "ghcr.io/kindling-sh/build-agent:latest"
+
 //+kubebuilder:rbac:groups=apps.example.com,resources=cirunnerpools,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=apps.example.com,resources=cirunnerpools/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=apps.example.com,resources=cirunnerpools/finalizers,verbs=update
@@ -455,7 +466,11 @@ func (r *CIRunnerPoolReconciler) buildRunnerDeployment(cr *appsv1alpha1.CIRunner
 	// requests. The GH Actions workflow writes tarballs + trigger files
 	// there; the sidecar pipes them into one-shot Kaniko executor pods.
 	// No permissions juggling in the runner container required.
-	buildAgentScript := `#!/bin/bash
+	//
+	// The .snapshot-deploy handler below is appended only for pools with
+	// EnableSnapshotDeploy: true — every other pool gets byte-for-byte
+	// the same script as before (see snapshot-deploy-runner-sidecar.md).
+	buildAgentScriptBase := `#!/bin/bash
 set -uo pipefail
 
 BUILDS_DIR=/builds
@@ -561,15 +576,103 @@ while true; do
       cat "${BUILDS_DIR}/${NAME}.kubectl-log"
     fi
   done
+`
 
+	// snapshotDeployScript is appended between buildAgentScriptBase and
+	// buildAgentScriptFooter only when spec.EnableSnapshotDeploy is set.
+	// It handles ".snapshot-deploy" signal files the same way the blocks
+	// above handle ".request"/".apply"/".kubectl": one file per request,
+	// a ".processing" marker while running, "-log"/"-exitcode"/"-done"
+	// on completion. The kindling-snapshot-deploy composite action
+	// writes the staging kubeconfig (from a GH Actions secret) to
+	// <name>.staging-kubeconfig in this same /builds volume — never
+	// anywhere else — and this handler removes it (and the merged
+	// kubeconfig it builds) immediately after the invocation, success or
+	// failure, so it never outlives the single deploy that needed it.
+	snapshotDeployScript := `
+  # ── Handle snapshot-deploy requests (.snapshot-deploy) ──────────
+  for req in ${BUILDS_DIR}/*.snapshot-deploy; do
+    [ -f "$req" ] || continue
+    NAME="$(basename "$req" .snapshot-deploy)"
+    echo ""
+    echo "🚀 snapshot-deploy request: ${NAME}"
+
+    mv "$req" "${req}.processing"
+
+    ARGS_FILE="${BUILDS_DIR}/${NAME}.snapshot-deploy-args"
+    KUBECONFIG_FILE="${BUILDS_DIR}/${NAME}.staging-kubeconfig"
+    MERGED="$(mktemp /tmp/${NAME}-merged-kubeconfig.XXXXXX)"
+
+    # Synthesize a context for *this* cluster from the sidecar's own
+    # ServiceAccount, so the merged file satisfies kindling snapshot's
+    # explicit "--context kind-<clusterName>" for the local registry
+    # port-forward, alongside whatever staging context the workflow's
+    # kubeconfig secret brought in below.
+    KUBECONFIG="${MERGED}" kubectl config set-cluster local \
+      --server="https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT}" \
+      --certificate-authority=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt > /dev/null
+    KUBECONFIG="${MERGED}" kubectl config set-credentials local \
+      --token="$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" > /dev/null
+    KUBECONFIG="${MERGED}" kubectl config set-context "kind-${LOCAL_CLUSTER_NAME}" \
+      --cluster=local --user=local > /dev/null
+
+    # Merge in the staging context the workflow wrote to /builds.
+    KUBECONFIG="${MERGED}:${KUBECONFIG_FILE}" kubectl config view --flatten > "${MERGED}.tmp"
+    mv "${MERGED}.tmp" "${MERGED}"
+
+    KUBECONFIG="${MERGED}" kindling snapshot $(cat "${ARGS_FILE}") \
+      > "${BUILDS_DIR}/${NAME}.snapshot-deploy-log" 2>&1
+    EXIT_CODE=$?
+
+    # Secret material lived only in this file and the raw staging
+    # kubeconfig the workflow wrote -- remove both immediately, success
+    # or failure, never left around for the next poll loop.
+    rm -f "${MERGED}" "${KUBECONFIG_FILE}"
+
+    echo "${EXIT_CODE}" > "${BUILDS_DIR}/${NAME}.snapshot-deploy-exitcode"
+    touch "${BUILDS_DIR}/${NAME}.snapshot-deploy-done"
+    rm -f "${req}.processing"
+
+    if [ ${EXIT_CODE} -eq 0 ]; then
+      echo "   ✅ ${NAME} deployed"
+    else
+      echo "   ❌ ${NAME} snapshot-deploy failed (exit ${EXIT_CODE}):"
+      tail -40 "${BUILDS_DIR}/${NAME}.snapshot-deploy-log"
+    fi
+  done
+`
+
+	buildAgentScriptFooter := `
   sleep 1
 done
 `
 
+	buildAgentScript := buildAgentScriptBase
+	if spec.EnableSnapshotDeploy {
+		buildAgentScript += snapshotDeployScript
+	}
+	buildAgentScript += buildAgentScriptFooter
+
+	// Plain kubectl for pools that haven't opted in; the extended image
+	// (kubectl + helm + crane + kindling) only for ones that have.
+	buildAgentImage := defaultBuildAgentImage
+	var buildAgentEnv []corev1.EnvVar
+	if spec.EnableSnapshotDeploy {
+		buildAgentImage = defaultSnapshotDeployBuildAgentImage
+		if spec.BuildAgentImage != "" {
+			buildAgentImage = spec.BuildAgentImage
+		}
+		buildAgentEnv = append(buildAgentEnv, corev1.EnvVar{
+			Name:  "LOCAL_CLUSTER_NAME",
+			Value: spec.LocalClusterName,
+		})
+	}
+
 	buildAgent := corev1.Container{
 		Name:    "build-agent",
-		Image:   "bitnami/kubectl:latest",
+		Image:   buildAgentImage,
 		Command: []string{"/bin/bash", "-c", buildAgentScript},
+		Env:     buildAgentEnv,
 		VolumeMounts: []corev1.VolumeMount{
 			{
 				Name:      "builds",

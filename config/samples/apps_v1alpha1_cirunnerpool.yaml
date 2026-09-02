@@ -28,6 +28,13 @@ spec:
   labels:
     - linux
 
+  # Uncomment to let this pool run `kindling snapshot --deploy` from a
+  # workflow via the kindling-snapshot-deploy composite action (see
+  # snapshot-deploy-runner-sidecar.md) -- swaps the build-agent sidecar's
+  # image for one that also has helm/crane/kindling installed.
+  # enableSnapshotDeploy: true
+  # localClusterName: "kindling"   # whatever `kindling init` named this cluster
+
   # Uncomment for GitHub Enterprise Server:
   # githubURL: "https://github.example.com"
 
