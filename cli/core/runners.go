@@ -41,6 +41,11 @@ type RunnerPoolConfig struct {
 
 	// BuildAgentEnv is passed through to spec.buildAgentEnv verbatim.
 	BuildAgentEnv []BuildAgentEnvVar
+
+	// BuildAgentImage, if set, overrides spec.buildAgentImage -- e.g. a
+	// locally built and `kind load docker-image`'d tag for testing
+	// hack/build-agent/Dockerfile changes before they're published.
+	BuildAgentImage string
 }
 
 func (c *RunnerPoolConfig) namespace() string {
@@ -135,6 +140,9 @@ func buildRunnerPoolCRYAML(cfg RunnerPoolConfig, crdKind, tokenSecretName, token
 	if cfg.EnableSnapshotDeploy {
 		fmt.Fprintf(&b, "  enableSnapshotDeploy: true\n")
 		fmt.Fprintf(&b, "  localClusterName: %q\n", cfg.ClusterName)
+	}
+	if cfg.BuildAgentImage != "" {
+		fmt.Fprintf(&b, "  buildAgentImage: %q\n", cfg.BuildAgentImage)
 	}
 	if len(cfg.BuildAgentEnv) > 0 {
 		fmt.Fprintf(&b, "  buildAgentEnv:\n")

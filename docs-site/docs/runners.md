@@ -27,6 +27,7 @@ kindling runners -u <github-user> -r <repo> -t <pat>
 | `--ci-provider` | CI provider — `github` (default) or `gitlab` |
 | `--enable-snapshot-deploy` | Swap the build-agent sidecar for one that can also run `kindling snapshot --deploy` (helm + crane + the kindling CLI) via the `kindling-snapshot-deploy` action. Sets `spec.localClusterName` to this command's `--cluster` automatically. |
 | `--build-agent-env` | Env var to inject into the build-agent sidecar specifically, as `NAME=SECRET:KEY` referencing an existing Secret — repeatable. Needed for `KINDLING_REGISTRY_USERNAME`/`KINDLING_REGISTRY_PASSWORD` (authenticated `--registry` pushes during snapshot-deploy) and any `--creds-config` `fromEnv` target. |
+| `--build-agent-image` | Override the build-agent sidecar image — e.g. a locally built and `kind load docker-image`'d tag, for testing a `hack/build-agent/Dockerfile` change before it's published. |
 
 All flags are optional on the command line; the CLI prompts for any
 missing values interactively (except `--enable-snapshot-deploy` and

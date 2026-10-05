@@ -59,6 +59,7 @@ func TestBuildRunnerPoolCRYAML_SnapshotDeployAndBuildAgentEnv(t *testing.T) {
 		Repo:                 "jeff/repo",
 		Provider:             "gitlab",
 		EnableSnapshotDeploy: true,
+		BuildAgentImage:      "ghcr.io/kindling-sh/build-agent:local-test",
 		BuildAgentEnv: []BuildAgentEnvVar{
 			{Name: "KINDLING_REGISTRY_USERNAME", SecretName: "registry-credentials", SecretKey: "username"},
 			{Name: "KINDLING_REGISTRY_PASSWORD", SecretName: "registry-credentials", SecretKey: "password"},
@@ -71,6 +72,7 @@ func TestBuildRunnerPoolCRYAML_SnapshotDeployAndBuildAgentEnv(t *testing.T) {
 		`ciProvider: "gitlab"`,
 		`enableSnapshotDeploy: true`,
 		`localClusterName: "dev"`,
+		`buildAgentImage: "ghcr.io/kindling-sh/build-agent:local-test"`,
 		"buildAgentEnv:\n    - name: KINDLING_REGISTRY_USERNAME",
 		"          name: registry-credentials\n          key: username",
 		"    - name: KINDLING_REGISTRY_PASSWORD",

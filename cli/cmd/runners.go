@@ -24,12 +24,13 @@ interactively for any missing values.`,
 }
 
 var (
-	ghUsername            string
-	ghRepo                string
-	ghPAT                 string
-	ciProvider            string
-	runnersEnableSnapshot bool
-	runnersBuildAgentEnv  []string
+	ghUsername             string
+	ghRepo                 string
+	ghPAT                  string
+	ciProvider             string
+	runnersEnableSnapshot  bool
+	runnersBuildAgentEnv   []string
+	runnersBuildAgentImage string
 )
 
 func init() {
@@ -38,9 +39,11 @@ func init() {
 	runnersCmd.Flags().StringVarP(&ghPAT, "token", "t", "", "CI platform access token")
 	runnersCmd.Flags().StringVar(&ciProvider, "ci-provider", "", "CI provider (github, gitlab)")
 	runnersCmd.Flags().BoolVar(&runnersEnableSnapshot, "enable-snapshot-deploy", false,
-		"Swap the build-agent sidecar for one that can also run `kindling snapshot --deploy` (helm+crane+kindling CLI) via the kindling-snapshot-deploy action -- sets spec.localClusterName to this command's --cluster automatically")
+		"Swap the build-agent sidecar for one that can also run 'kindling snapshot --deploy' (helm+crane+kindling CLI) via the kindling-snapshot-deploy action -- sets spec.localClusterName to this command's --cluster automatically")
 	runnersCmd.Flags().StringArrayVar(&runnersBuildAgentEnv, "build-agent-env", nil,
 		"Env var to inject into the build-agent sidecar specifically (spec.buildAgentEnv), as NAME=SECRET:KEY referencing an existing Secret -- repeatable. Needed for KINDLING_REGISTRY_PASSWORD/KINDLING_REGISTRY_USERNAME (authenticated --registry pushes) and any --creds-config fromEnv target; spec.env does not reach this container")
+	runnersCmd.Flags().StringVar(&runnersBuildAgentImage, "build-agent-image", "",
+		"Override the build-agent sidecar image (spec.buildAgentImage) -- e.g. a locally built and kind-loaded tag for testing changes to hack/build-agent/Dockerfile before it's published")
 	rootCmd.AddCommand(runnersCmd)
 }
 
@@ -111,6 +114,7 @@ func runRunners(cmd *cobra.Command, args []string) error {
 		Provider:             ciProvider,
 		EnableSnapshotDeploy: runnersEnableSnapshot,
 		BuildAgentEnv:        buildAgentEnv,
+		BuildAgentImage:      runnersBuildAgentImage,
 	})
 	if err != nil {
 		return err
