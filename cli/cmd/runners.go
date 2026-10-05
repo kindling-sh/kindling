@@ -24,10 +24,12 @@ interactively for any missing values.`,
 }
 
 var (
-	ghUsername string
-	ghRepo     string
-	ghPAT      string
-	ciProvider string
+	ghUsername            string
+	ghRepo                string
+	ghPAT                 string
+	ciProvider            string
+	runnersEnableSnapshot bool
+	runnersBuildAgentEnv  []string
 )
 
 func init() {
@@ -35,7 +37,31 @@ func init() {
 	runnersCmd.Flags().StringVarP(&ghRepo, "repo", "r", "", "Repository (owner/repo or group/project)")
 	runnersCmd.Flags().StringVarP(&ghPAT, "token", "t", "", "CI platform access token")
 	runnersCmd.Flags().StringVar(&ciProvider, "ci-provider", "", "CI provider (github, gitlab)")
+	runnersCmd.Flags().BoolVar(&runnersEnableSnapshot, "enable-snapshot-deploy", false,
+		"Swap the build-agent sidecar for one that can also run `kindling snapshot --deploy` (helm+crane+kindling CLI) via the kindling-snapshot-deploy action -- sets spec.localClusterName to this command's --cluster automatically")
+	runnersCmd.Flags().StringArrayVar(&runnersBuildAgentEnv, "build-agent-env", nil,
+		"Env var to inject into the build-agent sidecar specifically (spec.buildAgentEnv), as NAME=SECRET:KEY referencing an existing Secret -- repeatable. Needed for KINDLING_REGISTRY_PASSWORD/KINDLING_REGISTRY_USERNAME (authenticated --registry pushes) and any --creds-config fromEnv target; spec.env does not reach this container")
 	rootCmd.AddCommand(runnersCmd)
+}
+
+// parseBuildAgentEnvFlag parses repeated --build-agent-env NAME=SECRET:KEY
+// values into core.BuildAgentEnvVar entries, failing fast on anything
+// malformed rather than silently dropping it or applying a half-specified
+// secretKeyRef to the cluster.
+func parseBuildAgentEnvFlag(raw []string) ([]core.BuildAgentEnvVar, error) {
+	var out []core.BuildAgentEnvVar
+	for _, entry := range raw {
+		name, rest, ok := strings.Cut(entry, "=")
+		if !ok || name == "" {
+			return nil, fmt.Errorf("--build-agent-env %q: expected NAME=SECRET:KEY", entry)
+		}
+		secretName, secretKey, ok := strings.Cut(rest, ":")
+		if !ok || secretName == "" || secretKey == "" {
+			return nil, fmt.Errorf("--build-agent-env %q: expected NAME=SECRET:KEY (missing SECRET:KEY after '=')", entry)
+		}
+		out = append(out, core.BuildAgentEnvVar{Name: name, SecretName: secretName, SecretKey: secretKey})
+	}
+	return out, nil
 }
 
 func runRunners(cmd *cobra.Command, args []string) error {
@@ -63,6 +89,14 @@ func runRunners(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("all three values (username, repo, token) are required")
 	}
 
+	buildAgentEnv, err := parseBuildAgentEnvFlag(runnersBuildAgentEnv)
+	if err != nil {
+		return err
+	}
+	if runnersEnableSnapshot {
+		step("🚀", fmt.Sprintf("Enabling snapshot-deploy (localClusterName: %s)", clusterName))
+	}
+
 	// ── Create secret + runner pool CR ──────────────────────────
 	header(fmt.Sprintf("Setting up %s runner", provider.DisplayName()))
 
@@ -70,11 +104,13 @@ func runRunners(cmd *cobra.Command, args []string) error {
 	step("🚀", fmt.Sprintf("Applying %s runner pool", provider.DisplayName()))
 
 	outputs, err := core.CreateRunnerPool(core.RunnerPoolConfig{
-		ClusterName: clusterName,
-		Username:    ghUsername,
-		Repo:        ghRepo,
-		Token:       ghPAT,
-		Provider:    ciProvider,
+		ClusterName:          clusterName,
+		Username:             ghUsername,
+		Repo:                 ghRepo,
+		Token:                ghPAT,
+		Provider:             ciProvider,
+		EnableSnapshotDeploy: runnersEnableSnapshot,
+		BuildAgentEnv:        buildAgentEnv,
 	})
 	if err != nil {
 		return err

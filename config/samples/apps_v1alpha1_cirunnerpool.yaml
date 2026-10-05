@@ -31,7 +31,9 @@ spec:
   # Uncomment to let this pool run `kindling snapshot --deploy` from a
   # workflow via the kindling-snapshot-deploy composite action --
   # swaps the build-agent sidecar's image for one that also has
-  # helm/crane/kindling installed.
+  # helm/crane/kindling installed. (`kindling runners --enable-snapshot-deploy
+  # --build-agent-env NAME=SECRET:KEY` sets all three of these fields for
+  # you -- edit by hand here only if you're applying this CR directly.)
   # enableSnapshotDeploy: true
   # localClusterName: "kindling"   # whatever `kindling init` named this cluster
 
