@@ -667,6 +667,12 @@ done
 			Value: spec.LocalClusterName,
 		})
 	}
+	// BuildAgentEnv reaches the build-agent container specifically --
+	// unlike Env (runner container only), this is the only way to get a
+	// credential (e.g. KINDLING_REGISTRY_PASSWORD, or any env var a
+	// --creds-config entry's fromEnv references) into the long-running
+	// sidecar process that actually runs `kindling snapshot --deploy`.
+	buildAgentEnv = append(buildAgentEnv, spec.BuildAgentEnv...)
 
 	buildAgent := corev1.Container{
 		Name:    "build-agent",

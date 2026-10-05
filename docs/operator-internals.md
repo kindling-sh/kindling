@@ -377,6 +377,15 @@ No RBAC changes are needed for this — `pods/portforward`
 granted to the runner ClusterRole. Pools that don't set the flag are
 unaffected: same image, same script, same everything.
 
+`spec.env` only reaches the `runner` container — it has no effect on
+`build-agent`. `spec.buildAgentEnv` is the separate field that does:
+since `build-agent` is a long-running container with its own
+environment (not spawned per-job with the triggering workflow's env),
+any credential `kindling snapshot` needs to resolve via `os.Getenv()` —
+`KINDLING_REGISTRY_PASSWORD` for an authenticated `--registry` push, or
+any env var a `--creds-config` entry's `fromEnv` references — has to be
+set here, always via a `secretKeyRef`, never a literal value.
+
 ### Provider abstraction (`pkg/ci`)
 
 ```go
