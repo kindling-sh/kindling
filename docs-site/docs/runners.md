@@ -24,10 +24,15 @@ kindling runners -u <github-user> -r <repo> -t <pat>
 | `-u, --username` | GitHub username or org |
 | `-r, --repo` | Repository name |
 | `-t, --token` | Personal Access Token with `repo` scope |
-| `--provider` | CI provider — `github` (default) or `gitlab` |
+| `--ci-provider` | CI provider — `github` (default) or `gitlab` |
+| `--enable-snapshot-deploy` | Swap the build-agent sidecar for one that can also run `kindling snapshot --deploy` (helm + crane + the kindling CLI) via the `kindling-snapshot-deploy` action. Sets `spec.localClusterName` to this command's `--cluster` automatically. |
+| `--build-agent-env` | Env var to inject into the build-agent sidecar specifically, as `NAME=SECRET:KEY` referencing an existing Secret — repeatable. Needed for `KINDLING_REGISTRY_USERNAME`/`KINDLING_REGISTRY_PASSWORD` (authenticated `--registry` pushes during snapshot-deploy) and any `--creds-config` `fromEnv` target. |
+| `--build-agent-image` | Override the build-agent sidecar image — e.g. a locally built and `kind load docker-image`'d tag, for testing a `hack/build-agent/Dockerfile` change before it's published. |
 
 All flags are optional on the command line; the CLI prompts for any
-missing values interactively.
+missing values interactively (except `--enable-snapshot-deploy` and
+`--build-agent-env`, which default to off/empty — snapshot-deploy is
+opt-in).
 
 ### What happens
 
@@ -67,8 +72,30 @@ No Docker daemon is required — everything runs inside the cluster.
 
 ## GitLab CI
 
-Pass `--provider gitlab` to register a GitLab runner instead.
+Pass `--ci-provider gitlab` to register a GitLab runner instead.
 The flow is identical but uses a GitLab runner token.
+
+## Graduating to staging from CI
+
+`--enable-snapshot-deploy` is the CLI-driven equivalent of hand-patching
+a `CIRunnerPool` with `spec.enableSnapshotDeploy`/`spec.localClusterName`/
+`spec.buildAgentEnv` — registering a runner that can also run `kindling
+snapshot --deploy` via the [`kindling-snapshot-deploy`](github-actions.md#kindling-snapshot-deploy)
+composite action, non-interactively, from CI:
+
+```bash
+kubectl create secret generic registry-credentials \
+  --from-literal=username=<registry-username> \
+  --from-literal=password=<registry-password-or-token>
+
+kindling runners -u jeff-vincent -r myorg/myapp -t ghp_abc123 \
+  --enable-snapshot-deploy \
+  --build-agent-env KINDLING_REGISTRY_USERNAME=registry-credentials:username \
+  --build-agent-env KINDLING_REGISTRY_PASSWORD=registry-credentials:password
+```
+
+See the [Graduation Guide](graduation.md) for the rest of the staging
+deploy flow once this is registered.
 
 ---
 
