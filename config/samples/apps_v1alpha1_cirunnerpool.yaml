@@ -29,11 +29,32 @@ spec:
     - linux
 
   # Uncomment to let this pool run `kindling snapshot --deploy` from a
-  # workflow via the kindling-snapshot-deploy composite action (see
-  # snapshot-deploy-runner-sidecar.md) -- swaps the build-agent sidecar's
-  # image for one that also has helm/crane/kindling installed.
+  # workflow via the kindling-snapshot-deploy composite action --
+  # swaps the build-agent sidecar's image for one that also has
+  # helm/crane/kindling installed. (`kindling runners --enable-snapshot-deploy
+  # --build-agent-env NAME=SECRET:KEY` sets all three of these fields for
+  # you -- edit by hand here only if you're applying this CR directly.)
   # enableSnapshotDeploy: true
   # localClusterName: "kindling"   # whatever `kindling init` named this cluster
+
+  # buildAgentEnv reaches the build-agent container specifically (Env
+  # above only reaches the runner container) -- it's the only way to
+  # get a credential into the long-running sidecar process that
+  # actually runs `kindling snapshot --deploy`. Needed for an
+  # authenticated --registry push (KINDLING_REGISTRY_PASSWORD) and for
+  # any env var a --creds-config entry's fromEnv references. Always a
+  # secretKeyRef, never a literal value here.
+  # buildAgentEnv:
+  #   - name: KINDLING_REGISTRY_USERNAME
+  #     valueFrom:
+  #       secretKeyRef:
+  #         name: registry-credentials
+  #         key: username
+  #   - name: KINDLING_REGISTRY_PASSWORD
+  #     valueFrom:
+  #       secretKeyRef:
+  #         name: registry-credentials
+  #         key: password
 
   # Uncomment for GitHub Enterprise Server:
   # githubURL: "https://github.example.com"

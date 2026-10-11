@@ -205,6 +205,33 @@ don't set this flag keep the plain `kubectl`-only sidecar and can't run
 this action.
 :::
 
+:::info Registry auth and --creds-config secrets need spec.buildAgentEnv
+The build-agent sidecar is a long-running container with its own
+environment — it doesn't inherit the triggering workflow's `env:`/
+`secrets.*` context. Any credential `kindling snapshot` resolves via an
+environment variable (`KINDLING_REGISTRY_PASSWORD` for an authenticated
+`--registry` push, or anything a `--creds-config` entry's `fromEnv`
+references) has to already be set on the `CIRunnerPool`'s
+`spec.buildAgentEnv`, always via a `secretKeyRef`:
+
+```yaml
+spec:
+  enableSnapshotDeploy: true
+  localClusterName: kindling
+  buildAgentEnv:
+    - name: KINDLING_REGISTRY_USERNAME
+      valueFrom:
+        secretKeyRef:
+          name: registry-credentials
+          key: username
+    - name: KINDLING_REGISTRY_PASSWORD
+      valueFrom:
+        secretKeyRef:
+          name: registry-credentials
+          key: password
+```
+:::
+
 ### Inputs
 
 | Input | Required | Default | Description |

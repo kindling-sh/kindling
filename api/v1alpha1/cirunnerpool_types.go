@@ -138,6 +138,26 @@ type CIRunnerPoolSpec struct {
 	// snapshot-deploy-capable image (kubectl + helm + crane + kindling).
 	//+optional
 	BuildAgentImage string `json:"buildAgentImage,omitempty"`
+
+	// BuildAgentEnv is a list of extra environment variables to set in
+	// the build-agent container (as opposed to Env, which only reaches
+	// the runner container). This is the only way to get a credential
+	// into the process that actually runs `kindling snapshot --deploy`
+	// in the .snapshot-deploy handler — e.g. KINDLING_REGISTRY_PASSWORD
+	// for an authenticated --registry push, or any env var a
+	// --creds-config entry's fromEnv references — since the build-agent
+	// sidecar is a long-running container with its own environment, not
+	// spawned per-job with the triggering workflow's env. Typically
+	// sourced from a secretKeyRef, never a literal value:
+	//
+	//   buildAgentEnv:
+	//     - name: KINDLING_REGISTRY_PASSWORD
+	//       valueFrom:
+	//         secretKeyRef:
+	//           name: registry-credentials
+	//           key: password
+	//+optional
+	BuildAgentEnv []corev1.EnvVar `json:"buildAgentEnv,omitempty"`
 }
 
 // SecretKeyRef references a key within a Secret.

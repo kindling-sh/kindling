@@ -7,6 +7,20 @@ import (
 	"github.com/jeffvincent/kindling/pkg/ci"
 )
 
+// BuildAgentEnvVar is one secretKeyRef-backed env var to inject into the
+// build-agent sidecar container (spec.buildAgentEnv) -- e.g. registry
+// credentials for an authenticated --registry push during
+// `kindling snapshot --deploy`, or any env var a --creds-config entry's
+// fromEnv references. Never a literal value: the build-agent sidecar is a
+// long-running container with its own environment, so this is the only way
+// to get a credential into the process that actually runs `kindling
+// snapshot` -- it does not inherit anything from the triggering workflow.
+type BuildAgentEnvVar struct {
+	Name       string // env var name, e.g. "KINDLING_REGISTRY_PASSWORD"
+	SecretName string // name of an existing Secret in the cluster
+	SecretKey  string // key within that Secret
+}
+
 // RunnerPoolConfig holds the parameters for creating a CI runner pool.
 type RunnerPoolConfig struct {
 	ClusterName string
@@ -15,6 +29,23 @@ type RunnerPoolConfig struct {
 	Token       string
 	Namespace   string // defaults to "default"
 	Provider    string // ci provider name ("github", "gitlab"); empty = default
+
+	// EnableSnapshotDeploy opts this pool into the snapshot-deploy-capable
+	// build-agent sidecar (helm + crane + kindling CLI installed, plus a
+	// .snapshot-deploy signal handler) so `kindling snapshot --deploy` can
+	// run from a workflow via the kindling-snapshot-deploy composite
+	// action. LocalClusterName is set automatically from ClusterName --
+	// the sidecar needs it to match exactly, since it's always this same
+	// developer's own Kind cluster.
+	EnableSnapshotDeploy bool
+
+	// BuildAgentEnv is passed through to spec.buildAgentEnv verbatim.
+	BuildAgentEnv []BuildAgentEnvVar
+
+	// BuildAgentImage, if set, overrides spec.buildAgentImage -- e.g. a
+	// locally built and `kind load docker-image`'d tag for testing
+	// hack/build-agent/Dockerfile changes before they're published.
+	BuildAgentImage string
 }
 
 func (c *RunnerPoolConfig) namespace() string {
@@ -57,11 +88,6 @@ func CreateRunnerPool(cfg RunnerPoolConfig) ([]string, error) {
 	outputs = append(outputs, fmt.Sprintf("Secret %s ready", labels.SecretName))
 
 	// 2. Apply runner pool CR
-	ciProviderField := ""
-	if cfg.Provider != "" {
-		ciProviderField = fmt.Sprintf("  ciProvider: %q\n", cfg.Provider)
-	}
-
 	// Determine platform URL and runner image from the provider so CRD
 	// defaults (which are GitHub-specific) don't override them.
 	platformURL := "https://github.com"
@@ -75,24 +101,8 @@ func CreateRunnerPool(cfg RunnerPoolConfig) ([]string, error) {
 	// The original username is preserved in spec.githubUsername.
 	safeName := ci.SanitizeDNS(cfg.Username)
 
-	crYAML := fmt.Sprintf(`apiVersion: apps.example.com/v1alpha1
-kind: %s
-metadata:
-  name: %%s-runner-pool
-  namespace: %%s
-spec:
-  githubUsername: "%%s"
-  repository: "%%s"
-  githubURL: "%s"
-  runnerImage: "%s"
-  tokenSecretRef:
-    name: %s
-    key: %s
-  replicas: 1
-%s  labels:
-    - kindling
-`, labels.CRDKind, platformURL, runnerImage, labels.SecretName, provider.Runner().DefaultTokenKey(), ciProviderField)
-	crYAML = fmt.Sprintf(crYAML, safeName, ns, cfg.Username, cfg.Repo)
+	crYAML := buildRunnerPoolCRYAML(cfg, labels.CRDKind, labels.SecretName,
+		provider.Runner().DefaultTokenKey(), platformURL, runnerImage, safeName, ns)
 
 	out, err = KubectlApplyStdin(cfg.ClusterName, crYAML)
 	if err != nil {
@@ -102,6 +112,51 @@ spec:
 	outputs = append(outputs, fmt.Sprintf("%s runner pool %s created", provider.DisplayName(), poolName))
 
 	return outputs, nil
+}
+
+// buildRunnerPoolCRYAML renders the CIRunnerPool CR YAML for CreateRunnerPool.
+// Pulled out as its own function (rather than inline string formatting) so
+// it's unit-testable without touching a real cluster, and so the optional,
+// variable-length buildAgentEnv block can be appended safely.
+func buildRunnerPoolCRYAML(cfg RunnerPoolConfig, crdKind, tokenSecretName, tokenSecretKey, platformURL, runnerImage, safeName, ns string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "apiVersion: apps.example.com/v1alpha1\n")
+	fmt.Fprintf(&b, "kind: %s\n", crdKind)
+	fmt.Fprintf(&b, "metadata:\n")
+	fmt.Fprintf(&b, "  name: %s-runner-pool\n", safeName)
+	fmt.Fprintf(&b, "  namespace: %s\n", ns)
+	fmt.Fprintf(&b, "spec:\n")
+	fmt.Fprintf(&b, "  githubUsername: %q\n", cfg.Username)
+	fmt.Fprintf(&b, "  repository: %q\n", cfg.Repo)
+	fmt.Fprintf(&b, "  githubURL: %q\n", platformURL)
+	fmt.Fprintf(&b, "  runnerImage: %q\n", runnerImage)
+	fmt.Fprintf(&b, "  tokenSecretRef:\n")
+	fmt.Fprintf(&b, "    name: %s\n", tokenSecretName)
+	fmt.Fprintf(&b, "    key: %s\n", tokenSecretKey)
+	fmt.Fprintf(&b, "  replicas: 1\n")
+	if cfg.Provider != "" {
+		fmt.Fprintf(&b, "  ciProvider: %q\n", cfg.Provider)
+	}
+	if cfg.EnableSnapshotDeploy {
+		fmt.Fprintf(&b, "  enableSnapshotDeploy: true\n")
+		fmt.Fprintf(&b, "  localClusterName: %q\n", cfg.ClusterName)
+	}
+	if cfg.BuildAgentImage != "" {
+		fmt.Fprintf(&b, "  buildAgentImage: %q\n", cfg.BuildAgentImage)
+	}
+	if len(cfg.BuildAgentEnv) > 0 {
+		fmt.Fprintf(&b, "  buildAgentEnv:\n")
+		for _, e := range cfg.BuildAgentEnv {
+			fmt.Fprintf(&b, "    - name: %s\n", e.Name)
+			fmt.Fprintf(&b, "      valueFrom:\n")
+			fmt.Fprintf(&b, "        secretKeyRef:\n")
+			fmt.Fprintf(&b, "          name: %s\n", e.SecretName)
+			fmt.Fprintf(&b, "          key: %s\n", e.SecretKey)
+		}
+	}
+	fmt.Fprintf(&b, "  labels:\n")
+	fmt.Fprintf(&b, "    - kindling\n")
+	return b.String()
 }
 
 // ResetRunners deletes all CIRunnerPool CRs and the CI token secret.

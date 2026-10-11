@@ -225,6 +225,43 @@ var _ = Describe("buildRunnerDeployment with EnableSnapshotDeploy", func() {
 		Expect(c.Image).To(Equal("ghcr.io/myorg/build-agent:v2"))
 	})
 
+	It("passes BuildAgentEnv through to the build-agent container, alongside LOCAL_CLUSTER_NAME", func() {
+		cr := newTestRunnerPool("test-pool", "jeff", "jeff/repo")
+		cr.Spec.EnableSnapshotDeploy = true
+		cr.Spec.LocalClusterName = "kindling"
+		cr.Spec.BuildAgentEnv = []corev1.EnvVar{
+			{
+				Name: "KINDLING_REGISTRY_PASSWORD",
+				ValueFrom: &corev1.EnvVarSource{
+					SecretKeyRef: &corev1.SecretKeySelector{
+						LocalObjectReference: corev1.LocalObjectReference{Name: "registry-credentials"},
+						Key:                  "password",
+					},
+				},
+			},
+		}
+		c := buildAgentContainer(cr)
+		Expect(findEnvVar(c.Env, "LOCAL_CLUSTER_NAME")).To(Equal("kindling"))
+
+		var pwEnv *corev1.EnvVar
+		for i, e := range c.Env {
+			if e.Name == "KINDLING_REGISTRY_PASSWORD" {
+				pwEnv = &c.Env[i]
+				break
+			}
+		}
+		Expect(pwEnv).NotTo(BeNil())
+		Expect(pwEnv.ValueFrom.SecretKeyRef.Name).To(Equal("registry-credentials"))
+		Expect(pwEnv.ValueFrom.SecretKeyRef.Key).To(Equal("password"))
+	})
+
+	It("does not require EnableSnapshotDeploy for BuildAgentEnv to apply", func() {
+		cr := newTestRunnerPool("test-pool", "jeff", "jeff/repo")
+		cr.Spec.BuildAgentEnv = []corev1.EnvVar{{Name: "FOO", Value: "bar"}}
+		c := buildAgentContainer(cr)
+		Expect(findEnvVar(c.Env, "FOO")).To(Equal("bar"))
+	})
+
 	It("leaves the runner container and every other pod field unchanged", func() {
 		crBefore := newTestRunnerPool("test-pool", "jeff", "jeff/repo")
 		before := r.buildRunnerDeployment(crBefore)
