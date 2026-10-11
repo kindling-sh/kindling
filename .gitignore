@@ -35,6 +35,7 @@ TODO.md
 wildcard-dns.md
 snapshot-cli-credentials-improvements.md
 snapshot-deploy-runner-sidecar.md
+FULL_GITOPS_HANDOFF_WITH_UI_PARITY_TODO.md
 .cursor/
 .windsurfrules
 **/.github/copilot-instructions.md
