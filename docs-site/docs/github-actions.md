@@ -213,17 +213,30 @@ this action.
 | `registry` | ✅ | — | Target container registry (passed through as `--registry`) |
 | `staging-context` | ✅ | — | Kubeconfig context name for the staging cluster (passed through as `--context`) |
 | `staging-kubeconfig` | ✅ | — | Full kubeconfig YAML for the staging cluster — pass `${{ secrets.STAGING_KUBECONFIG }}`, never a literal value |
-| `extra-args` | ❌ | `""` | Additional `kindling snapshot` flags (e.g. `--creds-config`, `--namespace`, `--ingress-services`). `--deploy`/`--registry`/`--context`/`--non-interactive` are always added automatically. |
+| `extra-args` | ❌ | `""` | Additional `kindling snapshot` flags (e.g. `--creds-config`, `--namespace`, `--ingress-services`, `--render-prod-values`). `--deploy`/`--registry`/`--context`/`--non-interactive` are always added automatically, and `--output` is always forced to a path under `/builds` (see below) — an `--output` in `extra-args` is silently overridden, since the chart-extraction step depends on knowing exactly where the chart landed. |
 | `timeout` | ❌ | `600` | Max seconds to wait for the deploy to complete |
+
+### Outputs
+
+| Output | Description |
+|---|---|
+| `chart-path` | Path, in the GitHub Actions workspace (not `/builds`), to the exported chart — includes `values-prod.yaml` and `MISSING_CREDENTIALS.md` when `--render-prod-values` was passed and/or credentials were missing. Empty if the deploy failed before the chart was exported. |
 
 ### What it does
 
 1. Writes the staging kubeconfig secret to `/builds/<name>.staging-kubeconfig`
    (mode `0600`) — the only place this value is ever written to disk
-2. Writes the (non-secret) `kindling snapshot` flags to `/builds/<name>.snapshot-deploy-args`
+2. Writes the (non-secret) `kindling snapshot` flags to `/builds/<name>.snapshot-deploy-args`,
+   forcing `--output /builds/<name>-chart`
 3. Touches `/builds/<name>.snapshot-deploy` to trigger the sidecar
 4. Polls for `/builds/<name>.snapshot-deploy-done` (up to `timeout` seconds)
 5. Checks `/builds/<name>.snapshot-deploy-exitcode` — exits non-zero on failure
+6. Copies `/builds/<name>-chart` into the GitHub Actions workspace (and
+   removes the `/builds` copy) so later steps —
+   `actions/upload-artifact@v4`, `git add`, `gh pr comment`, etc. — can
+   use it without any knowledge of the `/builds` signal-file protocol.
+   Runs even if the deploy step failed, so a partial chart (if any) is
+   still inspectable; `chart-path` is empty if nothing was ever written.
 
 The sidecar removes both the raw staging kubeconfig and the merged
 kubeconfig it builds from it immediately after the `kindling snapshot`
@@ -234,13 +247,21 @@ triggering request.
 
 ```yaml
 - name: Deploy checkout to staging
+  id: deploy
   uses: kindling-sh/kindling/.github/actions/kindling-snapshot-deploy@main
   with:
     name: checkout-staging
     registry: ghcr.io/myorg
     staging-context: staging
     staging-kubeconfig: ${{ secrets.STAGING_KUBECONFIG }}
-    extra-args: "--creds-config deploy/staging-credentials.yaml"
+    extra-args: "--creds-config deploy/staging-credentials.yaml --render-prod-values"
+
+- name: Upload the production-ready chart
+  if: steps.deploy.outputs.chart-path != ''
+  uses: actions/upload-artifact@v4
+  with:
+    name: checkout-staging-chart
+    path: ${{ steps.deploy.outputs.chart-path }}
 ```
 
 ---
