@@ -1,0 +1,133 @@
+# ─────────────────────────────────────────────────────────────────
+# kindling-pr-preview — Reusable composite action that deploys a PR's
+# branch to a shared staging cluster (via kindling-snapshot-deploy) and
+# posts/updates a single PR comment with the resulting values-prod.yaml
+# (and MISSING_CREDENTIALS.md, if produced). Intended for a
+# `pull_request: [opened, synchronize]` trigger -- see
+# FULL_GITOPS_HANDOFF_WITH_UI_PARITY_TODO.md, item B2.
+#
+# Also uploads the chart as a build artifact named "values-<pr-number>"
+# -- the merge-triggered GitOps-handoff step (B3, not yet implemented)
+# is expected to retrieve this exact artifact rather than re-rendering,
+# so whatever lands in a GitOps repo on merge is guaranteed to be the
+# same thing reviewers already saw in this comment, not a fresh render
+# that could subtly differ.
+#
+# Uses actions/github-script (bundled with every GH Actions runner,
+# including bare self-hosted ones, since it's how the runner itself
+# executes JS-based actions) rather than the `gh` CLI for the
+# find-or-update-comment logic -- `gh` is not guaranteed to be
+# preinstalled on ghcr.io/actions/actions-runner:latest, and
+# github-script's Octokit client is a more precise way to find "the
+# comment this exact action already posted" (a content marker) than
+# `gh pr comment --edit-last`, which would also match a comment posted
+# by an unrelated workflow run as the same bot identity.
+#
+# Requires `permissions: { pull-requests: write }` on the calling job.
+# ─────────────────────────────────────────────────────────────────
+name: "kindling-pr-preview"
+description: "Deploy a PR to shared staging and post/update a values-prod.yaml preview comment"
+
+inputs:
+  name:
+    description: "Unique request name, passed through to kindling-snapshot-deploy (e.g. pr-${{ github.event.pull_request.number }})"
+    required: true
+  pr-number:
+    description: "Pull request number to comment on (e.g. ${{ github.event.pull_request.number }})"
+    required: true
+  registry:
+    description: "Target container registry (passed through as --registry)"
+    required: true
+  staging-context:
+    description: "Kubeconfig context name for the staging cluster (passed through as --context)"
+    required: true
+  staging-kubeconfig:
+    description: "Full kubeconfig YAML for the staging cluster -- pass ${{ secrets.STAGING_KUBECONFIG }}, never a literal value"
+    required: true
+  extra-args:
+    description: "Additional `kindling snapshot` flags (e.g. --creds-config, --namespace, --ingress-services). --deploy/--registry/--context/--non-interactive/--render-prod-values are always added automatically."
+    required: false
+    default: ""
+  timeout:
+    description: "Max seconds to wait for the deploy to complete"
+    required: false
+    default: "600"
+
+outputs:
+  chart-path:
+    description: "Path (in the GitHub Actions workspace) to the exported chart. Empty if the deploy failed before chart export."
+    value: ${{ steps.deploy.outputs.chart-path }}
+
+runs:
+  using: "composite"
+  steps:
+    - id: deploy
+      uses: ./.github/actions/kindling-snapshot-deploy
+      with:
+        name: ${{ inputs.name }}
+        registry: ${{ inputs.registry }}
+        staging-context: ${{ inputs.staging-context }}
+        staging-kubeconfig: ${{ inputs.staging-kubeconfig }}
+        extra-args: "${{ inputs.extra-args }} --render-prod-values"
+        timeout: ${{ inputs.timeout }}
+
+    # Only uploaded when the chart actually exists (deploy succeeded far
+    # enough to export it) -- B3's merge-triggered handoff step expects
+    # to find this exact artifact name for this exact PR number.
+    - name: "Upload chart artifact (values-${{ inputs.pr-number }})"
+      if: always() && steps.deploy.outputs.chart-path != ''
+      uses: actions/upload-artifact@v4
+      with:
+        name: values-${{ inputs.pr-number }}
+        path: ${{ steps.deploy.outputs.chart-path }}
+
+    # Posts on first deploy, edits the same comment (identified by a
+    # content marker, not "last comment by this bot") on every
+    # subsequent push to the PR -- never a second comment.
+    - name: "Post/update staging preview comment"
+      if: always()
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const fs = require('fs');
+          const path = require('path');
+          const marker = '<!-- kindling-staging-preview -->';
+          const prNumber = parseInt(${{ toJSON(inputs.pr-number) }}, 10);
+          const chartPath = ${{ toJSON(steps.deploy.outputs.chart-path) }};
+
+          let body;
+          if (!chartPath) {
+            body = `${marker}\n### ⚠️ Staging preview deploy failed\n\nSee the [workflow run](${context.payload.repository.html_url}/actions/runs/${context.runId}) for details.`;
+          } else {
+            const valuesPath = path.join(chartPath, 'values-prod.yaml');
+            const missingPath = path.join(chartPath, 'MISSING_CREDENTIALS.md');
+            const values = fs.existsSync(valuesPath)
+              ? fs.readFileSync(valuesPath, 'utf8')
+              : '(values-prod.yaml not produced -- was --render-prod-values combined with a successful --deploy?)';
+            body = `${marker}\n### 🚀 Staging preview deployed\n\n<details><summary>values-prod.yaml</summary>\n\n\`\`\`yaml\n${values}\n\`\`\`\n\n</details>`;
+            if (fs.existsSync(missingPath)) {
+              body += `\n\n⚠️ **Missing credentials**\n\n${fs.readFileSync(missingPath, 'utf8')}`;
+            }
+          }
+
+          const { data: comments } = await github.rest.issues.listComments({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: prNumber,
+          });
+          const existing = comments.find((c) => c.body && c.body.startsWith(marker));
+          if (existing) {
+            await github.rest.issues.updateComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: existing.id,
+              body,
+            });
+          } else {
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              body,
+            });
+          }

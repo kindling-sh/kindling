@@ -293,6 +293,71 @@ triggering request.
 
 ---
 
+## kindling-pr-preview
+
+Deploys a PR's branch to a shared staging cluster (via
+`kindling-snapshot-deploy`, with `--render-prod-values` always added) and
+posts a single PR comment with the resulting `values-prod.yaml` — editing
+that same comment on every subsequent push, never posting a second one.
+Also uploads the chart as a build artifact named `values-<pr-number>`, so
+a later merge-triggered step can retrieve the *exact* artifact reviewers
+already saw, rather than re-rendering.
+
+:::info Requires pull-requests: write
+The calling job needs `permissions: { pull-requests: write }` to post/edit
+the comment. Everything else (the `enableSnapshotDeploy` `CIRunnerPool`
+requirement, the `STAGING_KUBECONFIG` secret, etc.) is identical to
+`kindling-snapshot-deploy` above, since this action calls it directly.
+:::
+
+### Inputs
+
+| Input | Required | Default | Description |
+|---|---|---|---|
+| `name` | ✅ | — | Unique request name, passed through to `kindling-snapshot-deploy` |
+| `pr-number` | ✅ | — | Pull request number to comment on — pass `${{ github.event.pull_request.number }}` |
+| `registry` | ✅ | — | Target container registry |
+| `staging-context` | ✅ | — | Kubeconfig context name for the staging cluster |
+| `staging-kubeconfig` | ✅ | — | Full kubeconfig YAML — pass `${{ secrets.STAGING_KUBECONFIG }}` |
+| `extra-args` | ❌ | `""` | Additional `kindling snapshot` flags — `--render-prod-values` is always added on top of whatever's here |
+| `timeout` | ❌ | `600` | Max seconds to wait for the deploy to complete |
+
+### Outputs
+
+| Output | Description |
+|---|---|
+| `chart-path` | Same as `kindling-snapshot-deploy`'s output — pass-through |
+
+### Usage
+
+```yaml
+name: Staging Preview
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  staging-preview:
+    runs-on: [self-hosted, "${{ github.actor }}"]
+    permissions:
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: kindling-sh/kindling/.github/actions/kindling-pr-preview@main
+        with:
+          name: pr-${{ github.event.pull_request.number }}
+          pr-number: ${{ github.event.pull_request.number }}
+          registry: ghcr.io/myorg
+          staging-context: staging
+          staging-kubeconfig: ${{ secrets.STAGING_KUBECONFIG }}
+```
+
+Every subsequent push to the PR re-runs this same job (the `synchronize`
+event type), redeploying under the same branch-derived name (stable
+across pushes) and editing the same comment with the latest values.
+
+---
+
 ## Complete workflow example
 
 A full workflow using both actions:

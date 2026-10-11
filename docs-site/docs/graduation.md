@@ -151,6 +151,12 @@ same GH Actions job that already builds and deploys your dev
 environment, with the staging cluster's kubeconfig supplied as a GitHub
 Actions secret. No laptop, no human at a TTY, required.
 
+For a per-PR preview environment — deploy on every push to a PR, with the
+resulting `values-prod.yaml` posted (and kept up to date) as a PR comment
+— see [`kindling-pr-preview`](github-actions.md#kindling-pr-preview),
+which wraps `kindling-snapshot-deploy` for exactly that `pull_request`
+trigger shape.
+
 ---
 
 ## Step 2: Configure TLS
