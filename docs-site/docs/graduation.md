@@ -157,6 +157,14 @@ resulting `values-prod.yaml` posted (and kept up to date) as a PR comment
 which wraps `kindling-snapshot-deploy` for exactly that `pull_request`
 trigger shape.
 
+When that PR merges, [`kindling-gitops-handoff`](github-actions.md#kindling-gitops-handoff)
+commits the exact `values-prod.yaml` reviewers already saw — not a fresh
+render — into a GitOps repo. That's the full loop: open a PR, get a
+staging preview and a values diff in a comment, merge, and the
+already-reviewed production chart lands wherever your GitOps controller
+watches, with kindling never touching a production credential or cluster
+anywhere in that chain.
+
 ---
 
 ## Step 2: Configure TLS

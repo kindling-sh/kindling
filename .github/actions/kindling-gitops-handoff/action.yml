@@ -1,0 +1,166 @@
+# ─────────────────────────────────────────────────────────────────
+# kindling-gitops-handoff — Reusable composite action that commits the
+# exact, already-reviewed values-prod.yaml/chart (produced by a prior
+# kindling-pr-preview run, see .github/actions/kindling-pr-preview) into
+# a GitOps repo on PR merge. See FULL_GITOPS_HANDOFF_WITH_UI_PARITY_TODO.md,
+# item B3.
+#
+# Deliberately retrieves the artifact kindling-pr-preview already
+# uploaded (named "values-<pr-number>") rather than re-rendering at
+# merge time -- a fresh render here could subtly differ from what was
+# actually reviewed (a dev-cluster value that changed between the PR's
+# last push and the merge, different dependency-registry iteration
+# order, etc.), silently invalidating the review. This action never
+# runs `kindling snapshot` itself.
+#
+# This action never touches a live cluster and never resolves a
+# credential -- it stops at a git push (or, with open-pr: true, a PR)
+# against the GitOps repo. Whatever GitOps controller already watches
+# that repo (Argo CD, Flux, a platform team's own pipeline) takes it
+# from there; kindling's involvement ends at this commit.
+#
+# The calling workflow is responsible for the `if:
+# github.event.pull_request.merged == true` guard -- a `pull_request:
+# closed` event fires for PRs closed *without* merging too, and this
+# action has no way to distinguish that on its own without the calling
+# workflow's own event context, matching how `enableSnapshotDeploy`
+# gating and `pull-requests: write` permissions are documented
+# requirements of the calling workflow elsewhere in this same action
+# set, not enforced internally.
+# ─────────────────────────────────────────────────────────────────
+name: "kindling-gitops-handoff"
+description: "Commit a previously-reviewed values-prod.yaml + chart into a GitOps repo on PR merge"
+
+inputs:
+  pr-number:
+    description: "The merged pull request's number -- used to find the values-<pr-number> artifact kindling-pr-preview uploaded, and in the commit message/PR title"
+    required: true
+  gitops-repo:
+    description: "owner/repo to commit into. Leave empty to use the current repo -- intentionally not defaulted to github.repository here, since action.yml input defaults don't reliably support expressions; the fallback is applied at each usage site instead (gitops-repo || github.repository)."
+    required: false
+    default: ""
+  gitops-base-branch:
+    description: "Branch in gitops-repo to commit/PR against"
+    required: false
+    default: "main"
+  gitops-path:
+    description: "Destination path within the GitOps repo"
+    required: false
+    default: "environments/production"
+  gitops-token:
+    description: "Token with push access to gitops-repo (and pull-requests:write if open-pr is true) -- pass ${{ secrets.GITOPS_PAT }}, never a literal value. Only needs access to gitops-repo, not the current repo."
+    required: true
+  open-pr:
+    description: "Open a PR against gitops-base-branch instead of committing directly to it"
+    required: false
+    default: "false"
+
+outputs:
+  promoted:
+    description: "\"true\" if a commit was made (or a PR opened), \"false\" if there was nothing new to promote (identical content already present)"
+    value: ${{ steps.commit.outputs.promoted }}
+
+runs:
+  using: "composite"
+  steps:
+    # ── Find the exact artifact kindling-pr-preview uploaded ────────
+    # Looked up by name (values-<pr-number>) via the Artifacts API
+    # rather than assuming any particular workflow/run naming
+    # convention -- this repo's own GITHUB_TOKEN is sufficient here,
+    # since the artifact lives in the same repo this job is running in
+    # (gitops-token is only for the separate gitops-repo below).
+    - id: find-artifact
+      name: "Find the values-${{ inputs.pr-number }} artifact"
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const artifactName = `values-${{ inputs.pr-number }}`;
+          const { data } = await github.rest.actions.listArtifactsForRepo({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            per_page: 100,
+          });
+          const matches = data.artifacts
+            .filter((a) => a.name === artifactName && !a.expired)
+            .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+          if (matches.length === 0) {
+            core.setFailed(`No non-expired artifact named "${artifactName}" found -- did kindling-pr-preview run for this PR, and has its artifact not expired?`);
+            return;
+          }
+          core.setOutput('run-id', matches[0].workflow_run.id);
+
+    - name: "Download the exact previewed artifact"
+      uses: actions/download-artifact@v4
+      with:
+        name: values-${{ inputs.pr-number }}
+        run-id: ${{ steps.find-artifact.outputs.run-id }}
+        github-token: ${{ github.token }}
+        path: ${{ runner.temp }}/kindling-promote
+
+    # ── Checkout the GitOps destination repo ────────────────────────
+    - name: "Checkout gitops-repo"
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ inputs.gitops-repo || github.repository }}
+        ref: ${{ inputs.gitops-base-branch }}
+        token: ${{ inputs.gitops-token }}
+        path: gitops-checkout
+
+    # ── Commit (or branch, if open-pr) ───────────────────────────────
+    - id: commit
+      name: "Commit values-${{ inputs.pr-number }} into gitops-repo"
+      shell: bash
+      env:
+        GITOPS_PATH: ${{ inputs.gitops-path }}
+        PR_NUMBER: ${{ inputs.pr-number }}
+        OPEN_PR: ${{ inputs.open-pr }}
+        ARTIFACT_DIR: ${{ runner.temp }}/kindling-promote
+      run: |
+        cd gitops-checkout
+        rm -rf "${GITOPS_PATH}"
+        mkdir -p "${GITOPS_PATH}"
+        cp -r "${ARTIFACT_DIR}"/* "${GITOPS_PATH}/"
+
+        git config user.name "kindling-bot"
+        git config user.email "kindling-bot@users.noreply.github.com"
+        git add "${GITOPS_PATH}"
+
+        if git diff --cached --quiet; then
+          echo "ℹ️  No changes to promote -- gitops-repo already has this content"
+          echo "promoted=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        BRANCH="kindling-promote-pr-${PR_NUMBER}"
+        if [ "${OPEN_PR}" = "true" ]; then
+          git checkout -b "${BRANCH}"
+        fi
+
+        git commit -m "promote: PR #${PR_NUMBER}"
+
+        if [ "${OPEN_PR}" = "true" ]; then
+          git push origin "${BRANCH}" --force
+          echo "branch=${BRANCH}" >> "$GITHUB_OUTPUT"
+        else
+          git push origin "HEAD:${{ inputs.gitops-base-branch }}"
+        fi
+        echo "promoted=true" >> "$GITHUB_OUTPUT"
+
+    # ── Optionally open a PR instead of committing directly ─────────
+    - name: "Open PR in gitops-repo"
+      if: inputs.open-pr == 'true' && steps.commit.outputs.promoted == 'true'
+      uses: actions/github-script@v7
+      env:
+        GITOPS_REPO: ${{ inputs.gitops-repo || github.repository }}
+      with:
+        github-token: ${{ inputs.gitops-token }}
+        script: |
+          const [owner, repo] = process.env.GITOPS_REPO.split('/');
+          await github.rest.pulls.create({
+            owner,
+            repo,
+            title: `promote: PR #${{ inputs.pr-number }}`,
+            head: "${{ steps.commit.outputs.branch }}",
+            base: "${{ inputs.gitops-base-branch }}",
+            body: `Promotes the reviewed staging preview for PR #${{ inputs.pr-number }} in ${{ github.repository }} -- see that PR's staging preview comment for the values.yaml diff that was already reviewed. This commit is the exact artifact from that review, not a fresh render.`,
+          });
