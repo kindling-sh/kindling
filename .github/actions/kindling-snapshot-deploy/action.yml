@@ -41,10 +41,16 @@ inputs:
     required: false
     default: "600"
 
+outputs:
+  chart-path:
+    description: "Path (in the GitHub Actions workspace) to the exported chart -- includes values-prod.yaml and MISSING_CREDENTIALS.md when those flags/conditions apply. Empty if the deploy failed."
+    value: ${{ steps.copy-chart.outputs.chart-path }}
+
 runs:
   using: "composite"
   steps:
-    - name: "snapshot --deploy (${{ inputs.name }})"
+    - id: deploy
+      name: "snapshot --deploy (${{ inputs.name }})"
       shell: bash
       env:
         REQ_NAME: ${{ inputs.name }}
@@ -63,8 +69,14 @@ runs:
         printf '%s' "${STAGING_KUBECONFIG}" > "/builds/${REQ_NAME}.staging-kubeconfig"
 
         # ── Write the (non-secret) kindling snapshot args and trigger
-        # the sidecar's .snapshot-deploy handler.
-        printf '%s' "--deploy --registry ${REGISTRY} --context ${STAGING_CONTEXT} --non-interactive ${EXTRA_ARGS}" \
+        # the sidecar's .snapshot-deploy handler. --output is forced to
+        # a path under the shared /builds volume, and placed *after*
+        # EXTRA_ARGS so it always wins if a caller's extra-args also
+        # happens to set --output (last occurrence wins for kindling's
+        # flag parsing) -- the copy-chart step below depends on knowing
+        # exactly where the chart landed, so this path is never
+        # user-overridable.
+        printf '%s' "--deploy --registry ${REGISTRY} --context ${STAGING_CONTEXT} --non-interactive ${EXTRA_ARGS} --output /builds/${REQ_NAME}-chart" \
           > "/builds/${REQ_NAME}.snapshot-deploy-args"
         touch "/builds/${REQ_NAME}.snapshot-deploy"
 
@@ -88,3 +100,32 @@ runs:
           exit "${EXIT_CODE}"
         fi
         echo "✅ snapshot-deploy ${REQ_NAME} complete"
+
+    # ── Copy the exported chart out of /builds ──────────────────────
+    # /builds is only shared between the runner and build-agent
+    # containers -- it is NOT the GitHub Actions workspace, so nothing
+    # written there (the chart, values-prod.yaml,
+    # MISSING_CREDENTIALS.md) is visible to any later workflow step
+    # (actions/upload-artifact, git add, gh pr comment, etc.) without
+    # this copy. Runs even on failure (if: always()) so a failed
+    # deploy's partial chart/log state is still inspectable, but only
+    # actually copies if the directory exists -- a sufficiently early
+    # failure (e.g. before exportSnapshot runs) may never create it.
+    - id: copy-chart
+      name: "Copy chart out of /builds (${{ inputs.name }})"
+      if: always()
+      shell: bash
+      env:
+        REQ_NAME: ${{ inputs.name }}
+      run: |
+        SRC="/builds/${REQ_NAME}-chart"
+        DEST="${{ github.workspace }}/${REQ_NAME}-chart"
+        if [ ! -d "${SRC}" ]; then
+          echo "ℹ️  No chart directory at ${SRC} -- deploy likely failed before chart export"
+          echo "chart-path=" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        cp -r "${SRC}" "${DEST}"
+        rm -rf "${SRC}"
+        echo "📦 Chart copied to ${DEST}"
+        echo "chart-path=${DEST}" >> "$GITHUB_OUTPUT"
