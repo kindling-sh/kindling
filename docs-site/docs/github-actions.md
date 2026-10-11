@@ -358,6 +358,77 @@ across pushes) and editing the same comment with the latest values.
 
 ---
 
+## kindling-gitops-handoff
+
+Commits the exact, already-reviewed `values-prod.yaml` + chart — the
+`values-<pr-number>` artifact `kindling-pr-preview` uploaded — into a
+GitOps repo on PR merge. Never re-renders at merge time: a fresh render
+could subtly differ from what was actually reviewed (a dev-cluster value
+that changed between the PR's last push and the merge, different map
+iteration order, etc.), which would silently invalidate the review. Never
+touches a live cluster, never resolves a credential, and never performs
+the production deploy itself — stops at a git push (or a PR, with
+`open-pr: true`) against the GitOps repo; whatever GitOps controller
+already watches it (Argo CD, Flux, a platform team's own pipeline) takes
+it from there.
+
+:::warning The calling workflow owns the merged == true guard
+A `pull_request: closed` event fires for PRs closed **without** merging
+too. This action has no way to distinguish that on its own — the calling
+job must gate on `if: github.event.pull_request.merged == true`, exactly
+like the example below. Also requires `permissions: { actions: read }` (to
+look up the artifact) on the current repo, and the token passed as
+`gitops-token` needs push access (and `pull-requests: write`, if
+`open-pr: true`) to whatever `gitops-repo` is — which may be an entirely
+different, more tightly-scoped repo than the one the workflow runs in, so
+this token is deliberately a separate input from the job's own
+`GITHUB_TOKEN`.
+:::
+
+### Inputs
+
+| Input | Required | Default | Description |
+|---|---|---|---|
+| `pr-number` | ✅ | — | The merged PR's number — pass `${{ github.event.pull_request.number }}` |
+| `gitops-repo` | ❌ | *(current repo)* | `owner/repo` to commit into |
+| `gitops-base-branch` | ❌ | `main` | Branch in `gitops-repo` to commit/PR against |
+| `gitops-path` | ❌ | `environments/production` | Destination path within `gitops-repo` |
+| `gitops-token` | ✅ | — | Token with push access to `gitops-repo` — pass `${{ secrets.GITOPS_PAT }}`, never a literal value |
+| `open-pr` | ❌ | `"false"` | Open a PR against `gitops-base-branch` instead of committing directly to it |
+
+### Outputs
+
+| Output | Description |
+|---|---|
+| `promoted` | `"true"` if a commit was made (or PR opened), `"false"` if `gitops-repo` already had identical content (idempotent — safe to re-run) |
+
+### Usage
+
+```yaml
+name: Promote to GitOps
+on:
+  pull_request:
+    types: [closed]
+
+jobs:
+  promote:
+    if: github.event.pull_request.merged == true
+    runs-on: [self-hosted, "${{ github.actor }}"]
+    permissions:
+      actions: read
+    steps:
+      - uses: kindling-sh/kindling/.github/actions/kindling-gitops-handoff@main
+        with:
+          pr-number: ${{ github.event.pull_request.number }}
+          gitops-repo: myorg/gitops-production
+          gitops-token: ${{ secrets.GITOPS_PAT }}
+```
+
+Closing a PR without merging never triggers this job at all, since the
+`if:` guard is evaluated before any step runs.
+
+---
+
 ## Complete workflow example
 
 A full workflow using both actions:
