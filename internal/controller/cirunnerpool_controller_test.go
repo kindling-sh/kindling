@@ -290,6 +290,81 @@ var _ = Describe("buildRunnerDeployment with EnableSnapshotDeploy", func() {
 	})
 })
 
+var _ = Describe("firstBrokenContainerReasonFromPods", func() {
+	It("returns empty when there are no pods", func() {
+		Expect(firstBrokenContainerReasonFromPods(nil)).To(Equal(""))
+	})
+
+	It("returns empty when pods exist but have no container statuses yet", func() {
+		pods := []corev1.Pod{
+			{Status: corev1.PodStatus{ContainerStatuses: nil}},
+		}
+		Expect(firstBrokenContainerReasonFromPods(pods)).To(Equal(""))
+	})
+
+	It("returns empty when every container is Running", func() {
+		pods := []corev1.Pod{
+			{Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{
+				{Name: "runner", State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}},
+				{Name: "build-agent", State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}},
+			}}},
+		}
+		Expect(firstBrokenContainerReasonFromPods(pods)).To(Equal(""))
+	})
+
+	It("surfaces a Waiting reason/message -- the exact CreateContainerConfigError case hit this session", func() {
+		pods := []corev1.Pod{
+			{Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{
+				{Name: "runner", State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}},
+				{Name: "build-agent", State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{
+					Reason:  "CreateContainerConfigError",
+					Message: `secret "registry-credentials" not found`,
+				}}},
+			}}},
+		}
+		Expect(firstBrokenContainerReasonFromPods(pods)).To(Equal(`CreateContainerConfigError: secret "registry-credentials" not found`))
+	})
+
+	It("surfaces a Terminated reason/message for a non-zero exit", func() {
+		pods := []corev1.Pod{
+			{Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{
+				{Name: "build-agent", State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{
+					Reason:   "Error",
+					Message:  "exit status 1",
+					ExitCode: 1,
+				}}},
+			}}},
+		}
+		Expect(firstBrokenContainerReasonFromPods(pods)).To(Equal("Error: exit status 1"))
+	})
+
+	It("ignores a Terminated state with exit code 0 (a clean, expected exit)", func() {
+		pods := []corev1.Pod{
+			{Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{
+				{Name: "runner", State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{
+					Reason:   "Completed",
+					ExitCode: 0,
+				}}},
+			}}},
+		}
+		Expect(firstBrokenContainerReasonFromPods(pods)).To(Equal(""))
+	})
+
+	It("checks every pod, not just the first", func() {
+		pods := []corev1.Pod{
+			{Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{
+				{Name: "runner", State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}},
+			}}},
+			{Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{
+				{Name: "build-agent", State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{
+					Reason: "ImagePullBackOff",
+				}}},
+			}}},
+		}
+		Expect(firstBrokenContainerReasonFromPods(pods)).To(Equal("ImagePullBackOff: "))
+	})
+})
+
 // ────────────────────────────────────────────────────────────────────────────
 // Integration tests (envtest)
 // ────────────────────────────────────────────────────────────────────────────
@@ -335,6 +410,65 @@ var _ = Describe("CIRunnerPool Reconciler", func() {
 				return k8sClient.Get(ctx, types.NamespacedName{Name: "integuser-runner", Namespace: "default"}, deploy)
 			}, timeout, interval).Should(Succeed())
 			Expect(deploy.Spec.Template.Spec.Containers).To(HaveLen(2))
+		})
+
+		It("surfaces a broken build-agent container reason on the Ready condition", func() {
+			deploy := &appsv1.Deployment{}
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{Name: "integuser-runner", Namespace: "default"}, deploy)
+			}, timeout, interval).Should(Succeed())
+
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					GenerateName: "integuser-runner-",
+					Namespace:    "default",
+					Labels:       deploy.Spec.Selector.MatchLabels,
+				},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{Name: "runner", Image: "busybox"},
+						{Name: "build-agent", Image: "busybox"},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, pod)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, pod) })
+
+			pod.Status.ContainerStatuses = []corev1.ContainerStatus{
+				{Name: "runner", State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}},
+				{Name: "build-agent", State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{
+					Reason:  "CreateContainerConfigError",
+					Message: `secret "registry-credentials" not found`,
+				}}},
+			}
+			Expect(k8sClient.Status().Update(ctx, pod)).To(Succeed())
+
+			// Nothing watches bare Pods, so nudge the CR itself to force a
+			// fresh reconcile pass that will re-list pods and pick this one up.
+			Eventually(func() error {
+				updated := &appsv1alpha1.CIRunnerPool{}
+				if err := k8sClient.Get(ctx, types.NamespacedName{Name: cr.Name, Namespace: "default"}, updated); err != nil {
+					return err
+				}
+				if updated.Annotations == nil {
+					updated.Annotations = map[string]string{}
+				}
+				updated.Annotations["kindling.dev/test-nudge"] = "1"
+				return k8sClient.Update(ctx, updated)
+			}, timeout, interval).Should(Succeed())
+
+			Eventually(func() string {
+				updated := &appsv1alpha1.CIRunnerPool{}
+				if err := k8sClient.Get(ctx, types.NamespacedName{Name: cr.Name, Namespace: "default"}, updated); err != nil {
+					return ""
+				}
+				for _, c := range updated.Status.Conditions {
+					if c.Type == "Ready" {
+						return c.Message
+					}
+				}
+				return ""
+			}, timeout, interval).Should(ContainSubstring(`CreateContainerConfigError: secret "registry-credentials" not found`))
 		})
 
 		It("should create a ServiceAccount", func() {
