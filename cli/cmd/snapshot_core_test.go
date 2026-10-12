@@ -175,6 +175,11 @@ func TestBuildConnectionURL_AllDepTypes(t *testing.T) {
 		"minio":         "http://",
 		"kafka":         "test-kafka:",     // kafka uses host:port, no protocol
 		"memcached":     "test-memcached:", // memcached uses host:port, no protocol
+		"consul":        "http://",
+		"vault":         "http://",
+		"jaeger":        "http://",
+		"influxdb":      "http://",
+		"cassandra":     "test-cassandra:", // cassandra uses host:port, no protocol -- matches the operator's own buildConnectionURL
 	}
 
 	for depType, expectedProto := range expected {
@@ -190,6 +195,39 @@ func TestBuildConnectionURL_AllDepTypes(t *testing.T) {
 			// All should contain the release prefix
 			if !strings.Contains(url, "test-") {
 				t.Errorf("URL should contain release prefix 'test-', got: %s", url)
+			}
+		})
+	}
+}
+
+// TestBuildConnectionURL_MatchesOperatorForNewDepTypes cross-checks the 5
+// dependency types added for B5 (FULL_GITOPS_HANDOFF_WITH_UI_PARITY_TODO.md)
+// against the operator's own buildConnectionURL test fixtures
+// (internal/controller/devstagingenvironment_controller_test.go), using the
+// identical release prefix ("myapp") so the expected strings can be
+// compared byte-for-byte rather than just checked for a scheme prefix --
+// this is the regression guard against the CLI's mirror of the operator's
+// registry silently drifting again.
+func TestBuildConnectionURL_MatchesOperatorForNewDepTypes(t *testing.T) {
+	tests := []struct {
+		depType string
+		want    string
+	}{
+		{"cassandra", "myapp-cassandra:9042"},
+		{"consul", "http://myapp-consul:8500"},
+		{"vault", "http://myapp-vault:8200"},
+		{"influxdb", "http://devuser:devpass123@myapp-influxdb:8086"},
+		{"jaeger", "http://myapp-jaeger:16686"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.depType, func(t *testing.T) {
+			def, ok := depRegistry[tt.depType]
+			if !ok {
+				t.Fatalf("dep type %q not in depRegistry", tt.depType)
+			}
+			got := buildConnectionURL("myapp", tt.depType, helmSafe(tt.depType), def)
+			if got != tt.want {
+				t.Errorf("buildConnectionURL(%q) = %q, want %q (operator's own test fixture)", tt.depType, got, tt.want)
 			}
 		})
 	}

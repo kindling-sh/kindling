@@ -120,6 +120,26 @@ func TestDetectDevCredentials_AllSupportedTypes(t *testing.T) {
 	}
 }
 
+// TestDetectDevCredentials_NewDepTypesNotSilentlySkipped is a regression
+// guard for B5 (FULL_GITOPS_HANDOFF_WITH_UI_PARITY_TODO.md): before these
+// 5 types were added to depRegistry, a DSE using any of them produced no
+// credential entry at all here -- not an error, just silently nothing,
+// which is exactly the bug this test would have caught.
+func TestDetectDevCredentials_NewDepTypesNotSilentlySkipped(t *testing.T) {
+	for _, depType := range []string{"cassandra", "consul", "vault", "influxdb", "jaeger"} {
+		t.Run(depType, func(t *testing.T) {
+			dses := []snapshotDSE{{Name: "svc", Deps: []snapshotDep{{Type: depType}}}}
+			entries := detectDevCredentials("test", dses)
+			if len(entries) != 1 {
+				t.Fatalf("detectDevCredentials silently produced %d entries for dep type %q, want 1", len(entries), depType)
+			}
+			if entries[0].DevValue == "" {
+				t.Errorf("dep type %q produced an empty DevValue", depType)
+			}
+		})
+	}
+}
+
 func TestDetectDevCredentials_PreservesOrder(t *testing.T) {
 	dses := []snapshotDSE{
 		{Name: "svc", Deps: []snapshotDep{
