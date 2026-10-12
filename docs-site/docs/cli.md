@@ -632,10 +632,10 @@ When a dependency is declared in `spec.dependencies[]`, the operator auto-inject
 | nats | `NATS_URL` |
 | memcached | `MEMCACHED_URL` |
 | cassandra | `CASSANDRA_URL` |
-| consul | `CONSUL_URL` |
+| consul | `CONSUL_HTTP_ADDR` |
 | vault | `VAULT_ADDR` |
 | influxdb | `INFLUXDB_URL` |
-| jaeger | `JAEGER_URL` |
+| jaeger | `JAEGER_ENDPOINT` |
 
 Do not duplicate these in `spec.env[]` — they are injected automatically.
 

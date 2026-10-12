@@ -861,6 +861,11 @@ func TestConnectionProtocol(t *testing.T) {
 		{"minio", "http"},
 		{"kafka", "kafka"},
 		{"memcached", "memcached"},
+		{"consul", "http"},
+		{"vault", "http"},
+		{"jaeger", "http"},
+		{"influxdb", "http"},
+		{"cassandra", "cassandra"},
 		{"unknown", "tcp"},
 	}
 

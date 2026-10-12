@@ -517,6 +517,22 @@ var depRegistry = map[string]depDefaults{
 	"kafka":         {Image: "apache/kafka", Port: 9092, EnvVarName: "KAFKA_BROKER_URL"},
 	"nats":          {Image: "nats", Port: 4222, EnvVarName: "NATS_URL"},
 	"memcached":     {Image: "memcached", Port: 11211, EnvVarName: "MEMCACHED_URL"},
+	// The 5 entries below close a gap found while writing
+	// FULL_GITOPS_HANDOFF_WITH_UI_PARITY_TODO.md's B5: the operator's own
+	// dependencyRegistry (internal/controller/devstagingenvironment_controller.go)
+	// has always supported these, but this CLI-side mirror didn't -- a DSE
+	// using any of them silently got no dev-default connection string at
+	// all in detectDevCredentials, never showing up in a staging credential
+	// prompt/--creds-config match. Image/Port/EnvVarName match the
+	// operator's registry exactly; the connection URL formats below are
+	// cross-checked against devstagingenvironment_controller_test.go's own
+	// buildConnectionURL table, which is the operator's test-verified
+	// ground truth for what each of these actually produces.
+	"cassandra": {Image: "cassandra", Port: 9042, EnvVarName: "CASSANDRA_URL", Env: []snapshotEnvVar{{Name: "CASSANDRA_CLUSTER_NAME", Value: "DevCluster"}, {Name: "CASSANDRA_DC", Value: "dc1"}}},
+	"consul":    {Image: "hashicorp/consul", Port: 8500, EnvVarName: "CONSUL_HTTP_ADDR"},
+	"vault":     {Image: "hashicorp/vault", Port: 8200, EnvVarName: "VAULT_ADDR", Env: []snapshotEnvVar{{Name: "VAULT_DEV_ROOT_TOKEN_ID", Value: "dev-root-token"}, {Name: "VAULT_DEV_LISTEN_ADDRESS", Value: "0.0.0.0:8200"}}},
+	"influxdb":  {Image: "influxdb", Port: 8086, EnvVarName: "INFLUXDB_URL", Env: []snapshotEnvVar{{Name: "DOCKER_INFLUXDB_INIT_USERNAME", Value: "devuser"}, {Name: "DOCKER_INFLUXDB_INIT_PASSWORD", Value: "devpass123"}, {Name: "DOCKER_INFLUXDB_INIT_ORG", Value: "devorg"}, {Name: "DOCKER_INFLUXDB_INIT_BUCKET", Value: "devbucket"}}},
+	"jaeger":    {Image: "jaegertracing/all-in-one", Port: 16686, EnvVarName: "JAEGER_ENDPOINT", Env: []snapshotEnvVar{{Name: "COLLECTOR_OTLP_ENABLED", Value: "true"}}},
 }
 
 // ── Main command ────────────────────────────────────────────────
@@ -1438,6 +1454,27 @@ func buildConnectionURL(releasePrefix, depType, safe string, def depDefaults) st
 		return fmt.Sprintf("nats://%s:%d", host, def.Port)
 	case "memcached":
 		return fmt.Sprintf("%s:%d", host, def.Port)
+	case "consul":
+		return fmt.Sprintf("http://%s:%d", host, def.Port)
+	case "vault":
+		return fmt.Sprintf("http://%s:%d", host, def.Port)
+	case "jaeger":
+		return fmt.Sprintf("http://%s:%d", host, def.Port)
+	case "influxdb":
+		user, pass := "devuser", "devpass123"
+		for _, e := range def.Env {
+			switch e.Name {
+			case "DOCKER_INFLUXDB_INIT_USERNAME":
+				user = e.Value
+			case "DOCKER_INFLUXDB_INIT_PASSWORD":
+				pass = e.Value
+			}
+		}
+		return fmt.Sprintf("http://%s:%s@%s:%d", user, pass, host, def.Port)
+	// "cassandra" is deliberately absent here -- it falls through to the
+	// default bare "host:port" case below, matching the operator's own
+	// buildConnectionURL (devstagingenvironment_controller_test.go:
+	// "myapp-cassandra:9042", no scheme, no credentials in the URL).
 	default:
 		return fmt.Sprintf("%s:%d", host, def.Port)
 	}
@@ -2046,6 +2083,16 @@ func connectionProtocol(depType string) string {
 		return "memcached"
 	case "minio":
 		return "http"
+	case "consul":
+		return "http"
+	case "vault":
+		return "http"
+	case "jaeger":
+		return "http"
+	case "influxdb":
+		return "http"
+	case "cassandra":
+		return "cassandra"
 	default:
 		return "tcp"
 	}
