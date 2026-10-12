@@ -754,11 +754,19 @@ func (r *CIRunnerPoolReconciler) updateRunnerPoolStatus(ctx context.Context, cr 
 			})
 		} else {
 			cr.Status.RunnerRegistered = false
+			msg := fmt.Sprintf("Runner for %s is starting up (%d/%d ready)", cr.Spec.GitHubUsername, deploy.Status.AvailableReplicas, *deploy.Spec.Replicas)
+			if reason := r.firstBrokenContainerReason(ctx, deploy); reason != "" {
+				// e.g. "CreateContainerConfigError: secret \"registry-credentials\"
+				// not found" -- surfaces exactly the failure mode this session
+				// had to track down by hand via `kubectl describe pod`/`get events`,
+				// directly on the CR itself instead.
+				msg = fmt.Sprintf("%s -- %s", msg, reason)
+			}
 			meta.SetStatusCondition(&cr.Status.Conditions, metav1.Condition{
 				Type:    "Ready",
 				Status:  metav1.ConditionFalse,
 				Reason:  "RunnerNotReady",
-				Message: fmt.Sprintf("Runner for %s is starting up (%d/%d ready)", cr.Spec.GitHubUsername, deploy.Status.AvailableReplicas, *deploy.Spec.Replicas),
+				Message: msg,
 			})
 		}
 	} else {
@@ -774,6 +782,44 @@ func (r *CIRunnerPoolReconciler) updateRunnerPoolStatus(ctx context.Context, cr 
 	}
 
 	return r.Status().Update(ctx, cr)
+}
+
+// firstBrokenContainerReason lists pods matching the given Deployment's
+// selector and returns a human-readable "<Reason>: <Message>" for the
+// first container found in a clearly-broken Waiting or Terminated state
+// (CreateContainerConfigError, ImagePullBackOff, CrashLoopBackOff, etc.),
+// across either the runner or build-agent container. Returns "" if no pod
+// exists yet, or no container is in a broken state -- so a plain
+// "starting up" message is still shown while a pod is merely still being
+// scheduled or its image pulled, not every single reconcile in between.
+func (r *CIRunnerPoolReconciler) firstBrokenContainerReason(ctx context.Context, deploy *appsv1.Deployment) string {
+	selector, err := metav1.LabelSelectorAsSelector(deploy.Spec.Selector)
+	if err != nil {
+		return ""
+	}
+	var pods corev1.PodList
+	if err := r.List(ctx, &pods, client.InNamespace(deploy.Namespace), client.MatchingLabelsSelector{Selector: selector}); err != nil {
+		return ""
+	}
+	return firstBrokenContainerReasonFromPods(pods.Items)
+}
+
+// firstBrokenContainerReasonFromPods is the pure-function core of
+// firstBrokenContainerReason, pulled out so the actual "which state counts
+// as broken, and in what order" logic is unit-testable with plain
+// corev1.Pod values -- no client, no envtest cluster needed.
+func firstBrokenContainerReasonFromPods(pods []corev1.Pod) string {
+	for _, pod := range pods {
+		for _, cs := range pod.Status.ContainerStatuses {
+			if cs.State.Waiting != nil && cs.State.Waiting.Reason != "" {
+				return fmt.Sprintf("%s: %s", cs.State.Waiting.Reason, cs.State.Waiting.Message)
+			}
+			if cs.State.Terminated != nil && cs.State.Terminated.Reason != "" && cs.State.Terminated.ExitCode != 0 {
+				return fmt.Sprintf("%s: %s", cs.State.Terminated.Reason, cs.State.Terminated.Message)
+			}
+		}
+	}
+	return ""
 }
 
 // ────────────────────────────────────────────────────────────────────────────
