@@ -110,6 +110,7 @@ var (
 	snapshotRegistry         string
 	snapshotTag              string
 	snapshotDeploy           bool
+	snapshotDestroy          bool
 	snapshotContext          string
 	snapshotNamespace        string
 	snapshotBranch           string
@@ -129,6 +130,7 @@ func init() {
 	snapshotCmd.Flags().StringVarP(&snapshotRegistry, "registry", "r", "", "Container registry (e.g. ghcr.io/myorg, 123456.dkr.ecr.us-east-1.amazonaws.com/myapp)")
 	snapshotCmd.Flags().StringVarP(&snapshotTag, "tag", "t", "", "Image tag (default: next sequential '<branch-slug>-N', or 'snapshot-N' outside a git branch context)")
 	snapshotCmd.Flags().BoolVar(&snapshotDeploy, "deploy", false, "Deploy to a staging cluster after generating the chart")
+	snapshotCmd.Flags().BoolVar(&snapshotDestroy, "destroy", false, "Remove the staging deployment this branch created (helm uninstall, or a label-selector kubectl delete for --format kustomize) -- requires --context, uses the same branch-derived name/namespace as --deploy, idempotent (a missing release/no matching resources is not an error)")
 	snapshotCmd.Flags().StringVar(&snapshotContext, "context", "", "Kubeconfig context for the staging cluster (required with --deploy)")
 	snapshotCmd.Flags().StringVar(&snapshotNamespace, "namespace", "default", "Kubernetes namespace to deploy into (used with --deploy)")
 	snapshotCmd.Flags().StringVar(&snapshotBranch, "branch", "", "Git branch to derive the staging environment name from (default: current branch; used with --deploy or --registry)")
@@ -178,6 +180,22 @@ func slugifyBranch(branch string) string {
 		return "branch" // pathological case: branch name was all symbols
 	}
 	return s
+}
+
+// resolveBranchSlug resolves the branch to derive a staging name from —
+// honoring explicitBranch (--branch) if set, otherwise the current git
+// branch — and returns both the raw branch name and its slug. Shared by
+// --deploy and --destroy so there is exactly one branch-derived naming
+// convention in this command, not two copies that could drift apart.
+func resolveBranchSlug(explicitBranch string) (branch, slug string, err error) {
+	branch = explicitBranch
+	if branch == "" {
+		branch, err = currentBranch()
+		if err != nil {
+			return "", "", err
+		}
+	}
+	return branch, slugifyBranch(branch), nil
 }
 
 // deriveIngressHost composes the branch-scoped Ingress host as
@@ -504,6 +522,20 @@ var depRegistry = map[string]depDefaults{
 // ── Main command ────────────────────────────────────────────────
 
 func runSnapshot(cmd *cobra.Command, args []string) error {
+	if snapshotDestroy && snapshotDeploy {
+		return fmt.Errorf("--destroy cannot be combined with --deploy")
+	}
+
+	// ── --destroy: remove a prior --deploy's staging release/resources ──
+	// Bypasses everything else in this command -- no cluster DSE read, no
+	// registry/credential resolution, no chart export. Resolves the exact
+	// same branch-derived name/namespace --deploy uses (resolveBranchSlug),
+	// so there's only ever one naming convention, not two kept in sync by
+	// hand.
+	if snapshotDestroy {
+		return runSnapshotDestroy(cmd)
+	}
+
 	if snapshotRenderProdValues && snapshotRegistry == "" {
 		return fmt.Errorf("--registry is required with --render-prod-values (production values need a promoted image digest, which only exists once images are pushed)")
 	}
@@ -540,15 +572,11 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 		// Two branches deployed to the same shared staging cluster must
 		// not collide — in name, namespace, or Ingress host.
 		// Only fills in defaults the user didn't already set explicitly.
-		branch = snapshotBranch
-		if branch == "" {
-			var err error
-			branch, err = currentBranch()
-			if err != nil {
-				return err
-			}
+		var err error
+		branch, slug, err = resolveBranchSlug(snapshotBranch)
+		if err != nil {
+			return err
 		}
-		slug = slugifyBranch(branch)
 		if snapshotName == "" {
 			snapshotName = slug
 		}
@@ -895,6 +923,102 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 	fmt.Printf("  Check ingress:  %skubectl --context %s -n %s get ingress%s\n", colorCyan, snapshotContext, snapshotNamespace, colorReset)
 	fmt.Println()
 	return nil
+}
+
+// runSnapshotDestroy reverses exactly what --deploy created for a given
+// branch: a helm uninstall of the release (or, for --format kustomize,
+// a label-selector delete of everything that format's commonLabels
+// stamped onto every generated resource -- app.kubernetes.io/part-of,
+// see exportKustomize). Resolves the identical branch-derived
+// name/namespace --deploy uses via resolveBranchSlug, so a PR-preview
+// environment created without any explicit --name/--namespace is torn
+// down by the identical defaulting, not a second, hand-kept-in-sync
+// convention.
+//
+// Idempotent by design: a --destroy run against a branch that was never
+// deployed (or already torn down) is not an error -- a PR closed twice,
+// or closed after a failed first deploy, should never break a workflow.
+func runSnapshotDestroy(cmd *cobra.Command) error {
+	if snapshotContext == "" {
+		return fmt.Errorf("--context is required with --destroy")
+	}
+	if strings.HasPrefix(snapshotContext, "kind-") {
+		return fmt.Errorf("context %q looks like a Kind cluster — use 'kindling deploy' for local dev", snapshotContext)
+	}
+
+	branch, slug, err := resolveBranchSlug(snapshotBranch)
+	if err != nil {
+		return err
+	}
+	name := snapshotName
+	if name == "" {
+		name = slug
+	}
+	namespace := snapshotNamespace
+	if namespace == "default" && !cmd.Flags().Changed("namespace") {
+		namespace = slug
+	}
+
+	header("Destroying staging deployment")
+	step("🌿", fmt.Sprintf("Branch %q → slug %q", branch, slug))
+	step("🔗", fmt.Sprintf("Target context: %s%s%s", colorBold, snapshotContext, colorReset))
+
+	switch snapshotFormat {
+	case "helm":
+		if !commandExists("helm") {
+			return fmt.Errorf("helm not found on PATH — install it or remove the release manually")
+		}
+		step("🗑", fmt.Sprintf("helm uninstall %s --namespace %s", name, namespace))
+		out, uninstallErr := runSilent("helm", "uninstall", name, "--kube-context", snapshotContext, "--namespace", namespace)
+		if uninstallErr != nil {
+			// Helm's own error text for "nothing to uninstall" has used
+			// this exact substring for a long time (driver.ErrReleaseNotFound,
+			// wrapped as "uninstall: Release not loaded: <name>: release: not
+			// found") -- treated as a successful no-op, not a failure, so a
+			// PR closed twice (or closed after a failed first deploy) never
+			// breaks the teardown workflow.
+			if isHelmReleaseNotFound(out) {
+				step("ℹ️", fmt.Sprintf("No release named %q in namespace %q — nothing to destroy", name, namespace))
+			} else {
+				fmt.Println(out)
+				return fmt.Errorf("helm uninstall failed: %w", uninstallErr)
+			}
+		} else {
+			fmt.Println(out)
+		}
+	case "kustomize":
+		// exportKustomize stamps app.kubernetes.io/part-of: <name> onto
+		// every resource it generates (via commonLabels) -- deleting by
+		// that selector works without needing the original kustomize
+		// output directory to still exist/match what's actually deployed,
+		// unlike `kubectl delete -k <dir>` which depends on it being
+		// byte-for-byte the same manifest set that was applied.
+		selector := fmt.Sprintf("app.kubernetes.io/part-of=%s", name)
+		step("🗑", fmt.Sprintf("kubectl delete by label %s --namespace %s", selector, namespace))
+		if err := run("kubectl", "--context", snapshotContext, "delete",
+			"all,ingress,configmap,secret",
+			"-n", namespace,
+			"-l", selector,
+			"--ignore-not-found"); err != nil {
+			return fmt.Errorf("kustomize teardown failed: %w", err)
+		}
+	default:
+		return fmt.Errorf("unknown --format %q", snapshotFormat)
+	}
+
+	success("Staging deployment removed")
+	return nil
+}
+
+// isHelmReleaseNotFound reports whether a helm command's (combined
+// stdout+stderr) output indicates "this release doesn't exist" rather
+// than some other failure. Helm has used this exact substring for
+// driver.ErrReleaseNotFound for a long time (e.g. wrapped as "uninstall:
+// Release not loaded: <name>: release: not found"); pulled out as its own
+// function so the detection logic has a single, unit-testable home
+// instead of an inline string check duplicated anywhere this is needed.
+func isHelmReleaseNotFound(output string) bool {
+	return strings.Contains(output, "release: not found")
 }
 
 // ════════════════════════════════════════════════════════════════

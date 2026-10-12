@@ -165,6 +165,13 @@ already-reviewed production chart lands wherever your GitOps controller
 watches, with kindling never touching a production credential or cluster
 anywhere in that chain.
 
+Whether the PR merges or just closes, its staging preview environment
+should also be cleaned up — otherwise every opened PR accumulates a
+permanent namespace/release on the shared cluster. Pair the same
+`kindling-snapshot-deploy` action with `mode: destroy` on a
+`pull_request: closed` trigger — see [Tearing down a staging preview on
+PR close](github-actions.md#tearing-down-a-staging-preview-on-pr-close).
+
 ---
 
 ## Step 2: Configure TLS
