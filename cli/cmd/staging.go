@@ -38,6 +38,9 @@ var (
 	stagingTLSUseACMEStaging bool
 	stagingTLSDSEFile        string
 	stagingTLSIngressClass   string
+	stagingTLSWildcard       bool
+	stagingTLSDNSProvider    string
+	stagingTLSDNSTokenSecret string
 )
 
 var stagingTLSCmd = &cobra.Command{
@@ -50,7 +53,9 @@ its Ingress.
 Examples:
   kindling staging tls --context my-staging --domain app.example.com --email admin@example.com
   kindling staging tls --context my-staging --domain app.example.com --staging
-  kindling staging tls --context my-staging --domain app.example.com -f dev-environment.yaml`,
+  kindling staging tls --context my-staging --domain app.example.com -f dev-environment.yaml
+  kindling staging tls --context my-staging --domain subnode1.xyz --email admin@example.com \
+    --wildcard --dns-provider cloudflare --dns-token-secret cf-token`,
 	RunE: runStagingTLS,
 }
 
@@ -62,6 +67,9 @@ func init() {
 	stagingTLSCmd.Flags().BoolVar(&stagingTLSUseACMEStaging, "staging", false, "Use Let's Encrypt staging server (for testing)")
 	stagingTLSCmd.Flags().StringVarP(&stagingTLSDSEFile, "file", "f", "", "Optional: DSE YAML to patch with TLS config")
 	stagingTLSCmd.Flags().StringVar(&stagingTLSIngressClass, "ingress-class", "traefik", "IngressClass for the ACME solver")
+	stagingTLSCmd.Flags().BoolVar(&stagingTLSWildcard, "wildcard", false, "Request a wildcard certificate via DNS-01 instead of HTTP-01 (required for a multi-branch shared staging cluster)")
+	stagingTLSCmd.Flags().StringVar(&stagingTLSDNSProvider, "dns-provider", "cloudflare", "DNS-01 solver provider (only 'cloudflare' is supported today, used with --wildcard)")
+	stagingTLSCmd.Flags().StringVar(&stagingTLSDNSTokenSecret, "dns-token-secret", "", "Name of an existing Secret (in the cert-manager namespace, key 'api-token') holding the DNS provider API token -- required with --wildcard")
 	_ = stagingTLSCmd.MarkFlagRequired("context")
 	_ = stagingTLSCmd.MarkFlagRequired("domain")
 	_ = stagingTLSCmd.MarkFlagRequired("email")
@@ -108,6 +116,13 @@ func runStagingTLS(cmd *cobra.Command, args []string) error {
 	if stagingTLSUseACMEStaging {
 		acmeServer = "https://acme-staging-v02.api.letsencrypt.org/directory"
 		step("🧪", "Using Let's Encrypt staging server")
+	}
+
+	if stagingTLSWildcard {
+		if stagingTLSDSEFile != "" {
+			warn("--file is ignored with --wildcard -- a wildcard cert is Traefik's cluster-wide default, no per-DSE TLS patching is needed")
+		}
+		return runStagingTLSWildcard(ctx, acmeServer)
 	}
 
 	issuerYAML := fmt.Sprintf(`apiVersion: cert-manager.io/v1

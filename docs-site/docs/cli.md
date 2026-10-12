@@ -567,6 +567,8 @@ helm install my-app ./kindling-snapshot \
 
 Configure TLS with cert-manager for staging Ingress resources. Installs cert-manager, creates a Let's Encrypt ClusterIssuer, and optionally patches a DSE YAML to enable TLS.
 
+By default this uses HTTP-01 validation against a single, known hostname. For a shared staging cluster where every branch gets its own `<slug>.staging.<domain>` Ingress host, pass `--wildcard` instead: this requests one wildcard certificate via DNS-01 (Cloudflare only, today) and sets it as Traefik's cluster-wide default certificate, so every branch's Ingress gets HTTPS automatically with no per-branch TLS configuration.
+
 **Flags:**
 
 | Flag | Short | Default | Description |
@@ -576,8 +578,11 @@ Configure TLS with cert-manager for staging Ingress resources. Installs cert-man
 | `--email` | | — (required) | Email for Let's Encrypt registration |
 | `--issuer` | | `letsencrypt-prod` | ClusterIssuer name |
 | `--staging` | | `false` | Use Let's Encrypt staging server |
-| `--file` | `-f` | — | DSE YAML to patch with TLS config |
-| `--ingress-class` | | `traefik` | IngressClass for ACME solver |
+| `--file` | `-f` | — | DSE YAML to patch with TLS config (ignored with `--wildcard`) |
+| `--ingress-class` | | `traefik` | IngressClass for ACME solver (HTTP-01 only) |
+| `--wildcard` | | `false` | Request a wildcard certificate via DNS-01 instead of HTTP-01 |
+| `--dns-provider` | | `cloudflare` | DNS-01 solver provider (only `cloudflare` is supported today) |
+| `--dns-token-secret` | | — | Name of an existing Secret (in the `cert-manager` namespace, key `api-token`) holding the DNS provider API token — required with `--wildcard` |
 
 **Examples:**
 
@@ -585,9 +590,16 @@ Configure TLS with cert-manager for staging Ingress resources. Installs cert-man
 kindling staging tls --context my-staging --domain app.example.com --email admin@example.com
 kindling staging tls --context my-staging --domain app.example.com --staging
 kindling staging tls --context my-staging --domain app.example.com -f dev-environment.yaml
+
+# Wildcard DNS-01, for a shared staging cluster with one host per branch:
+kubectl --context my-staging create secret generic cloudflare-api-token \
+  -n cert-manager --from-literal=api-token=<cloudflare-token>
+kindling staging tls --context my-staging --domain subnode1.xyz --email admin@example.com \
+  --wildcard --dns-provider cloudflare --dns-token-secret cloudflare-api-token
 ```
 
 ---
+
 
 ## Lifecycle
 
