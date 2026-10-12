@@ -192,9 +192,11 @@ without standing up separate Ingresses:
 
 ## kindling-snapshot-deploy
 
-Run `kindling snapshot --deploy` — image copy to a real registry plus a
-Helm install against a separate staging cluster — from a self-hosted
-runner, via the same build-agent sidecar.
+Run `kindling snapshot --deploy` (the default `mode`) — image copy to a
+real registry plus a Helm install against a separate staging cluster — or
+`kindling snapshot --destroy` (`mode: destroy`, see below) to tear that
+same deployment back down, from a self-hosted runner, via the same
+build-agent sidecar.
 
 :::warning Requires an opted-in CIRunnerPool
 This action only works on a `CIRunnerPool` with `spec.enableSnapshotDeploy: true`
@@ -237,11 +239,12 @@ spec:
 | Input | Required | Default | Description |
 |---|---|---|---|
 | `name` | ✅ | — | Unique request name (used for signal files: `/builds/<name>.*`) |
-| `registry` | ✅ | — | Target container registry (passed through as `--registry`) |
+| `mode` | ❌ | `deploy` | `deploy` runs `--deploy`; `destroy` runs `--destroy` instead, tearing down the staging release/resources this branch created |
+| `registry` | ❌† | `""` | Target container registry (passed through as `--registry`) — †required when `mode` is `deploy` (the action fails fast if empty), ignored and not required when `mode` is `destroy` |
 | `staging-context` | ✅ | — | Kubeconfig context name for the staging cluster (passed through as `--context`) |
 | `staging-kubeconfig` | ✅ | — | Full kubeconfig YAML for the staging cluster — pass `${{ secrets.STAGING_KUBECONFIG }}`, never a literal value |
-| `extra-args` | ❌ | `""` | Additional `kindling snapshot` flags (e.g. `--creds-config`, `--namespace`, `--ingress-services`, `--render-prod-values`). `--deploy`/`--registry`/`--context`/`--non-interactive` are always added automatically, and `--output` is always forced to a path under `/builds` (see below) — an `--output` in `extra-args` is silently overridden, since the chart-extraction step depends on knowing exactly where the chart landed. |
-| `timeout` | ❌ | `600` | Max seconds to wait for the deploy to complete |
+| `extra-args` | ❌ | `""` | Additional `kindling snapshot` flags. In `deploy` mode: e.g. `--creds-config`, `--namespace`, `--ingress-services`, `--render-prod-values`. In `destroy` mode: e.g. `--branch`, `--name`, `--namespace`, `--format` overrides to match whatever `--deploy` originally used. `--deploy`/`--registry`/`--context`/`--non-interactive` (deploy) or `--destroy`/`--context` (destroy) are always added automatically, and in deploy mode `--output` is always forced to a path under `/builds` (see below) — an `--output` in `extra-args` is silently overridden, since the chart-extraction step depends on knowing exactly where the chart landed. |
+| `timeout` | ❌ | `600` | Max seconds to wait for the deploy to complete (ignored in destroy mode) |
 
 ### Outputs
 
@@ -290,6 +293,40 @@ triggering request.
     name: checkout-staging-chart
     path: ${{ steps.deploy.outputs.chart-path }}
 ```
+
+### Tearing down a staging preview on PR close
+
+`mode: destroy` reverses exactly what a prior `--deploy` run created for a
+branch — `helm uninstall` (or, for `--format kustomize`, a label-selector
+`kubectl delete`), resolving the identical branch-derived name/namespace
+`--deploy` uses by default. Pair with a `pull_request: closed` trigger —
+no `merged` guard needed, unlike `kindling-gitops-handoff` below, since an
+abandoned/rejected PR's preview environment needs tearing down too:
+
+```yaml
+name: Staging Teardown
+on:
+  pull_request:
+    types: [closed]
+
+jobs:
+  staging-teardown:
+    runs-on: [self-hosted, "${{ github.actor }}"]
+    steps:
+      - uses: kindling-sh/kindling/.github/actions/kindling-snapshot-deploy@main
+        with:
+          name: teardown-${{ github.event.pull_request.number }}
+          mode: destroy
+          staging-context: staging
+          staging-kubeconfig: ${{ secrets.STAGING_KUBECONFIG }}
+```
+
+Idempotent — a PR closed twice, or closed after a failed first deploy,
+never fails this job: a missing Helm release (or no label-matching
+resources, for Kustomize) is treated as "already torn down," not an error.
+If the original deploy used a non-default `--branch`/`--name`/`--namespace`/
+`--format`, pass the same overrides here via `extra-args` so the resolved
+name/namespace actually matches what was deployed.
 
 ---
 

@@ -3,6 +3,8 @@ package cmd
 import (
 	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
 )
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -51,6 +53,114 @@ func TestSlugifyBranch_Deterministic(t *testing.T) {
 		if got := slugifyBranch(branch); got != first {
 			t.Errorf("slugifyBranch(%q) is not deterministic: got %q, first call was %q", branch, got, first)
 		}
+	}
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// resolveBranchSlug
+// ────────────────────────────────────────────────────────────────────────────
+
+func TestResolveBranchSlug_UsesExplicitBranch(t *testing.T) {
+	branch, slug, err := resolveBranchSlug("feature/add-checkout-retry")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if branch != "feature/add-checkout-retry" {
+		t.Errorf("branch = %q, want the explicit branch passed in unchanged", branch)
+	}
+	if want := slugifyBranch("feature/add-checkout-retry"); slug != want {
+		t.Errorf("slug = %q, want %q", slug, want)
+	}
+}
+
+func TestResolveBranchSlug_FallsBackToCurrentBranch(t *testing.T) {
+	// No explicit branch -- resolveBranchSlug must fall back to
+	// currentBranch() exactly, since this test runs inside a real git
+	// checkout (this repo) and the two must never disagree: --deploy and
+	// --destroy share this exact function specifically so there is only
+	// ever one branch-derived naming convention, not two that could drift.
+	want, err := currentBranch()
+	if err != nil {
+		t.Skipf("not running inside a git checkout, skipping: %v", err)
+	}
+	branch, slug, err := resolveBranchSlug("")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if branch != want {
+		t.Errorf("branch = %q, want currentBranch()'s %q", branch, want)
+	}
+	if got := slugifyBranch(want); slug != got {
+		t.Errorf("slug = %q, want slugifyBranch(%q) = %q", slug, want, got)
+	}
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// isHelmReleaseNotFound
+// ────────────────────────────────────────────────────────────────────────────
+
+func TestIsHelmReleaseNotFound(t *testing.T) {
+	tests := []struct {
+		name   string
+		output string
+		want   bool
+	}{
+		{"real helm uninstall error", `Error: uninstall: Release not loaded: feature-checkout-retry: release: not found`, true},
+		{"real helm status error", `Error: release: not found`, true},
+		{"unrelated helm failure", `Error: Kubernetes cluster unreachable: dial tcp: connect: connection refused`, false},
+		{"empty output", "", false},
+		{"success output", "release \"feature-checkout-retry\" uninstalled", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isHelmReleaseNotFound(tt.output); got != tt.want {
+				t.Errorf("isHelmReleaseNotFound(%q) = %v, want %v", tt.output, got, tt.want)
+			}
+		})
+	}
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// runSnapshotDestroy / --destroy validation
+// ────────────────────────────────────────────────────────────────────────────
+
+// These mutate package-level flag vars -- saved and restored around each
+// test since cobra flags are process-global state in this package, same
+// as every other kindling command. All three return before touching
+// helm/kubectl/git, so they're safe to run without any of those tools
+// or a real cluster present.
+
+func TestRunSnapshotDestroy_RequiresContext(t *testing.T) {
+	orig := snapshotContext
+	defer func() { snapshotContext = orig }()
+	snapshotContext = ""
+
+	err := runSnapshotDestroy(&cobra.Command{})
+	if err == nil || !strings.Contains(err.Error(), "--context is required") {
+		t.Errorf("runSnapshotDestroy() with no --context = %v, want a '--context is required' error", err)
+	}
+}
+
+func TestRunSnapshotDestroy_RejectsKindContext(t *testing.T) {
+	orig := snapshotContext
+	defer func() { snapshotContext = orig }()
+	snapshotContext = "kind-dev"
+
+	err := runSnapshotDestroy(&cobra.Command{})
+	if err == nil || !strings.Contains(err.Error(), "looks like a Kind cluster") {
+		t.Errorf("runSnapshotDestroy() with a kind- context = %v, want a 'looks like a Kind cluster' error", err)
+	}
+}
+
+func TestRunSnapshot_DestroyAndDeployMutuallyExclusive(t *testing.T) {
+	origDeploy, origDestroy := snapshotDeploy, snapshotDestroy
+	defer func() { snapshotDeploy, snapshotDestroy = origDeploy, origDestroy }()
+	snapshotDeploy = true
+	snapshotDestroy = true
+
+	err := runSnapshot(&cobra.Command{}, nil)
+	if err == nil || !strings.Contains(err.Error(), "cannot be combined") {
+		t.Errorf("runSnapshot() with both --deploy and --destroy = %v, want a 'cannot be combined' error", err)
 	}
 }
 
