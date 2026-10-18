@@ -261,6 +261,9 @@ export interface RunnerPool {
     replicas?: number;
     runnerImage?: string;
     labels?: string[];
+    enableSnapshotDeploy?: boolean;
+    buildAgentImage?: string;
+    buildAgentEnv?: { name: string; valueFrom?: { secretKeyRef?: { name: string; key: string } } }[];
   };
   status?: {
     replicas?: number;

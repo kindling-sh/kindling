@@ -4,6 +4,14 @@ import type { K8sList, RunnerPool } from '../types';
 import { StatusBadge, ConditionsTable, EmptyState, TimeAgo } from './shared';
 import { ActionButton, ActionModal, ConfirmDialog, useToast } from './actions';
 
+interface BuildAgentEnvRow {
+  name: string;
+  secretName: string;
+  secretKey: string;
+}
+
+const emptyEnvRow: BuildAgentEnvRow = { name: '', secretName: '', secretKey: '' };
+
 export function RunnersPage() {
   const { data, loading, refresh } = useApi<K8sList<RunnerPool>>('/api/runners');
   const { toast } = useToast();
@@ -11,15 +19,40 @@ export function RunnersPage() {
   const [showReset, setShowReset] = useState(false);
   const [creating, setCreating] = useState(false);
   const [form, setForm] = useState({ username: '', repo: '', token: '' });
+  const [enableSnapshotDeploy, setEnableSnapshotDeploy] = useState(false);
+  const [buildAgentImage, setBuildAgentImage] = useState('');
+  const [buildAgentEnv, setBuildAgentEnv] = useState<BuildAgentEnvRow[]>([]);
+
+  function resetForm() {
+    setForm({ username: '', repo: '', token: '' });
+    setEnableSnapshotDeploy(false);
+    setBuildAgentImage('');
+    setBuildAgentEnv([]);
+  }
+
+  function updateEnvRow(i: number, patch: Partial<BuildAgentEnvRow>) {
+    setBuildAgentEnv((rows) => rows.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
+  }
+
+  function removeEnvRow(i: number) {
+    setBuildAgentEnv((rows) => rows.filter((_, idx) => idx !== i));
+  }
 
   async function handleCreate() {
     setCreating(true);
-    const result = await apiPost('/api/runners/create', form);
+    const result = await apiPost('/api/runners/create', {
+      ...form,
+      enableSnapshotDeploy,
+      buildAgentImage: buildAgentImage || undefined,
+      buildAgentEnv: buildAgentEnv
+        .filter((r) => r.name || r.secretName || r.secretKey)
+        .map((r) => ({ name: r.name, secretName: r.secretName, secretKey: r.secretKey })),
+    });
     setCreating(false);
     if (result.ok) {
       toast('Runner pool created', 'success');
       setShowCreate(false);
-      setForm({ username: '', repo: '', token: '' });
+      resetForm();
       refresh();
     } else {
       toast(result.error || 'Failed to create runner', 'error');
@@ -63,7 +96,7 @@ export function RunnersPage() {
           loading={creating}
           docsUrl="https://kindling.sh/docs/runners"
           onSubmit={handleCreate}
-          onClose={() => setShowCreate(false)}
+          onClose={() => { setShowCreate(false); resetForm(); }}
         >
           <label className="form-label">GitHub Username</label>
           <input className="form-input" placeholder="your-username" value={form.username}
@@ -74,6 +107,48 @@ export function RunnersPage() {
           <label className="form-label">GitHub PAT</label>
           <input className="form-input" type="password" placeholder="ghp_..." value={form.token}
             onChange={(e) => setForm({ ...form, token: e.target.value })} />
+
+          <details style={{ marginTop: 16 }}>
+            <summary style={{ cursor: 'pointer', userSelect: 'none', fontSize: 13, fontWeight: 600 }}>
+              Advanced — staging deploy
+              <span className="text-dim" style={{ marginLeft: 8, fontSize: 11, fontWeight: 400 }}>
+                Enable `kindling snapshot --deploy` from this runner
+              </span>
+            </summary>
+
+            <label className="form-checkbox" style={{ marginTop: 12 }}>
+              <input type="checkbox" checked={enableSnapshotDeploy}
+                onChange={(e) => setEnableSnapshotDeploy(e.target.checked)} />
+              Enable staging deploy from this runner (`enableSnapshotDeploy`)
+            </label>
+
+            <label className="form-label" style={{ marginTop: 12 }}>Build-agent image override (optional)</label>
+            <input className="form-input" placeholder="ghcr.io/kindling-sh/build-agent:latest" value={buildAgentImage}
+              onChange={(e) => setBuildAgentImage(e.target.value)} />
+
+            <label className="form-label" style={{ marginTop: 12 }}>
+              Build-agent environment variables (`buildAgentEnv`)
+            </label>
+            <p className="text-dim" style={{ fontSize: 11, marginTop: -4, marginBottom: 8 }}>
+              Env vars injected into the build-agent sidecar from existing Secrets — e.g.
+              registry credentials for an authenticated push. Each references a Secret
+              already in the cluster; no raw credential values are entered here.
+            </p>
+            {buildAgentEnv.map((row, i) => (
+              <div key={i} style={{ display: 'flex', gap: 6, marginBottom: 6, alignItems: 'center' }}>
+                <input className="form-input" style={{ flex: 1 }} placeholder="ENV_VAR_NAME"
+                  value={row.name} onChange={(e) => updateEnvRow(i, { name: e.target.value })} />
+                <input className="form-input" style={{ flex: 1 }} placeholder="secret-name"
+                  value={row.secretName} onChange={(e) => updateEnvRow(i, { secretName: e.target.value })} />
+                <input className="form-input" style={{ flex: 1 }} placeholder="key"
+                  value={row.secretKey} onChange={(e) => updateEnvRow(i, { secretKey: e.target.value })} />
+                <button className="btn btn-xs btn-ghost" onClick={() => removeEnvRow(i)} title="Remove">✕</button>
+              </div>
+            ))}
+            <button className="btn btn-sm btn-ghost" onClick={() => setBuildAgentEnv((rows) => [...rows, { ...emptyEnvRow }])}>
+              + Add env var
+            </button>
+          </details>
         </ActionModal>
       )}
 
@@ -101,6 +176,7 @@ export function RunnersPage() {
   );
 }
 
+
 function RunnerCard({ pool }: { pool: RunnerPool }) {
   const s = pool.status;
   const ready = (s?.readyRunners ?? 0) >= (pool.spec.replicas ?? 1);
@@ -121,6 +197,19 @@ function RunnerCard({ pool }: { pool: RunnerPool }) {
             <div className="stat-row"><span className="label">Replicas</span><span className="value">{s?.readyRunners ?? 0} / {pool.spec.replicas ?? 1}</span></div>
             {pool.spec.labels && pool.spec.labels.length > 0 && (
               <div className="stat-row"><span className="label">Labels</span><span className="value">{pool.spec.labels.map(l => <span key={l} className="tag" style={{ marginLeft: 2 }}>{l}</span>)}</span></div>
+            )}
+            <div className="stat-row">
+              <span className="label">Staging Deploy</span>
+              <StatusBadge ok={!!pool.spec.enableSnapshotDeploy} label={pool.spec.enableSnapshotDeploy ? 'Enabled' : 'Disabled'} />
+            </div>
+            {pool.spec.buildAgentImage && (
+              <div className="stat-row"><span className="label">Build-Agent Image</span><span className="value mono">{pool.spec.buildAgentImage}</span></div>
+            )}
+            {pool.spec.buildAgentEnv && pool.spec.buildAgentEnv.length > 0 && (
+              <div className="stat-row">
+                <span className="label">Build-Agent Env</span>
+                <span className="value">{pool.spec.buildAgentEnv.map(e => e.name).join(', ')}</span>
+              </div>
             )}
           </div>
           <div>
