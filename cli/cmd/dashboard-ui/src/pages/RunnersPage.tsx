@@ -110,17 +110,30 @@ export function RunnersPage() {
 
           <details style={{ marginTop: 16 }}>
             <summary style={{ cursor: 'pointer', userSelect: 'none', fontSize: 13, fontWeight: 600 }}>
-              Advanced — staging deploy
+              Advanced — CI-managed deploys to staging
               <span className="text-dim" style={{ marginLeft: 8, fontSize: 11, fontWeight: 400 }}>
-                Enable `kindling snapshot --deploy` from this runner
+                Let GitHub Actions trigger `kindling snapshot --deploy` from this runner
               </span>
             </summary>
 
             <label className="form-checkbox" style={{ marginTop: 12 }}>
               <input type="checkbox" checked={enableSnapshotDeploy}
                 onChange={(e) => setEnableSnapshotDeploy(e.target.checked)} />
-              Enable staging deploy from this runner (`enableSnapshotDeploy`)
+              Enable CI-managed deploys to staging (`enableSnapshotDeploy`)
             </label>
+            <p className="text-dim" style={{ fontSize: 11, marginTop: 4, marginBottom: 0 }}>
+              This only gives the runner's build-agent sidecar the <em>capability</em> to run
+              `kindling snapshot --deploy`/`--destroy` when a workflow asks it to — it does not
+              pick a staging cluster. <strong>Manual deploys don't need this at all:</strong> run{' '}
+              `kindling snapshot --deploy --context &lt;ctx&gt;` from the CLI anytime, or launch
+              the dashboard with `kindling dashboard --staging-context &lt;ctx&gt;` to use the
+              staging deploy page. For a workflow-triggered deploy, which staging cluster to use
+              is set per workflow run, in <em>your</em> repo's own GitHub Actions YAML — not here
+              — via the `kindling-snapshot-deploy` action's `staging-context`/`staging-kubeconfig`
+              inputs (e.g. a repo variable and a {'`${{ secrets.STAGING_KUBECONFIG }}`'} secret).
+              See <a href="https://kindling.sh/docs/github-actions#kindling-snapshot-deploy" target="_blank" rel="noopener noreferrer">kindling-snapshot-deploy docs</a> for
+              the full wiring.
+            </p>
 
             <label className="form-label" style={{ marginTop: 12 }}>Build-agent image override (optional)</label>
             <input className="form-input" placeholder="ghcr.io/kindling-sh/build-agent:latest" value={buildAgentImage}
