@@ -2,7 +2,123 @@ package cmd
 
 import (
 	"testing"
+
+	"github.com/jeffvincent/kindling/cli/core"
 )
+
+// ────────────────────────────────────────────────────────────────────────────
+// runnerPoolConfigFromRequest
+// ────────────────────────────────────────────────────────────────────────────
+
+func TestRunnerPoolConfigFromRequest(t *testing.T) {
+	tests := []struct {
+		name    string
+		body    createRunnerRequest
+		want    core.RunnerPoolConfig
+		wantErr string
+	}{
+		{
+			name: "minimal request -- parity with CLI defaults (no snapshot-deploy, no env, no image override)",
+			body: createRunnerRequest{
+				Username: "jeff",
+				Repo:     "jeff/repo",
+				Token:    "ghp_fake",
+			},
+			want: core.RunnerPoolConfig{
+				ClusterName: "dev",
+				Username:    "jeff",
+				Repo:        "jeff/repo",
+				Token:       "ghp_fake",
+				Namespace:   "default",
+			},
+		},
+		{
+			name: "full request -- snapshot deploy, image override, and buildAgentEnv all map through",
+			body: createRunnerRequest{
+				Username:             "jeff",
+				Repo:                 "jeff/repo",
+				Token:                "ghp_fake",
+				Provider:             "github",
+				EnableSnapshotDeploy: true,
+				BuildAgentImage:      "ghcr.io/myorg/build-agent:v2",
+				BuildAgentEnv: []createRunnerEnvEntry{
+					{Name: "KINDLING_REGISTRY_PASSWORD", SecretName: "registry-credentials", SecretKey: "password"},
+					{Name: "KINDLING_REGISTRY_USERNAME", SecretName: "registry-credentials", SecretKey: "username"},
+				},
+			},
+			want: core.RunnerPoolConfig{
+				ClusterName:          "dev",
+				Username:             "jeff",
+				Repo:                 "jeff/repo",
+				Token:                "ghp_fake",
+				Namespace:            "default",
+				Provider:             "github",
+				EnableSnapshotDeploy: true,
+				BuildAgentImage:      "ghcr.io/myorg/build-agent:v2",
+				BuildAgentEnv: []core.BuildAgentEnvVar{
+					{Name: "KINDLING_REGISTRY_PASSWORD", SecretName: "registry-credentials", SecretKey: "password"},
+					{Name: "KINDLING_REGISTRY_USERNAME", SecretName: "registry-credentials", SecretKey: "username"},
+				},
+			},
+		},
+		{
+			name:    "missing username",
+			body:    createRunnerRequest{Repo: "jeff/repo", Token: "ghp_fake"},
+			wantErr: "username, repo, and token are all required",
+		},
+		{
+			name:    "missing repo",
+			body:    createRunnerRequest{Username: "jeff", Token: "ghp_fake"},
+			wantErr: "username, repo, and token are all required",
+		},
+		{
+			name:    "missing token",
+			body:    createRunnerRequest{Username: "jeff", Repo: "jeff/repo"},
+			wantErr: "username, repo, and token are all required",
+		},
+		{
+			name: "buildAgentEnv entry missing secretKey",
+			body: createRunnerRequest{
+				Username: "jeff",
+				Repo:     "jeff/repo",
+				Token:    "ghp_fake",
+				BuildAgentEnv: []createRunnerEnvEntry{
+					{Name: "FOO", SecretName: "some-secret"},
+				},
+			},
+			wantErr: "buildAgentEnv[0]: name, secretName, and secretKey are all required",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := runnerPoolConfigFromRequest(tt.body, "dev")
+			if tt.wantErr != "" {
+				if err == nil || err.Error() != tt.wantErr {
+					t.Fatalf("err = %v, want %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got.ClusterName != tt.want.ClusterName || got.Username != tt.want.Username ||
+				got.Repo != tt.want.Repo || got.Token != tt.want.Token || got.Namespace != tt.want.Namespace ||
+				got.Provider != tt.want.Provider || got.EnableSnapshotDeploy != tt.want.EnableSnapshotDeploy ||
+				got.BuildAgentImage != tt.want.BuildAgentImage {
+				t.Fatalf("got = %+v, want %+v", got, tt.want)
+			}
+			if len(got.BuildAgentEnv) != len(tt.want.BuildAgentEnv) {
+				t.Fatalf("BuildAgentEnv len = %d, want %d", len(got.BuildAgentEnv), len(tt.want.BuildAgentEnv))
+			}
+			for i := range got.BuildAgentEnv {
+				if got.BuildAgentEnv[i] != tt.want.BuildAgentEnv[i] {
+					t.Errorf("BuildAgentEnv[%d] = %+v, want %+v", i, got.BuildAgentEnv[i], tt.want.BuildAgentEnv[i])
+				}
+			}
+		})
+	}
+}
 
 // ────────────────────────────────────────────────────────────────────────────
 // extractQuotedPath

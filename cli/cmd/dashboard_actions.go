@@ -153,33 +153,82 @@ func handleDeleteSecret(w http.ResponseWriter, r *http.Request) {
 }
 
 // ── POST /api/runners/create ────────────────────────────────────
-// Body: { "username": "...", "repo": "...", "token": "..." }
+// Body: { "username": "...", "repo": "...", "token": "...", "provider": "...",
+//         "enableSnapshotDeploy": bool, "buildAgentImage": "...",
+//         "buildAgentEnv": [{"name":"...","secretName":"...","secretKey":"..."}] }
+
+// createRunnerEnvEntry mirrors parseBuildAgentEnvFlag's NAME=SECRET:KEY
+// shape (runners.go) -- one secretKeyRef-backed env var for the
+// build-agent sidecar.
+type createRunnerEnvEntry struct {
+	Name       string `json:"name"`
+	SecretName string `json:"secretName"`
+	SecretKey  string `json:"secretKey"`
+}
+
+type createRunnerRequest struct {
+	Username             string                 `json:"username"`
+	Repo                 string                 `json:"repo"`
+	Token                string                 `json:"token"`
+	Provider             string                 `json:"provider"`
+	EnableSnapshotDeploy bool                   `json:"enableSnapshotDeploy"`
+	BuildAgentImage      string                 `json:"buildAgentImage"`
+	BuildAgentEnv        []createRunnerEnvEntry `json:"buildAgentEnv"`
+}
+
+// runnerPoolConfigFromRequest validates a createRunnerRequest and maps it
+// onto core.RunnerPoolConfig -- the exact same type (and the exact same
+// BuildAgentEnvVar shape) `kindling runners` already populates from
+// --enable-snapshot-deploy/--build-agent-env/--build-agent-image flags
+// (see parseBuildAgentEnvFlag in runners.go), so the dashboard is a second
+// caller of existing logic, not new design.
+func runnerPoolConfigFromRequest(body createRunnerRequest, clusterName string) (core.RunnerPoolConfig, error) {
+	if body.Username == "" || body.Repo == "" || body.Token == "" {
+		return core.RunnerPoolConfig{}, fmt.Errorf("username, repo, and token are all required")
+	}
+
+	var buildAgentEnv []core.BuildAgentEnvVar
+	for i, e := range body.BuildAgentEnv {
+		if e.Name == "" || e.SecretName == "" || e.SecretKey == "" {
+			return core.RunnerPoolConfig{}, fmt.Errorf("buildAgentEnv[%d]: name, secretName, and secretKey are all required", i)
+		}
+		buildAgentEnv = append(buildAgentEnv, core.BuildAgentEnvVar{
+			Name:       e.Name,
+			SecretName: e.SecretName,
+			SecretKey:  e.SecretKey,
+		})
+	}
+
+	return core.RunnerPoolConfig{
+		ClusterName:          clusterName,
+		Username:             body.Username,
+		Repo:                 body.Repo,
+		Token:                body.Token,
+		Namespace:            "default",
+		Provider:             body.Provider,
+		EnableSnapshotDeploy: body.EnableSnapshotDeploy,
+		BuildAgentEnv:        buildAgentEnv,
+		BuildAgentImage:      body.BuildAgentImage,
+	}, nil
+}
 
 func handleCreateRunner(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
-	var body struct {
-		Username string `json:"username"`
-		Repo     string `json:"repo"`
-		Token    string `json:"token"`
-	}
+	var body createRunnerRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		actionErr(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
-	if body.Username == "" || body.Repo == "" || body.Token == "" {
-		actionErr(w, "username, repo, and token are all required", http.StatusBadRequest)
+
+	cfg, err := runnerPoolConfigFromRequest(body, clusterName)
+	if err != nil {
+		actionErr(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	outputs, err := core.CreateRunnerPool(core.RunnerPoolConfig{
-		ClusterName: clusterName,
-		Username:    body.Username,
-		Repo:        body.Repo,
-		Token:       body.Token,
-		Namespace:   "default",
-	})
+	outputs, err := core.CreateRunnerPool(cfg)
 	if err != nil {
 		actionErr(w, strings.Join(outputs, "\n")+"\n"+err.Error(), http.StatusInternalServerError)
 		return

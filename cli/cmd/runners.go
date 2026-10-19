@@ -39,7 +39,7 @@ func init() {
 	runnersCmd.Flags().StringVarP(&ghPAT, "token", "t", "", "CI platform access token")
 	runnersCmd.Flags().StringVar(&ciProvider, "ci-provider", "", "CI provider (github, gitlab)")
 	runnersCmd.Flags().BoolVar(&runnersEnableSnapshot, "enable-snapshot-deploy", false,
-		"Swap the build-agent sidecar for one that can also run 'kindling snapshot --deploy' (helm+crane+kindling CLI) via the kindling-snapshot-deploy action -- sets spec.localClusterName to this command's --cluster automatically")
+		"Swap the build-agent sidecar for one that can also run 'kindling snapshot --deploy' (helm+crane+kindling CLI) via the kindling-snapshot-deploy action -- sets spec.localClusterName to this command's --cluster automatically. This only grants the capability; which staging cluster to deploy to is set per workflow run via that action's own staging-context/staging-kubeconfig inputs in your repo's GitHub Actions YAML, not here. For manual deploys (no CI/runner pool involved), use 'kindling snapshot --deploy --context <ctx>' directly instead")
 	runnersCmd.Flags().StringArrayVar(&runnersBuildAgentEnv, "build-agent-env", nil,
 		"Env var to inject into the build-agent sidecar specifically (spec.buildAgentEnv), as NAME=SECRET:KEY referencing an existing Secret -- repeatable. Needed for KINDLING_REGISTRY_PASSWORD/KINDLING_REGISTRY_USERNAME (authenticated --registry pushes) and any --creds-config fromEnv target; spec.env does not reach this container")
 	runnersCmd.Flags().StringVar(&runnersBuildAgentImage, "build-agent-image", "",
