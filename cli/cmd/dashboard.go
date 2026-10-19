@@ -125,67 +125,66 @@ func runDashboard(cmd *cobra.Command, args []string) error {
 	mux.HandleFunc("/api/debug/status", handleDebugStatus) // GET — active debug sessions
 
 	// ── API routes (staging cluster) ────────────────────────────
-	if stagingContext != "" {
-		mux.HandleFunc("/api/staging/cluster", handleStagingCluster)
-		mux.HandleFunc("/api/staging/contexts", handleStagingContexts)
-		mux.HandleFunc("/api/staging/nodes", handleStagingNodes)
-		mux.HandleFunc("/api/staging/namespaces", handleStagingNamespaces)
-		mux.HandleFunc("/api/staging/deployments", handleStagingDeployments)
-		mux.HandleFunc("/api/staging/pods", handleStagingPods)
-		mux.HandleFunc("/api/staging/services", handleStagingServices)
-		mux.HandleFunc("/api/staging/ingresses", handleStagingIngresses)
-		mux.HandleFunc("/api/staging/ingress-controller", handleStagingIngressController)
-		mux.HandleFunc("/api/staging/events", handleStagingEvents)
-		mux.HandleFunc("/api/staging/secrets", handleStagingSecrets)
-		mux.HandleFunc("/api/staging/statefulsets", handleStagingStatefulSets)
-		mux.HandleFunc("/api/staging/daemonsets", handleStagingDaemonSets)
-		mux.HandleFunc("/api/staging/replicasets", handleStagingReplicaSets)
-		mux.HandleFunc("/api/staging/clusterroles", handleStagingClusterRoles)
-		mux.HandleFunc("/api/staging/clusterrolebindings", handleStagingClusterRoleBindings)
-		mux.HandleFunc("/api/staging/logs/", handleStagingLogs)
-		mux.HandleFunc("/api/staging/restart/", handleStagingRestart)
-		mux.HandleFunc("/api/staging/scale/", handleStagingScale)
-		mux.HandleFunc("/api/staging/delete-pod/", handleStagingDeletePod)
-		mux.HandleFunc("/api/staging/rollout-history/", handleStagingRolloutHistory)
-		mux.HandleFunc("/api/staging/rollback/", handleStagingRollback)
-		mux.HandleFunc("/api/staging/rollout-status/", handleStagingRolloutStatus)
-		mux.HandleFunc("/api/staging/exec", handleStagingExec)
-		mux.HandleFunc("/api/staging/describe/", handleStagingDescribe)
-		mux.HandleFunc("/api/staging/certificates", handleStagingCertificates)
-		mux.HandleFunc("/api/staging/clusterissuers", handleStagingClusterIssuers)
-		mux.HandleFunc("/api/staging/node-metrics", handleStagingNodeMetrics)
-		mux.HandleFunc("/api/staging/pod-metrics", handleStagingPodMetrics)
-		mux.HandleFunc("/api/staging/apply", handleStagingApply)
-		mux.HandleFunc("/api/staging/advisor", handleStagingAdvisor)
+	// Always registered, regardless of whether --staging-context was
+	// passed at boot: the staging context is now also settable (and
+	// changeable) at runtime via POST /api/staging/context, so these
+	// routes can't be gated on a boot-time flag value anymore. Each
+	// handler already resolves the current context per-request (via
+	// getStagingContext()/stagingKubectlJSON) and reports a clear
+	// "not connected" state when none is set yet — there is no longer a
+	// separate "no context configured" fallback handler needed here.
+	mux.HandleFunc("/api/staging/cluster", handleStagingCluster)
+	mux.HandleFunc("/api/staging/context", handleStagingSetContext) // POST — set/change the staging context at runtime
+	mux.HandleFunc("/api/staging/contexts", handleStagingContexts)
+	mux.HandleFunc("/api/staging/nodes", handleStagingNodes)
+	mux.HandleFunc("/api/staging/namespaces", handleStagingNamespaces)
+	mux.HandleFunc("/api/staging/deployments", handleStagingDeployments)
+	mux.HandleFunc("/api/staging/pods", handleStagingPods)
+	mux.HandleFunc("/api/staging/services", handleStagingServices)
+	mux.HandleFunc("/api/staging/ingresses", handleStagingIngresses)
+	mux.HandleFunc("/api/staging/ingress-controller", handleStagingIngressController)
+	mux.HandleFunc("/api/staging/events", handleStagingEvents)
+	mux.HandleFunc("/api/staging/secrets", handleStagingSecrets)
+	mux.HandleFunc("/api/staging/statefulsets", handleStagingStatefulSets)
+	mux.HandleFunc("/api/staging/daemonsets", handleStagingDaemonSets)
+	mux.HandleFunc("/api/staging/replicasets", handleStagingReplicaSets)
+	mux.HandleFunc("/api/staging/clusterroles", handleStagingClusterRoles)
+	mux.HandleFunc("/api/staging/clusterrolebindings", handleStagingClusterRoleBindings)
+	mux.HandleFunc("/api/staging/logs/", handleStagingLogs)
+	mux.HandleFunc("/api/staging/restart/", handleStagingRestart)
+	mux.HandleFunc("/api/staging/scale/", handleStagingScale)
+	mux.HandleFunc("/api/staging/delete-pod/", handleStagingDeletePod)
+	mux.HandleFunc("/api/staging/rollout-history/", handleStagingRolloutHistory)
+	mux.HandleFunc("/api/staging/rollback/", handleStagingRollback)
+	mux.HandleFunc("/api/staging/rollout-status/", handleStagingRolloutStatus)
+	mux.HandleFunc("/api/staging/exec", handleStagingExec)
+	mux.HandleFunc("/api/staging/describe/", handleStagingDescribe)
+	mux.HandleFunc("/api/staging/certificates", handleStagingCertificates)
+	mux.HandleFunc("/api/staging/clusterissuers", handleStagingClusterIssuers)
+	mux.HandleFunc("/api/staging/node-metrics", handleStagingNodeMetrics)
+	mux.HandleFunc("/api/staging/pod-metrics", handleStagingPodMetrics)
+	mux.HandleFunc("/api/staging/apply", handleStagingApply)
+	mux.HandleFunc("/api/staging/advisor", handleStagingAdvisor)
 
-		// Snapshot / Deploy
-		mux.HandleFunc("/api/staging/snapshot/status", handleStagingSnapshotStatus)
-		mux.HandleFunc("/api/staging/snapshot/credentials", handleStagingSnapshotCredentials)
-		mux.HandleFunc("/api/staging/snapshot/deploy", handleStagingSnapshotDeploy)
-		mux.HandleFunc("/api/staging/snapshot/secrets/update", handleStagingSnapshotSecretsUpdate)
+	// Snapshot / Deploy
+	mux.HandleFunc("/api/staging/snapshot/status", handleStagingSnapshotStatus)
+	mux.HandleFunc("/api/staging/snapshot/credentials", handleStagingSnapshotCredentials)
+	mux.HandleFunc("/api/staging/snapshot/deploy", handleStagingSnapshotDeploy)
+	mux.HandleFunc("/api/staging/snapshot/secrets/update", handleStagingSnapshotSecretsUpdate)
 
-		// TLS management
-		mux.HandleFunc("/api/staging/tls/status", handleStagingTLSStatus)
-		mux.HandleFunc("/api/staging/tls/install", handleStagingTLSInstall)
+	// TLS management
+	mux.HandleFunc("/api/staging/tls/status", handleStagingTLSStatus)
+	mux.HandleFunc("/api/staging/tls/install", handleStagingTLSInstall)
 
-		// VictoriaMetrics management
-		mux.HandleFunc("/api/staging/metrics/status", handleStagingMetricsStatus)
-		mux.HandleFunc("/api/staging/metrics/install", handleStagingMetricsInstall)
-		mux.HandleFunc("/api/staging/metrics/uninstall", handleStagingMetricsUninstall)
+	// VictoriaMetrics management
+	mux.HandleFunc("/api/staging/metrics/status", handleStagingMetricsStatus)
+	mux.HandleFunc("/api/staging/metrics/install", handleStagingMetricsInstall)
+	mux.HandleFunc("/api/staging/metrics/uninstall", handleStagingMetricsUninstall)
 
-		// Prometheus-compatible query API
-		mux.HandleFunc("/api/staging/prometheus/status", handlePromStatus)
-		mux.HandleFunc("/api/staging/prometheus/query", handlePromQuery)
-		mux.HandleFunc("/api/staging/prometheus/query_range", handlePromQueryRange)
-	} else {
-		// Return a minimal handler so the frontend can detect no staging context
-		mux.HandleFunc("/api/staging/cluster", func(w http.ResponseWriter, r *http.Request) {
-			jsonResponse(w, map[string]interface{}{
-				"context":   "",
-				"connected": false,
-			})
-		})
-	}
+	// Prometheus-compatible query API
+	mux.HandleFunc("/api/staging/prometheus/status", handlePromStatus)
+	mux.HandleFunc("/api/staging/prometheus/query", handlePromQuery)
+	mux.HandleFunc("/api/staging/prometheus/query_range", handlePromQueryRange)
 
 	// ── Static frontend ─────────────────────────────────────────
 	distFS, err := fs.Sub(dashboardFS, "dashboard-ui/dist")
@@ -243,8 +242,10 @@ func runDashboard(cmd *cobra.Command, args []string) error {
 
 	fmt.Fprintf(os.Stderr, "\n%s%s▸ Kindling Dashboard%s\n", colorBold, colorCyan, colorReset)
 	fmt.Fprintf(os.Stderr, "  🌐  http://localhost:%d\n", dashboardPort)
-	if stagingContext != "" {
-		fmt.Fprintf(os.Stderr, "  🏭  Staging context: %s%s%s\n", colorBold, stagingContext, colorReset)
+	if ctx := getStagingContext(); ctx != "" {
+		fmt.Fprintf(os.Stderr, "  🏭  Staging context: %s%s%s\n", colorBold, ctx, colorReset)
+	} else {
+		fmt.Fprintf(os.Stderr, "  🏭  Staging context: %snot set%s — set one from the Deploy view, or relaunch with --staging-context\n", colorDim, colorReset)
 	}
 	fmt.Fprintf(os.Stderr, "  %sPress Ctrl+C to stop%s\n\n", colorDim, colorReset)
 

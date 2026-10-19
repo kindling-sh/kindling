@@ -25,8 +25,8 @@ func handleStagingSnapshotStatus(w http.ResponseWriter, r *http.Request) {
 		"helm":      helmOk,
 		"crane":     craneOk,
 		"docker":    dockerOk,
-		"context":   stagingContext,
-		"connected": stagingContext != "",
+		"context":   getStagingContext(),
+		"connected": getStagingContext() != "",
 	}
 
 	if err == nil && len(dses) > 0 {
@@ -85,8 +85,8 @@ func handleStagingSnapshotCredentials(w http.ResponseWriter, r *http.Request) {
 	// Check for cached values
 	var cachedCreds map[string]string
 	var cachedAt string
-	if stagingContext != "" {
-		if cached := loadCredCache(stagingContext); cached != nil && len(cached.Creds) > 0 {
+	if ctx := getStagingContext(); ctx != "" {
+		if cached := loadCredCache(ctx); cached != nil && len(cached.Creds) > 0 {
 			cachedCreds = cached.Creds
 			cachedAt = cached.UpdatedAt.Format(time.RFC3339)
 		}
@@ -122,6 +122,31 @@ func handleStagingSnapshotCredentials(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// stagingDeployNameDefaults resolves the branch-derived chart name and
+// namespace defaults for a dashboard deploy request, mirroring
+// `kindling snapshot --deploy --branch`'s defaulting: an empty slug (no
+// branch could be resolved) reproduces this handler's pre-existing
+// hardcoded "kindling-snapshot"/"default" behavior exactly, unchanged.
+// namespace is only defaulted from the slug when the caller left it
+// blank -- unlike the CLI's cmd.Flags().Changed("namespace"), an HTTP
+// request body has no way to distinguish "explicitly chose default"
+// from "never touched this field", so blank is the only safe signal.
+func stagingDeployNameDefaults(slug, namespace string) (chartName, ns string) {
+	chartName = slug
+	if chartName == "" {
+		chartName = "kindling-snapshot"
+	}
+	ns = namespace
+	if ns == "" {
+		if slug != "" {
+			ns = slug
+		} else {
+			ns = "default"
+		}
+	}
+	return chartName, ns
+}
+
 func handleStagingSnapshotDeploy(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		jsonError(w, "method not allowed", 405)
@@ -137,6 +162,26 @@ func handleStagingSnapshotDeploy(w http.ResponseWriter, r *http.Request) {
 		Namespace    string            `json:"namespace"`
 		Ingress      []string          `json:"ingress"`     // services to enable ingress for
 		Credentials  map[string]string `json:"credentials"` // envVarName → staging connection string
+
+		// Branch-derived naming (see deriveIngressHost/resolveBranchSlug
+		// in snapshot.go) -- added for C2 parity with `kindling snapshot
+		// --deploy --branch`. Both optional; a blank Branch (and thus a
+		// blank derived slug) reproduces this handler's pre-existing
+		// hardcoded "kindling-snapshot"/"default" behavior exactly, so an
+		// existing caller that never sends these fields sees no change.
+		Branch        string `json:"branch"`
+		StagingDomain string `json:"staging_domain"`
+
+		// Production values (--render-prod-values/--prod-env-prefix parity).
+		RenderProdValues bool   `json:"render_prod_values"`
+		ProdEnvPrefix    string `json:"prod_env_prefix"`
+
+		// --creds-config parity: raw YAML content (not a server-side path --
+		// the frontend reads a local file and POSTs its text). Resolved
+		// values are a base layer under Credentials above -- an explicit
+		// value typed into the form always wins over one that came from
+		// this file.
+		CredsConfigYAML string `json:"creds_config_yaml"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonError(w, "invalid request body", 400)
@@ -147,8 +192,13 @@ func handleStagingSnapshotDeploy(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "registry is required", 400)
 		return
 	}
-	if stagingContext == "" {
+	stagingCtx := getStagingContext()
+	if stagingCtx == "" {
 		jsonError(w, "no staging context configured", 400)
+		return
+	}
+	if body.RenderProdValues && body.Registry == "" {
+		jsonError(w, "registry is required with render_prod_values (production values need a promoted image digest)", 400)
 		return
 	}
 
@@ -156,14 +206,28 @@ func handleStagingSnapshotDeploy(w http.ResponseWriter, r *http.Request) {
 	if format == "" {
 		format = "helm"
 	}
-	ns := body.Namespace
-	if ns == "" {
-		ns = "default"
-	}
 	tag := body.Tag
 	if tag == "" {
 		tag = "latest"
 	}
+	prodEnvPrefix := body.ProdEnvPrefix
+	if prodEnvPrefix == "" {
+		prodEnvPrefix = "prod-"
+	}
+
+	// ── Branch-derived naming ────────────────────────────────────
+	// A blank body.Branch falls back to the dashboard process's own
+	// current git branch, exactly like the CLI's --branch; if that also
+	// fails (e.g. the dashboard isn't running inside a git checkout),
+	// slug stays "" and every default below falls back to this
+	// handler's original hardcoded behavior -- never a hard error here,
+	// unlike the CLI, since an existing dashboard deploy that never
+	// supplied a branch must keep working unchanged.
+	var slug string
+	if _, s, err := resolveBranchSlug(body.Branch); err == nil {
+		slug = s
+	}
+	chartName, ns := stagingDeployNameDefaults(slug, body.Namespace)
 
 	// Stream progress via SSE
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -178,6 +242,32 @@ func handleStagingSnapshotDeploy(w http.ResponseWriter, r *http.Request) {
 	send := func(msgType, msg string) {
 		fmt.Fprintf(w, "data: %s\n\n", mustJSON(map[string]string{"type": msgType, "message": msg}))
 		flusher.Flush()
+	}
+
+	if slug != "" {
+		send("step", fmt.Sprintf("Branch slug %q (chart name / namespace default)", slug))
+	}
+
+	// ── Creds-config (optional) ─────────────────────────────────
+	// Merged in as a base layer under any explicit form-field
+	// credentials -- a value typed directly into the deploy form always
+	// takes precedence over one that came from an uploaded file.
+	credentials := body.Credentials
+	if body.CredsConfigYAML != "" {
+		cfg, err := parseCredsConfigBytes([]byte(body.CredsConfigYAML))
+		if err != nil {
+			send("error", "creds-config: "+err.Error())
+			return
+		}
+		merged := make(map[string]string, len(cfg.values)+len(credentials))
+		for k, v := range cfg.values {
+			merged[k] = v
+		}
+		for k, v := range credentials {
+			merged[k] = v
+		}
+		credentials = merged
+		send("step", fmt.Sprintf("Loaded %d credential(s) from creds-config", len(cfg.values)))
 	}
 
 	send("step", "Reading DevStagingEnvironments from cluster")
@@ -199,15 +289,15 @@ func handleStagingSnapshotDeploy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// ── Push images (shared pipeline) ──────────────────────────
-	if err := pushSnapshotImages(dses, body.Registry, tag, userPrefix, body.RegistryUser, body.RegistryPass, func(msg string) {
+	pushedDigests, err := pushSnapshotImages(dses, body.Registry, tag, userPrefix, body.RegistryUser, body.RegistryPass, func(msg string) {
 		send("step", msg)
-	}); err != nil {
+	})
+	if err != nil {
 		send("error", "Image push failed: "+err.Error())
 		return
 	}
 
 	// ── Generate chart (shared pipeline) ────────────────────────
-	chartName := "kindling-snapshot"
 	outDir := "/tmp/kindling-snapshot-" + fmt.Sprintf("%d", time.Now().UnixMilli())
 
 	send("step", fmt.Sprintf("Generating %s chart", format))
@@ -217,7 +307,7 @@ func handleStagingSnapshotDeploy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// ── Ensure ingress controller (shared pipeline) ─────────────
-	if err := ensureIngressController(stagingContext, func(msg string) {
+	if err := ensureIngressController(stagingCtx, func(msg string) {
 		send("step", msg)
 	}); err != nil {
 		send("error", "Ingress controller setup failed: "+err.Error())
@@ -238,27 +328,42 @@ func handleStagingSnapshotDeploy(w http.ResponseWriter, r *http.Request) {
 		selectedSet[stripped] = true
 	}
 
+	// Branch-derived Ingress host -- only computed (and only ever used)
+	// when a staging domain was actually given; see deploySnapshot's own
+	// comment on IngressHost for why a blank value here must leave
+	// today's pre-existing "blank host for every selected service"
+	// behavior completely unchanged.
+	var derivedHost string
+	if body.StagingDomain != "" {
+		if slug == "" {
+			send("step", "staging_domain set but no branch could be resolved — ingress host will not be branch-derived for this deploy")
+		} else {
+			derivedHost = deriveIngressHost(slug, body.StagingDomain)
+			send("step", fmt.Sprintf("Derived Ingress host %s", derivedHost))
+		}
+	}
+
 	// Auto-detect the IngressClass on the target cluster
-	ingClass := detectIngressClass(stagingContext)
+	ingClass := detectIngressClass(stagingCtx)
 	if ingClass != "" {
 		send("step", fmt.Sprintf("Using IngressClass: %s", ingClass))
 	}
 
-	send("step", fmt.Sprintf("Deploying to %s (namespace: %s)", stagingContext, ns))
+	send("step", fmt.Sprintf("Deploying %s to %s (namespace: %s)", chartName, stagingCtx, ns))
 
-	// Build credential overrides from user-supplied staging values
+	// Build credential overrides from user-supplied (+ creds-config) staging values
 	var credOverrides map[string]map[string]credOverride
-	if len(body.Credentials) > 0 {
+	if len(credentials) > 0 {
 		entries := detectDevCredentials(chartName, dses)
 		secretEntries := detectUserSecrets(dses)
 		entries = append(entries, secretEntries...)
-		credOverrides = buildOverrideMap(entries, dses, body.Credentials)
-		send("step", fmt.Sprintf("Applying %d staging credential override(s)", len(body.Credentials)))
+		credOverrides = buildOverrideMap(entries, dses, credentials)
+		send("step", fmt.Sprintf("Applying %d staging credential override(s)", len(credentials)))
 		// Cache for future deploys
-		_ = saveCredCache(stagingContext, chartName, body.Credentials)
+		_ = saveCredCache(stagingCtx, chartName, credentials)
 	} else {
 		// Auto-apply cached credentials if available
-		cached := loadCredCache(stagingContext)
+		cached := loadCredCache(stagingCtx)
 		if cached != nil && len(cached.Creds) > 0 {
 			entries := detectDevCredentials(chartName, dses)
 			secretEntries := detectUserSecrets(dses)
@@ -269,7 +374,7 @@ func handleStagingSnapshotDeploy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	out, err := deploySnapshot(DeployOpts{
-		Context:         stagingContext,
+		Context:         stagingCtx,
 		Namespace:       ns,
 		Format:          format,
 		OutDir:          outDir,
@@ -277,6 +382,7 @@ func handleStagingSnapshotDeploy(w http.ResponseWriter, r *http.Request) {
 		DSEs:            dses,
 		SelectedIngress: selectedSet,
 		IngressClass:    ingClass,
+		IngressHost:     derivedHost,
 		CredOverrides:   credOverrides,
 	})
 	if err != nil {
@@ -284,6 +390,40 @@ func handleStagingSnapshotDeploy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	send("step", "Deploy complete")
+
+	// ── Production values (optional, only after a successful deploy) ──
+	if body.RenderProdValues {
+		send("step", "Rendering production values")
+
+		imageOverrides := make(map[string]string, len(dses))
+		var missingDigest []string
+		for _, dse := range dses {
+			digest, ok := pushedDigests[dse.Name]
+			if !ok {
+				missingDigest = append(missingDigest, dse.Name)
+				continue
+			}
+			imageOverrides[dse.Name] = fmt.Sprintf("%s/%s@%s",
+				strings.TrimRight(body.Registry, "/"), helmSafe(dse.Name), digest)
+		}
+		if len(missingDigest) > 0 {
+			send("error", fmt.Sprintf("no promoted digest found for %s — deploy succeeded, but production values were not rendered", strings.Join(missingDigest, ", ")))
+			return
+		}
+
+		depsSeen := make(map[string]bool)
+		for _, dse := range dses {
+			for _, dep := range dse.Deps {
+				depsSeen[dep.Type] = true
+			}
+		}
+
+		prodValues := buildValuesYAML(chartName, dses, depsSeen, false, imageOverrides,
+			map[string]string{"KINDLING_ENV_PREFIX": prodEnvPrefix})
+		writeSnapshotFile(outDir, "values-prod.yaml", prodValues)
+		send("prod-values", prodValues)
+		send("step", "Production values rendered")
+	}
 
 	send("done", "Deployed to staging cluster")
 }
@@ -295,7 +435,8 @@ func handleStagingSnapshotSecretsUpdate(w http.ResponseWriter, r *http.Request) 
 		jsonError(w, "method not allowed", 405)
 		return
 	}
-	if stagingContext == "" {
+	stagingCtx := getStagingContext()
+	if stagingCtx == "" {
 		jsonError(w, "no staging context configured", 400)
 		return
 	}
@@ -382,7 +523,7 @@ func handleStagingSnapshotSecretsUpdate(w http.ResponseWriter, r *http.Request) 
 
 	// Cache the updated credentials
 	chartName := "kindling-snapshot"
-	_ = saveCredCache(stagingContext, chartName, body.Credentials)
+	_ = saveCredCache(stagingCtx, chartName, body.Credentials)
 
 	jsonResponse(w, map[string]interface{}{
 		"ok":        true,
@@ -394,7 +535,7 @@ func handleStagingSnapshotSecretsUpdate(w http.ResponseWriter, r *http.Request) 
 // ── /api/staging/tls/status — cert-manager + TLS status ────────────
 
 func handleStagingTLSStatus(w http.ResponseWriter, r *http.Request) {
-	if stagingContext == "" {
+	if getStagingContext() == "" {
 		jsonError(w, "no staging context configured", 400)
 		return
 	}
@@ -511,7 +652,7 @@ func handleStagingTLSInstall(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "method not allowed", 405)
 		return
 	}
-	if stagingContext == "" {
+	if getStagingContext() == "" {
 		jsonError(w, "no staging context configured", 400)
 		return
 	}
@@ -802,6 +943,11 @@ func handleStagingMetricsInstall(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "method not allowed", 405)
 		return
 	}
+	ctx := getStagingContext()
+	if ctx == "" {
+		jsonError(w, "no staging context configured", 400)
+		return
+	}
 
 	var body struct {
 		Retention string `json:"retention"`
@@ -817,8 +963,6 @@ func handleStagingMetricsInstall(w http.ResponseWriter, r *http.Request) {
 	if body.Scrape == "" {
 		body.Scrape = "30s"
 	}
-
-	ctx := stagingContext
 
 	// Stream progress
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -898,8 +1042,11 @@ func handleStagingMetricsUninstall(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "method not allowed", 405)
 		return
 	}
-
-	ctx := stagingContext
+	ctx := getStagingContext()
+	if ctx == "" {
+		jsonError(w, "no staging context configured", 400)
+		return
+	}
 
 	_, _ = runSilent("kubectl", "--context", ctx, "-n", "monitoring", "delete", "deployment", "vmsingle", "--ignore-not-found")
 	_, _ = runSilent("kubectl", "--context", ctx, "-n", "monitoring", "delete", "service", "vmsingle", "--ignore-not-found")

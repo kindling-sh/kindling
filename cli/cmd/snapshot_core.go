@@ -55,19 +55,23 @@ func stripDSEPrefix(dses []snapshotDSE) string {
 // image already happens to exist at the destination tag.
 //
 // progress is an optional callback for streaming status messages.
-func pushSnapshotImages(dses []snapshotDSE, registry, tag, userPrefix, regUser, regPass string, progress func(string)) error {
+// Returns the pushed image digests (dse.Name -> "sha256:..."), needed by
+// callers that also want to render production values (a digest-pinned
+// image reference is required there, not just a tag).
+func pushSnapshotImages(dses []snapshotDSE, registry, tag, userPrefix, regUser, regPass string, progress func(string)) (map[string]string, error) {
 	if progress == nil {
 		progress = func(string) {}
 	}
 
 	progress(fmt.Sprintf("Pushing images to %s (tag: %s)", registry, tag))
 
-	if _, err := craneCopyImages(dses, registry, tag, userPrefix, regUser, regPass); err != nil {
-		return err
+	digests, err := craneCopyImages(dses, registry, tag, userPrefix, regUser, regPass)
+	if err != nil {
+		return nil, err
 	}
 
 	progress("Images pushed to registry")
-	return nil
+	return digests, nil
 }
 
 // ── 3. Export chart ─────────────────────────────────────────────
@@ -179,6 +183,7 @@ type DeployOpts struct {
 	DSEs            []snapshotDSE                      // for ingress flag generation
 	SelectedIngress map[string]bool                    // services to enable ingress for
 	IngressClass    string                             // IngressClass name for the target cluster
+	IngressHost     string                             // branch-derived fallback host (deriveIngressHost) for a selected service with no Ingress host of its own already set
 	CredOverrides   map[string]map[string]credOverride // valuesKey → envVar → stagingValue
 }
 
@@ -211,18 +216,9 @@ func deploySnapshot(opts DeployOpts) (string, error) {
 			defer func() { os.Remove(credsFile) }()
 			helmArgs = append(helmArgs, "-f", credsFile)
 		}
-		// Ingress selection: enable/disable for all services based on user selection
+		// Ingress selection: enable/disable for all services based on user selection.
 		for _, dse := range opts.DSEs {
-			vk := helmValuesKey(dse.Name)
-			if opts.SelectedIngress[dse.Name] {
-				helmArgs = append(helmArgs, "--set", fmt.Sprintf("%s.ingress.enabled=true", vk))
-				helmArgs = append(helmArgs, "--set", fmt.Sprintf("%s.ingress.host=", vk))
-				if opts.IngressClass != "" {
-					helmArgs = append(helmArgs, "--set", fmt.Sprintf("%s.ingress.ingressClassName=%s", vk, opts.IngressClass))
-				}
-			} else {
-				helmArgs = append(helmArgs, "--set", fmt.Sprintf("%s.ingress.enabled=false", vk))
-			}
+			helmArgs = append(helmArgs, ingressHelmArgs(dse, opts.SelectedIngress[dse.Name], opts.IngressClass, opts.IngressHost)...)
 		}
 		return runSilent("helm", helmArgs...)
 
@@ -233,4 +229,39 @@ func deploySnapshot(opts DeployOpts) (string, error) {
 	default:
 		return "", fmt.Errorf("unknown format %q", opts.Format)
 	}
+}
+
+// ingressHelmArgs builds the `--set <vk>.ingress.*` helm args for a
+// single service, pulled out of deploySnapshot as a pure function so the
+// host-precedence rule below is unit-testable without exec'ing helm.
+//
+// Host precedence: when ingressHost is empty (no staging domain was
+// configured for this deploy -- the long-standing default), every
+// selected service gets a blank host, identical to this function's
+// behavior before IngressHost existed on DeployOpts -- a caller that
+// hasn't opted into branch-derived naming sees zero change. When
+// ingressHost is set, it's used for every selected service *except* one
+// that already has a genuinely custom (non-".localhost") host of its
+// own -- that explicit intent is still never overridden, matching
+// applyBranchIngressHost's own "never override explicit intent" rule,
+// without needing this path to share its fail-fast behavior (a
+// dashboard deploy with no staging domain set must never start failing
+// deploys that worked before this field existed, even though every dev
+// DSE typically already has a ".localhost" ingress host).
+func ingressHelmArgs(dse snapshotDSE, selected bool, ingressClass, ingressHost string) []string {
+	vk := helmValuesKey(dse.Name)
+	if !selected {
+		return []string{"--set", fmt.Sprintf("%s.ingress.enabled=false", vk)}
+	}
+
+	args := []string{"--set", fmt.Sprintf("%s.ingress.enabled=true", vk)}
+	host := ingressHost
+	if host != "" && dse.Ingress != nil && dse.Ingress.Host != "" && !strings.HasSuffix(dse.Ingress.Host, ".localhost") {
+		host = dse.Ingress.Host
+	}
+	args = append(args, "--set", fmt.Sprintf("%s.ingress.host=%s", vk, host))
+	if ingressClass != "" {
+		args = append(args, "--set", fmt.Sprintf("%s.ingress.ingressClassName=%s", vk, ingressClass))
+	}
+	return args
 }

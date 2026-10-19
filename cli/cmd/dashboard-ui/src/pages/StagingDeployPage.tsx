@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { fetchSnapshotStatus, fetchSnapshotCredentials, streamSnapshotDeploy, updateStagingSecrets, fetchStagingIngressController } from '../api';
+import { fetchSnapshotStatus, fetchSnapshotCredentials, streamSnapshotDeploy, updateStagingSecrets, fetchStagingIngressController, fetchStagingContexts, setStagingContext } from '../api';
 import type { SnapshotStatus, SnapshotService, IngressControllerInfo } from '../types';
 import type { SnapshotCredential } from '../api';
 import { StatusBadge, EmptyState } from './shared';
@@ -16,8 +16,34 @@ export function StagingDeployPage() {
   const [registryPass, setRegistryPass] = useState('');
   const [tag, setTag] = useState('latest');
   const [format, setFormat] = useState<'helm' | 'kustomize'>('helm');
-  const [namespace, setNamespace] = useState('default');
+  const [namespace, setNamespace] = useState('');
   const [selectedIngress, setSelectedIngress] = useState<Set<string>>(new Set());
+
+  // Branch-derived naming (optional -- blank reproduces this page's
+  // original single-environment behavior exactly: chart name/namespace
+  // fall back to "kindling-snapshot"/"default", and no Ingress host is
+  // derived).
+  const [branch, setBranch] = useState('');
+  const [stagingDomain, setStagingDomain] = useState('');
+
+  // Production values (--render-prod-values/--prod-env-prefix parity)
+  const [renderProdValues, setRenderProdValues] = useState(false);
+  const [prodEnvPrefix, setProdEnvPrefix] = useState('');
+  const [prodValuesYAML, setProdValuesYAML] = useState('');
+
+  // --creds-config file picker (reads a local YAML file's contents into
+  // state -- never written anywhere server-side except a temp chart dir
+  // this same deploy already generates).
+  const [credsConfigYAML, setCredsConfigYAML] = useState('');
+  const [credsConfigFileName, setCredsConfigFileName] = useState('');
+
+  // Staging context -- settable at runtime from this page's own empty
+  // state, no dashboard restart required.
+  const [availableContexts, setAvailableContexts] = useState<string[]>([]);
+  const [contextInput, setContextInput] = useState('');
+  const [connecting, setConnecting] = useState(false);
+  const [connectError, setConnectError] = useState('');
+  const [showContextPicker, setShowContextPicker] = useState(false);
 
   // Credential state
   const [devCreds, setDevCreds] = useState<SnapshotCredential[]>([]);
@@ -41,8 +67,8 @@ export function StagingDeployPage() {
   const [ingressInfo, setIngressInfo] = useState<IngressControllerInfo | null>(null);
   const [ingressLookupFailed, setIngressLookupFailed] = useState(false);
 
-  useEffect(() => {
-    Promise.all([
+  function loadStatus() {
+    return Promise.all([
       fetchSnapshotStatus(),
       fetchSnapshotCredentials().catch(() => ({ credentials: [], cached_at: '' })),
     ]).then(([s, creds]) => {
@@ -66,10 +92,29 @@ export function StagingDeployPage() {
         }
         setCredValues(initial);
       }
-    })
-      .catch(() => {})
-      .finally(() => setLoading(false));
+    }).catch(() => {});
+  }
+
+  useEffect(() => {
+    loadStatus().finally(() => setLoading(false));
+    fetchStagingContexts().then(setAvailableContexts).catch(() => {});
   }, []);
+
+  async function handleConnect() {
+    if (!contextInput) return;
+    setConnecting(true);
+    setConnectError('');
+    const result = await setStagingContext(contextInput);
+    setConnecting(false);
+    if (!result.ok) {
+      setConnectError(result.error || 'Failed to set staging context');
+      return;
+    }
+    setShowContextPicker(false);
+    setLoading(true);
+    await loadStatus();
+    setLoading(false);
+  }
 
   // Auto-scroll log
   useEffect(() => {
@@ -121,6 +166,7 @@ export function StagingDeployPage() {
     setLogs([]);
     setIngressInfo(null);
     setIngressLookupFailed(false);
+    setProdValuesYAML('');
 
     // Build credentials map — only include non-empty values
     const credentials: Record<string, string> = {};
@@ -133,8 +179,16 @@ export function StagingDeployPage() {
         registry, registry_user: registryUser, registry_pass: registryPass,
         tag, format, namespace, ingress: Array.from(selectedIngress),
         ...(Object.keys(credentials).length > 0 ? { credentials } : {}),
+        ...(branch.trim() ? { branch: branch.trim() } : {}),
+        ...(stagingDomain.trim() ? { staging_domain: stagingDomain.trim() } : {}),
+        ...(renderProdValues ? { render_prod_values: true, prod_env_prefix: prodEnvPrefix.trim() || undefined } : {}),
+        ...(credsConfigYAML ? { creds_config_yaml: credsConfigYAML } : {}),
       },
       (msg) => {
+        if (msg.type === 'prod-values') {
+          setProdValuesYAML(msg.message);
+          return;
+        }
         setLogs(prev => [...prev, msg]);
         if (msg.type === 'done' || msg.type === 'error') {
           setStep('done');
@@ -150,22 +204,66 @@ export function StagingDeployPage() {
     setLogs([]);
     setIngressInfo(null);
     setIngressLookupFailed(false);
+    setProdValuesYAML('');
     fetchSnapshotStatus().then(s => setStatus(s)).catch(() => {});
+  }
+
+  function handleCredsConfigFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setCredsConfigFileName(file.name);
+    const reader = new FileReader();
+    reader.onload = () => setCredsConfigYAML(String(reader.result || ''));
+    reader.readAsText(file);
+  }
+
+  function downloadProdValues() {
+    const blob = new Blob([prodValuesYAML], { type: 'text/yaml' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'values-prod.yaml';
+    a.click();
+    URL.revokeObjectURL(url);
   }
 
   if (loading) return <div className="loading">Reading cluster state…</div>;
 
-  if (!status?.connected) {
+  if (!status?.connected || showContextPicker) {
     return (
       <div className="page">
         <div className="page-header"><div className="page-header-left">
           <h1>Deploy to Staging</h1>
-          <p className="page-subtitle">Not connected — start the dashboard with <code>--staging-context</code></p>
+          <p className="page-subtitle">{status?.connected ? `Currently connected to ${status.context}` : 'Not connected — set a staging cluster context below'}</p>
         </div></div>
         <div className="staging-disconnected">
           <div className="staging-disconnected-icon">⚠</div>
           <h2>No Staging Context</h2>
-          <p>Launch the dashboard with a staging kubeconfig context to enable deployment.</p>
+          <p>Pick (or type) the kubeconfig context for your staging cluster — no dashboard restart needed.</p>
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'center', marginTop: 12, flexWrap: 'wrap' }}>
+            <input
+              className="form-input"
+              style={{ maxWidth: 320 }}
+              list="staging-context-options"
+              placeholder="my-staging-context"
+              value={contextInput}
+              onChange={e => setContextInput(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') handleConnect(); }}
+            />
+            <datalist id="staging-context-options">
+              {availableContexts.map(c => <option key={c} value={c} />)}
+            </datalist>
+            <button className="btn btn-primary" disabled={!contextInput || connecting} onClick={handleConnect}>
+              {connecting ? 'Connecting…' : 'Connect'}
+            </button>
+            {status?.connected && (
+              <button className="btn btn-ghost" onClick={() => setShowContextPicker(false)}>Cancel</button>
+            )}
+          </div>
+          {connectError && <p style={{ color: 'var(--danger, #e05252)', marginTop: 8 }}>{connectError}</p>}
+          <p className="text-dim" style={{ fontSize: 12, marginTop: 16 }}>
+            Or launch the dashboard with a context already set:
+          </p>
           <pre className="staging-code-block">kindling dashboard --staging-context &lt;your-context&gt;</pre>
         </div>
       </div>
@@ -324,10 +422,30 @@ export function StagingDeployPage() {
                       <label className="form-label">Namespace</label>
                       <input
                         className="form-input"
-                        placeholder="default"
+                        placeholder={namespace ? undefined : 'default (or branch slug, if Branch is set below)'}
                         value={namespace}
                         onChange={e => setNamespace(e.target.value)}
                       />
+                    </div>
+                    <div className="form-group" style={{ marginTop: 12 }}>
+                      <label className="form-label">Branch <span className="text-dim" style={{ fontWeight: 400 }}>(optional)</span></label>
+                      <input
+                        className="form-input"
+                        placeholder="current branch, if unset"
+                        value={branch}
+                        onChange={e => setBranch(e.target.value)}
+                      />
+                      <span className="form-hint">Derives the chart name/namespace, same as `kindling snapshot --deploy --branch`</span>
+                    </div>
+                    <div className="form-group" style={{ marginTop: 12 }}>
+                      <label className="form-label">Staging Domain <span className="text-dim" style={{ fontWeight: 400 }}>(optional)</span></label>
+                      <input
+                        className="form-input"
+                        placeholder="example.com"
+                        value={stagingDomain}
+                        onChange={e => setStagingDomain(e.target.value)}
+                      />
+                      <span className="form-hint">Derives an Ingress host as `&lt;branch-slug&gt;.staging.&lt;domain&gt;` for selected services with no explicit host</span>
                     </div>
                     <div className="form-group" style={{ marginTop: 12 }}>
                       <label className="form-label">Target Context</label>
@@ -336,8 +454,42 @@ export function StagingDeployPage() {
                         value={status?.context || ''}
                         disabled
                       />
-                      <span className="form-hint">Set via --staging-context flag</span>
+                      <span className="form-hint">
+                        <a href="#" onClick={e => { e.preventDefault(); setShowContextPicker(true); }}>Change context</a>
+                      </span>
                     </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Production values + creds-config */}
+              <div className="card" style={{ marginBottom: 16 }}>
+                <div className="card-header">
+                  <span className="card-icon">◈</span>
+                  <h3>Production Values</h3>
+                </div>
+                <div className="card-body">
+                  <label className="form-checkbox">
+                    <input type="checkbox" checked={renderProdValues} onChange={e => setRenderProdValues(e.target.checked)} />
+                    Also render production values (`--render-prod-values`)
+                  </label>
+                  {renderProdValues && (
+                    <div className="form-group" style={{ marginTop: 12 }}>
+                      <label className="form-label">Production env prefix</label>
+                      <input
+                        className="form-input"
+                        placeholder="prod-"
+                        value={prodEnvPrefix}
+                        onChange={e => setProdEnvPrefix(e.target.value)}
+                      />
+                      <span className="form-hint">KINDLING_ENV_PREFIX value injected for the production render</span>
+                    </div>
+                  )}
+
+                  <div className="form-group" style={{ marginTop: 16 }}>
+                    <label className="form-label">Credentials config file <span className="text-dim" style={{ fontWeight: 400 }}>(optional, `--creds-config`)</span></label>
+                    <input type="file" accept=".yaml,.yml" onChange={handleCredsConfigFile} />
+                    {credsConfigFileName && <span className="form-hint">Loaded {credsConfigFileName} — values below override any matching entry</span>}
                   </div>
                 </div>
               </div>
@@ -456,8 +608,21 @@ export function StagingDeployPage() {
               )}
             </div>
           </div>
+          {step === 'done' && prodValuesYAML && (
+            <details style={{ borderTop: '1px solid var(--border)' }}>
+              <summary style={{ cursor: 'pointer', userSelect: 'none', padding: '10px 16px', fontSize: 13, fontWeight: 600 }}>
+                values-prod.yaml
+              </summary>
+              <pre className="log-output" style={{ margin: '0 16px 12px', maxHeight: 300, overflow: 'auto', fontSize: 12 }}>{prodValuesYAML}</pre>
+            </details>
+          )}
           {step === 'done' && (
             <div style={{ padding: '12px 16px', borderTop: '1px solid var(--border)', display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              {prodValuesYAML && (
+                <button className="btn btn-secondary" onClick={downloadProdValues}>
+                  ⬇ Download values-prod.yaml
+                </button>
+              )}
               <button className="btn btn-secondary" onClick={reset}>
                 ← Configure Another Deploy
               </button>

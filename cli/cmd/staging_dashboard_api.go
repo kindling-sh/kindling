@@ -16,16 +16,40 @@ import (
 
 // ── Staging context & kubectl ────────────────────────────────
 
-// stagingContext is set by the --staging-context flag on the dashboard command.
-// If empty, staging API routes will attempt auto-detection.
-var stagingContext string
+// stagingContext is the kubeconfig context for the staging cluster.
+// Initially set by the --staging-context flag on the dashboard command
+// (a plain, unguarded write -- it happens during flag parsing, before
+// the HTTP server starts, so there's no concurrent access yet). After
+// that, it's runtime-settable via POST /api/staging/context
+// (handleStagingSetContext), so every read/write after startup goes
+// through getStagingContext/setStagingContext instead of touching the
+// variable directly -- concurrent HTTP handlers read it on every
+// request. Session-only: not persisted anywhere, so a dashboard restart
+// always starts over from --staging-context (or empty) again.
+var (
+	stagingContextMu sync.RWMutex
+	stagingContext   string
+)
+
+func getStagingContext() string {
+	stagingContextMu.RLock()
+	defer stagingContextMu.RUnlock()
+	return stagingContext
+}
+
+func setStagingContext(ctx string) {
+	stagingContextMu.Lock()
+	stagingContext = ctx
+	stagingContextMu.Unlock()
+}
 
 // stagingKubectlJSON runs kubectl against the staging cluster context.
 func stagingKubectlJSON(args ...string) (string, error) {
-	if stagingContext == "" {
+	ctx := getStagingContext()
+	if ctx == "" {
 		return "", fmt.Errorf("no staging context configured")
 	}
-	full := append([]string{"--context", stagingContext}, args...)
+	full := append([]string{"--context", ctx}, args...)
 	return core.RunCapture("kubectl", full...)
 }
 
@@ -194,7 +218,7 @@ func handleStagingCluster(w http.ResponseWriter, r *http.Request) {
 		Traefik    interface{} `json:"traefik,omitempty"`
 	}
 
-	info := stagingClusterInfo{Context: stagingContext}
+	info := stagingClusterInfo{Context: getStagingContext()}
 
 	// Check connectivity
 	_, err := stagingKubectlJSON("cluster-info")
@@ -218,7 +242,7 @@ func handleStagingCluster(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Detect provider from context name
-	ctx := strings.ToLower(stagingContext)
+	ctx := strings.ToLower(getStagingContext())
 	switch {
 	case strings.Contains(ctx, "do-"):
 		info.Provider = "DigitalOcean"
@@ -306,6 +330,50 @@ func handleStagingContexts(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	jsonResponse(w, contexts)
+}
+
+// ── POST /api/staging/context — set/change the staging context at runtime ──
+//
+// Lets a dashboard already running without --staging-context (or wanting
+// to point at a different cluster) configure it without restarting the
+// whole process. Validated against the real kubeconfig context list (the
+// same one handleStagingContexts already returns) so a typo is caught
+// immediately with a clear error, not discovered later as a confusing
+// "no staging context configured"/connection failure. Session-only --
+// see the comment on the stagingContext var above.
+func handleStagingSetContext(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, "method not allowed", 405)
+		return
+	}
+	var body struct {
+		Context string `json:"context"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Context) == "" {
+		jsonError(w, "missing context field", 400)
+		return
+	}
+	ctx := strings.TrimSpace(body.Context)
+
+	out, err := core.RunCapture("kubectl", "config", "get-contexts", "-o", "name")
+	if err != nil {
+		jsonError(w, "failed to list kubeconfig contexts: "+err.Error(), 500)
+		return
+	}
+	found := false
+	for _, line := range strings.Split(out, "\n") {
+		if strings.TrimSpace(line) == ctx {
+			found = true
+			break
+		}
+	}
+	if !found {
+		jsonError(w, fmt.Sprintf("context %q not found in kubeconfig", ctx), 400)
+		return
+	}
+
+	setStagingContext(ctx)
+	jsonResponse(w, map[string]interface{}{"ok": true, "context": ctx})
 }
 
 // ── /api/staging/logs/{namespace}/{pod} ────────────────────────────
@@ -810,7 +878,7 @@ func ensurePromForward() (int, error) {
 	ln.Close()
 
 	// Start port-forward
-	cmd := exec.Command("kubectl", "--context", stagingContext,
+	cmd := exec.Command("kubectl", "--context", getStagingContext(),
 		"port-forward", fmt.Sprintf("svc/%s", svc),
 		fmt.Sprintf("%d:%d", localPort, svcPort),
 		"-n", ns)
@@ -1401,7 +1469,13 @@ func handleStagingApply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cmd := exec.Command("kubectl", "--context", stagingContext, "apply", "-f", "-")
+	ctx := getStagingContext()
+	if ctx == "" {
+		jsonError(w, "no staging context configured", 400)
+		return
+	}
+
+	cmd := exec.Command("kubectl", "--context", ctx, "apply", "-f", "-")
 	cmd.Stdin = strings.NewReader(body.YAML)
 	out, err := cmd.CombinedOutput()
 	if err != nil {

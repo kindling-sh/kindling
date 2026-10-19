@@ -98,7 +98,7 @@ func handleContexts(w http.ResponseWriter, r *http.Request) {
 
 	resp := contextsResponse{
 		Local:   kindContext(),
-		Staging: stagingContext,
+		Staging: getStagingContext(),
 	}
 
 	// Get current kubectl context

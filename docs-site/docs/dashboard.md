@@ -57,6 +57,44 @@ The dashboard isn't just read-only. From the UI you can:
 
 ---
 
+## Staging panel
+
+A second "Staging" section appears in the sidebar alongside the local
+cluster, giving you the same cluster-browsing views (workloads, network,
+TLS, metrics) plus a **Deploy** page for pushing your dev environment to
+a real staging cluster — all from the browser, no CLI required.
+
+Point it at a staging cluster either way:
+
+```bash
+# At launch
+kindling dashboard --staging-context my-staging
+
+# Or from a running dashboard, with no restart —
+# Deploy page → "No Staging Context" → pick/type a context → Connect
+```
+
+The context is session-only (not written anywhere), so a dashboard
+restart always starts over from `--staging-context` (or disconnected)
+again. Use the "Change context" link on the Deploy page to switch
+clusters without restarting.
+
+The Deploy page itself mirrors `kindling snapshot --deploy`'s flags:
+
+- **Branch** / **Staging Domain** — optional; derive a per-branch chart
+  name, namespace, and Ingress host (`<branch-slug>.staging.<domain>`),
+  the same convention `kindling snapshot --deploy --branch` uses. Leave
+  both blank for the original single-environment behavior.
+- **Production Values** — check "Also render production values" to get
+  a digest-pinned `values-prod.yaml` (equivalent to `--render-prod-values`),
+  viewable and downloadable once the deploy finishes.
+- **Credentials config file** — upload a `--creds-config`-style YAML file
+  (see [CI workflows](github-actions.md)) instead of retyping every
+  staging connection string by hand; values typed directly into the form
+  still take precedence over ones from the file.
+
+---
+
 ## Topology editor
 
 The topology page (`/topology`) provides a visual canvas for designing and

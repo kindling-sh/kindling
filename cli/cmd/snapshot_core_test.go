@@ -533,3 +533,65 @@ func TestDeployOpts_CredOverrides(t *testing.T) {
 		t.Error("CredOverrides should hold the correct value")
 	}
 }
+
+// ════════════════════════════════════════════════════════════════
+// ingressHelmArgs
+// ════════════════════════════════════════════════════════════════
+
+func TestIngressHelmArgs_NotSelected(t *testing.T) {
+	dse := snapshotDSE{Name: "gateway"}
+	args := ingressHelmArgs(dse, false, "traefik", "feature-x.staging.example.com")
+	want := []string{"--set", "gateway.ingress.enabled=false"}
+	if strings.Join(args, " ") != strings.Join(want, " ") {
+		t.Errorf("args = %v, want %v (unselected services must never get a host/class set)", args, want)
+	}
+}
+
+func TestIngressHelmArgs_SelectedNoIngressHost_BlankHost(t *testing.T) {
+	// The long-standing default (no staging domain configured for this
+	// deploy): every selected service gets a blank host, regardless of
+	// whatever host the dev DSE happens to carry -- this is the explicit
+	// no-regression case for existing callers that never pass IngressHost.
+	dse := snapshotDSE{Name: "gateway", Ingress: &snapshotIngress{Host: "gateway.localhost"}}
+	args := ingressHelmArgs(dse, true, "traefik", "")
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "gateway.ingress.host=") || strings.Contains(joined, "gateway.ingress.host=gateway.localhost") {
+		t.Errorf("args = %v, want a blank host even though the DSE has a .localhost one", args)
+	}
+}
+
+func TestIngressHelmArgs_SelectedWithIngressHost_UsesDerivedHost(t *testing.T) {
+	// No explicit, non-local host on the DSE -- the derived host from
+	// IngressHost should be used.
+	dse := snapshotDSE{Name: "gateway", Ingress: &snapshotIngress{Host: "gateway.localhost"}}
+	args := ingressHelmArgs(dse, true, "traefik", "feature-x.staging.example.com")
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "gateway.ingress.host=feature-x.staging.example.com") {
+		t.Errorf("args = %v, want the derived host to replace the .localhost one", args)
+	}
+	if !strings.Contains(joined, "gateway.ingress.ingressClassName=traefik") {
+		t.Errorf("args = %v, want the ingress class set", args)
+	}
+}
+
+func TestIngressHelmArgs_SelectedWithExplicitCustomHost_NeverOverridden(t *testing.T) {
+	// A genuinely custom (non-.localhost) host on the DSE is explicit
+	// intent and must never be overridden by a derived host.
+	dse := snapshotDSE{Name: "gateway", Ingress: &snapshotIngress{Host: "gateway.example.com"}}
+	args := ingressHelmArgs(dse, true, "traefik", "feature-x.staging.example.com")
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "gateway.ingress.host=gateway.example.com") {
+		t.Errorf("args = %v, want the explicit custom host preserved", args)
+	}
+}
+
+func TestIngressHelmArgs_SelectedNoDevIngressAtAll_UsesDerivedHost(t *testing.T) {
+	// A service selected for staging ingress that had no Ingress config
+	// at all in dev still gets the derived host.
+	dse := snapshotDSE{Name: "gateway"}
+	args := ingressHelmArgs(dse, true, "", "feature-x.staging.example.com")
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "gateway.ingress.host=feature-x.staging.example.com") {
+		t.Errorf("args = %v, want the derived host", args)
+	}
+}

@@ -111,6 +111,52 @@ func TestLoadCredsConfig_FileNotFound(t *testing.T) {
 }
 
 // ════════════════════════════════════════════════════════════════
+// parseCredsConfigBytes -- the shared core loadCredsConfig delegates to,
+// exercised directly against in-memory content the way the dashboard's
+// creds-config file-picker feature does (no temp file round trip).
+// ════════════════════════════════════════════════════════════════
+
+func TestParseCredsConfigBytes_ValidContent(t *testing.T) {
+	t.Setenv("TEST_STAGING_DB_URL", "postgres://staging/real")
+	cfg, err := parseCredsConfigBytes([]byte(`
+credentials:
+  DATABASE_URL:
+    fromEnv: TEST_STAGING_DB_URL
+  FEATURE_FLAG:
+    value: "true"
+`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.values["DATABASE_URL"] != "postgres://staging/real" {
+		t.Errorf("expected fromEnv to resolve, got %q", cfg.values["DATABASE_URL"])
+	}
+	if cfg.values["FEATURE_FLAG"] != "true" {
+		t.Errorf("expected inline value, got %q", cfg.values["FEATURE_FLAG"])
+	}
+}
+
+func TestParseCredsConfigBytes_MalformedYAML(t *testing.T) {
+	_, err := parseCredsConfigBytes([]byte("not: valid: yaml: [["))
+	if err == nil {
+		t.Fatal("expected an error for malformed YAML, got nil")
+	}
+}
+
+func TestParseCredsConfigBytes_MutuallyExclusiveFields(t *testing.T) {
+	t.Setenv("TEST_SOME_VAR", "x")
+	_, err := parseCredsConfigBytes([]byte(`
+credentials:
+  DATABASE_URL:
+    fromEnv: TEST_SOME_VAR
+    value: "literal"
+`))
+	if err == nil {
+		t.Fatal("expected error when both fromEnv and value are set, got nil")
+	}
+}
+
+// ════════════════════════════════════════════════════════════════
 // resolveIngressSelection
 // ════════════════════════════════════════════════════════════════
 
