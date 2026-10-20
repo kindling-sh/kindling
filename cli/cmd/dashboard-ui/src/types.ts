@@ -686,6 +686,31 @@ export interface TLSStatus {
   certificates: TLSCert[];
 }
 
+// ── Wildcard DNS-01 TLS wizard (C3) ───────────────────────────────
+
+export interface WildcardNSCheckResult {
+  ok: boolean;
+  nameservers?: string[];
+  cloudflare?: boolean;
+  error?: string;
+}
+
+export interface WildcardTokenValidationResult {
+  ok: boolean;
+  zone_id?: string;
+  zone_name?: string;
+  error?: string;
+}
+
+export interface WildcardRecordCheckResult {
+  ok: boolean;
+  probe?: string;
+  wildcard?: string;
+  resolved?: string[];
+  expected?: string[];
+  error?: string;
+}
+
 // ── Metrics Management ──────────────────────────────────────────
 
 export interface MetricsStackStatus {

@@ -176,6 +176,13 @@ func runDashboard(cmd *cobra.Command, args []string) error {
 	mux.HandleFunc("/api/staging/tls/status", handleStagingTLSStatus)
 	mux.HandleFunc("/api/staging/tls/install", handleStagingTLSInstall)
 
+	// Wildcard DNS-01 TLS wizard (C3)
+	mux.HandleFunc("/api/staging/tls/wildcard/check-ns", handleStagingTLSWildcardCheckNS)
+	mux.HandleFunc("/api/staging/tls/wildcard/validate-token", handleStagingTLSWildcardValidateToken)
+	mux.HandleFunc("/api/staging/tls/wildcard/check-record", handleStagingTLSWildcardCheckRecord)
+	mux.HandleFunc("/api/staging/tls/wildcard/ensure-ingress", handleStagingTLSWildcardEnsureIngress)
+	mux.HandleFunc("/api/staging/tls/wildcard/install", handleStagingTLSWildcardInstall)
+
 	// VictoriaMetrics management
 	mux.HandleFunc("/api/staging/metrics/status", handleStagingMetricsStatus)
 	mux.HandleFunc("/api/staging/metrics/install", handleStagingMetricsInstall)
@@ -221,10 +228,27 @@ func runDashboard(cmd *cobra.Command, args []string) error {
 	}
 
 	server := &http.Server{
-		Addr:         addr,
-		Handler:      mux,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 60 * time.Second,
+		Addr:        addr,
+		Handler:     mux,
+		ReadTimeout: 30 * time.Second,
+		// No WriteTimeout: several handlers stream progress over SSE for
+		// long-running operations (wildcard DNS-01 certificate issuance
+		// alone can legitimately take 6-10+ minutes -- see
+		// waitForCertificateReady/staging_tls_wildcard_api.go). A fixed
+		// WriteTimeout is an absolute deadline on the entire response,
+		// not an idle timeout -- it silently severs the connection
+		// mid-stream the moment it elapses, regardless of whether the
+		// handler is still actively flushing data. That's exactly what
+		// happened here: cert-manager genuinely finished issuing the
+		// certificate, but the dashboard's own 60s WriteTimeout had
+		// already killed the SSE connection first, so the frontend never
+		// received the final "done" message and was left spinning
+		// forever despite the backend operation having actually
+		// succeeded. This is a local, single-developer tool, not a
+		// public-facing API -- there's no DoS-protection reason to cap
+		// response duration here, so it's left unset (unlimited) rather
+		// than just raised to a new, still-arbitrary number that some
+		// future long-running flow could hit again.
 	}
 
 	// Graceful shutdown
