@@ -618,7 +618,7 @@ function AppSidebar({ activePage, setActivePage }: { activePage: Page; setActive
                     {stagingCtx.length > 24 ? stagingCtx.slice(0, 22) + '…' : stagingCtx}
                   </span>
                 ) : (
-                  <span className="cluster-context-badge cluster-context-badge-none">no --staging-context</span>
+                  <span className="cluster-context-badge cluster-context-badge-none">not connected</span>
                 )}
                 {stagingPublicIP && (
                   <span className="cluster-context-ip" title={stagingPublicIP} style={{ fontSize: 10, color: 'var(--accent)', fontFamily: 'var(--font-mono)', opacity: 0.85 }}>

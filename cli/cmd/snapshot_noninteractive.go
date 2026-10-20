@@ -60,12 +60,25 @@ func loadCredsConfig(path string) (*resolvedCredsConfig, error) {
 	if err != nil {
 		return nil, fmt.Errorf("cannot read --creds-config file %q: %w", path, err)
 	}
+	resolved, err := parseCredsConfigBytes(data)
+	if err != nil {
+		return nil, fmt.Errorf("cannot parse --creds-config file %q: %w", path, err)
+	}
+	return resolved, nil
+}
 
+// parseCredsConfigBytes is the shared parsing/resolution core of
+// loadCredsConfig, pulled out so a caller that already has the YAML
+// content in memory (e.g. the dashboard's creds-config file picker,
+// which POSTs the file's contents rather than a path on the server's
+// filesystem) doesn't need a throwaway temp file just to reuse this
+// logic.
+func parseCredsConfigBytes(data []byte) (*resolvedCredsConfig, error) {
 	var raw credsConfigFile
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
 	if err := dec.Decode(&raw); err != nil {
-		return nil, fmt.Errorf("cannot parse --creds-config file %q: %w", path, err)
+		return nil, err
 	}
 
 	resolved := &resolvedCredsConfig{values: make(map[string]string, len(raw.Credentials))}
@@ -74,11 +87,11 @@ func loadCredsConfig(path string) (*resolvedCredsConfig, error) {
 		hasValue := entry.Value != ""
 		switch {
 		case hasFromEnv == hasValue:
-			return nil, fmt.Errorf("--creds-config: credential %q must set exactly one of fromEnv or value", name)
+			return nil, fmt.Errorf("credential %q must set exactly one of fromEnv or value", name)
 		case hasFromEnv:
 			v := os.Getenv(entry.FromEnv)
 			if v == "" {
-				return nil, fmt.Errorf("--creds-config: credential %q references fromEnv %q, but that environment variable is not set (or empty) in this process", name, entry.FromEnv)
+				return nil, fmt.Errorf("credential %q references fromEnv %q, but that environment variable is not set (or empty) in this process", name, entry.FromEnv)
 			}
 			resolved.values[name] = v
 		default:
