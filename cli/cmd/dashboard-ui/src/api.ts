@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import type { RuntimeInfo, SyncStatus, ServiceDir, TopologyGraph, TopologyStatusMap, TopologyNodeDetail, TopologyLogs, StagingClusterInfo, NodeMetric, PodMetric, RolloutRevision, PrometheusStatus, PromQueryResult, CertificateItem, ClusterIssuerItem, AdvisorResponse, SnapshotStatus, TLSStatus, MetricsStackStatus, IngressControllerInfo } from './types';
+import type { RuntimeInfo, SyncStatus, ServiceDir, TopologyGraph, TopologyStatusMap, TopologyNodeDetail, TopologyLogs, StagingClusterInfo, NodeMetric, PodMetric, RolloutRevision, PrometheusStatus, PromQueryResult, CertificateItem, ClusterIssuerItem, AdvisorResponse, SnapshotStatus, TLSStatus, MetricsStackStatus, IngressControllerInfo, WildcardNSCheckResult, WildcardTokenValidationResult, WildcardRecordCheckResult } from './types';
 
 const API_BASE = '';
 
@@ -561,6 +561,57 @@ export function streamTLSInstall(
 ): () => void {
   const controller = new AbortController();
   fetch(`${API_BASE}/api/staging/tls/install`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal: controller.signal,
+  }).then(async (res) => {
+    const reader = res.body?.getReader();
+    if (!reader) return;
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          try { onMessage(JSON.parse(line.slice(6))); } catch { /* skip */ }
+        }
+      }
+    }
+  }).catch(() => { /* aborted */ });
+  return () => controller.abort();
+}
+
+// ── Wildcard DNS-01 TLS wizard (C3) ──────────────────────────────
+
+export async function checkWildcardNameservers(domain: string): Promise<WildcardNSCheckResult> {
+  return apiFetch<WildcardNSCheckResult>(`/api/staging/tls/wildcard/check-ns?domain=${encodeURIComponent(domain)}`);
+}
+
+export async function validateWildcardDNSToken(domain: string, token: string): Promise<WildcardTokenValidationResult> {
+  const res = await fetch(`${API_BASE}/api/staging/tls/wildcard/validate-token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ domain, token }),
+  });
+  return res.json();
+}
+
+export async function checkWildcardRecord(domain: string, expected: string): Promise<WildcardRecordCheckResult> {
+  const params = new URLSearchParams({ domain, expected });
+  return apiFetch<WildcardRecordCheckResult>(`/api/staging/tls/wildcard/check-record?${params}`);
+}
+
+export function streamWildcardTLSInstall(
+  body: { domain: string; email: string; dns_provider: string; dns_api_token: string; use_acme_staging: boolean },
+  onMessage: (msg: { type: string; message: string }) => void,
+): () => void {
+  const controller = new AbortController();
+  fetch(`${API_BASE}/api/staging/tls/wildcard/install`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),

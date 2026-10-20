@@ -127,7 +127,70 @@ challenge succeeds. This can take a few minutes.
 
 The TLS page is available under **Staging → TLS** in the dashboard. It
 provides the same functionality with form inputs for domain, email, and
-ingress selection.
+ingress selection, plus a **Wildcard TLS (shared staging)** button for
+the guided wizard described below.
+
+---
+
+## Wildcard TLS (shared staging clusters)
+
+The setup above issues one certificate per hostname (HTTP-01) — the right
+choice for a single, known staging domain. A **shared** staging cluster,
+where every feature branch gets its own `<branch-slug>.staging.<domain>`
+host, needs a different approach: HTTP-01 cannot validate a wildcard name
+at all. `--wildcard` requests a single DNS-01 certificate covering
+`*.staging.<domain>` instead, so every branch gets HTTPS automatically
+with zero per-branch setup.
+
+Scoped to Cloudflare only today (`cert-manager`'s `cloudflare` DNS-01
+solver).
+
+### CLI
+
+```bash
+kubectl --context do-staging create secret generic cloudflare-api-token \
+  -n cert-manager --from-literal=api-token=<cloudflare-token>
+
+kindling staging tls \
+  --context do-staging \
+  --domain subnode1.xyz \
+  --email team@myapp.com \
+  --wildcard \
+  --dns-provider cloudflare \
+  --dns-token-secret cloudflare-api-token
+```
+
+`--domain` is the bare apex domain (`subnode1.xyz`), not
+`staging.subnode1.xyz` — the command always inserts the `staging.`
+segment itself, so it matches `kindling snapshot --deploy
+--staging-domain`'s branch-derived hosts exactly.
+
+### Dashboard wizard
+
+The same flow, guided, from **Staging → TLS → Wildcard TLS (shared
+staging)**:
+
+1. **Domain & DNS provider check** — enter the apex domain; the wizard
+   looks up its nameservers and confirms they're Cloudflare's before
+   asking for anything else (not all registrars support wildcard
+   records, so this is checked first to avoid wasted setup).
+2. **API token** — paste a Cloudflare token scoped to this zone ("Edit
+   zone DNS" template); validated immediately against Cloudflare's API,
+   so a bad token is caught in seconds, not as a cryptic ACME failure
+   several minutes later.
+3. **Confirm the DNS record** — the wizard shows the exact
+   `*.staging.<domain>` record to add and your ingress controller's
+   current address, with a "Check now" button that does a live DNS
+   lookup once you've added it.
+4. **Issue the certificate** — applies the DNS-01 `ClusterIssuer`,
+   requests the certificate, and sets it as Traefik's cluster-wide
+   default once issued — streamed step by step. DNS-01 validation
+   typically takes several minutes; this is expected.
+
+The wizard never creates the DNS record on your behalf — only confirms it
+ once you've added it yourself. Your Cloudflare token is sent once, used
+ to create a Kubernetes Secret in the `cert-manager` namespace, and never
+ stored, logged, or echoed back by the dashboard.
 
 ---
 

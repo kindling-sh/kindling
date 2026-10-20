@@ -176,6 +176,12 @@ func runDashboard(cmd *cobra.Command, args []string) error {
 	mux.HandleFunc("/api/staging/tls/status", handleStagingTLSStatus)
 	mux.HandleFunc("/api/staging/tls/install", handleStagingTLSInstall)
 
+	// Wildcard DNS-01 TLS wizard (C3)
+	mux.HandleFunc("/api/staging/tls/wildcard/check-ns", handleStagingTLSWildcardCheckNS)
+	mux.HandleFunc("/api/staging/tls/wildcard/validate-token", handleStagingTLSWildcardValidateToken)
+	mux.HandleFunc("/api/staging/tls/wildcard/check-record", handleStagingTLSWildcardCheckRecord)
+	mux.HandleFunc("/api/staging/tls/wildcard/install", handleStagingTLSWildcardInstall)
+
 	// VictoriaMetrics management
 	mux.HandleFunc("/api/staging/metrics/status", handleStagingMetricsStatus)
 	mux.HandleFunc("/api/staging/metrics/install", handleStagingMetricsInstall)

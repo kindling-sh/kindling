@@ -1,6 +1,6 @@
-import { useApi, fetchStagingCertificates, fetchStagingClusterIssuers, fetchTLSStatus, streamTLSInstall, fetchStagingIngressController } from '../api';
+import { useApi, fetchStagingCertificates, fetchStagingClusterIssuers, fetchTLSStatus, streamTLSInstall, fetchStagingIngressController, checkWildcardNameservers, validateWildcardDNSToken, checkWildcardRecord, streamWildcardTLSInstall } from '../api';
 import { useState, useEffect, useRef } from 'react';
-import type { K8sList, K8sIngress, CertificateItem, ClusterIssuerItem, TLSStatus, IngressControllerInfo } from '../types';
+import type { K8sList, K8sIngress, CertificateItem, ClusterIssuerItem, TLSStatus, IngressControllerInfo, WildcardNSCheckResult, WildcardTokenValidationResult, WildcardRecordCheckResult } from '../types';
 import { StatusBadge, EmptyState } from './shared';
 
 export function StagingTLSPage() {
@@ -24,6 +24,23 @@ export function StagingTLSPage() {
   const [ingressName, setIngressName] = useState('');
   const [ingressNs, setIngressNs] = useState('');
   const abortRef = useRef<(() => void) | null>(null);
+
+  // Wildcard DNS-01 wizard (C3)
+  const [showWildcardWizard, setShowWildcardWizard] = useState(false);
+  const [wcStep, setWcStep] = useState<1 | 2 | 3 | 4>(1);
+  const [wcDomain, setWcDomain] = useState('');
+  const [wcEmail, setWcEmail] = useState('');
+  const [wcToken, setWcToken] = useState('');
+  const [wcUseACMEStaging, setWcUseACMEStaging] = useState(false);
+  const [wcNSChecking, setWcNSChecking] = useState(false);
+  const [wcNSResult, setWcNSResult] = useState<WildcardNSCheckResult | null>(null);
+  const [wcTokenValidating, setWcTokenValidating] = useState(false);
+  const [wcTokenResult, setWcTokenResult] = useState<WildcardTokenValidationResult | null>(null);
+  const [wcRecordChecking, setWcRecordChecking] = useState(false);
+  const [wcRecordResult, setWcRecordResult] = useState<WildcardRecordCheckResult | null>(null);
+  const [wcInstalling, setWcInstalling] = useState(false);
+  const [wcLogs, setWcLogs] = useState<{ type: string; message: string }[]>([]);
+  const wcAbortRef = useRef<(() => void) | null>(null);
 
   const ingItems = ingresses?.items || [];
   const untlsIngresses = ingItems.filter(ing => !ing.spec?.tls?.length);
@@ -66,6 +83,70 @@ export function StagingTLSPage() {
     setLogs([]);
   }
 
+  // ── Wildcard DNS-01 wizard (C3) ──────────────────────────────────
+
+  function openWildcardWizard() {
+    setShowWildcardWizard(true);
+    setShowForm(false);
+    setWcStep(1);
+    setWcNSResult(null);
+    setWcTokenResult(null);
+    setWcRecordResult(null);
+    setWcLogs([]);
+  }
+
+  function closeWildcardWizard() {
+    if (wcAbortRef.current) wcAbortRef.current();
+    setShowWildcardWizard(false);
+  }
+
+  function wcCheckNS() {
+    if (!wcDomain) return;
+    setWcNSChecking(true);
+    setWcNSResult(null);
+    checkWildcardNameservers(wcDomain)
+      .then(setWcNSResult)
+      .catch(() => setWcNSResult({ ok: false, error: 'Nameserver lookup failed' }))
+      .finally(() => setWcNSChecking(false));
+  }
+
+  function wcValidateToken() {
+    if (!wcDomain || !wcToken) return;
+    setWcTokenValidating(true);
+    setWcTokenResult(null);
+    validateWildcardDNSToken(wcDomain, wcToken)
+      .then(setWcTokenResult)
+      .catch(() => setWcTokenResult({ ok: false, error: 'Token validation request failed' }))
+      .finally(() => setWcTokenValidating(false));
+  }
+
+  function wcCheckRecord() {
+    if (!wcDomain || !publicAddr) return;
+    setWcRecordChecking(true);
+    setWcRecordResult(null);
+    checkWildcardRecord(wcDomain, publicAddr)
+      .then(setWcRecordResult)
+      .catch(() => setWcRecordResult({ ok: false, error: 'DNS record check failed' }))
+      .finally(() => setWcRecordChecking(false));
+  }
+
+  function wcStartInstall() {
+    if (!wcDomain || !wcEmail || !wcToken) return;
+    setWcInstalling(true);
+    setWcLogs([]);
+    const abort = streamWildcardTLSInstall(
+      { domain: wcDomain, email: wcEmail, dns_provider: 'cloudflare', dns_api_token: wcToken, use_acme_staging: wcUseACMEStaging },
+      (msg) => {
+        setWcLogs(prev => [...prev, msg]);
+        if (msg.type === 'done' || msg.type === 'error') {
+          setWcInstalling(false);
+          refreshAll();
+        }
+      },
+    );
+    wcAbortRef.current = abort;
+  }
+
   const hasCertManager = !!tlsStatus?.cert_manager;
   const publicIP = icInfo?.external_ip || '';
   const publicHostname = icInfo?.hostname || '';
@@ -89,12 +170,196 @@ export function StagingTLSPage() {
           <h1>TLS Certificates</h1>
           <p className="page-subtitle">Manage cert-manager, cluster issuers, and HTTPS certificates <a href="https://kindling.sh/docs/tls" target="_blank" rel="noopener noreferrer" style={{ fontSize: 11, color: 'var(--accent)', textDecoration: 'none' }}>Docs ↗</a></p>
         </div>
-        {!showForm && logs.length === 0 && (
-          <button className="btn btn-primary" style={{ fontSize: 12, padding: '6px 14px' }} onClick={() => setShowForm(true)}>
-            {hasCertManager ? 'Configure TLS' : 'Install cert-manager + TLS'}
-          </button>
+        {!showForm && logs.length === 0 && !showWildcardWizard && (
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="btn btn-secondary" style={{ fontSize: 12, padding: '6px 14px' }} onClick={openWildcardWizard}>
+              Wildcard TLS (shared staging)
+            </button>
+            <button className="btn btn-primary" style={{ fontSize: 12, padding: '6px 14px' }} onClick={() => setShowForm(true)}>
+              {hasCertManager ? 'Configure TLS' : 'Install cert-manager + TLS'}
+            </button>
+          </div>
         )}
       </div>
+
+      {/* ── Wildcard DNS-01 wizard (C3) ──────────────────────────── */}
+      {showWildcardWizard && (
+        <div className="card" style={{ marginBottom: 16 }}>
+          <div className="card-header">
+            <span className="card-icon">◈</span>
+            <h3>Wildcard TLS for shared staging</h3>
+            <span className="text-dim" style={{ marginLeft: 8, fontSize: 11 }}>Step {wcStep} of 4</span>
+            <button className="btn btn-sm btn-ghost" style={{ marginLeft: 'auto' }} onClick={closeWildcardWizard}>✕</button>
+          </div>
+          <div className="card-body">
+            <p className="text-dim" style={{ fontSize: 13, marginBottom: 16 }}>
+              Issues one wildcard certificate covering every branch's <code>&lt;slug&gt;.staging.&lt;domain&gt;</code> host
+              automatically — no per-branch TLS setup, matching <code>kindling staging tls --wildcard</code>. Cloudflare only, today.
+            </p>
+
+            {/* Step 1: Domain & DNS provider check */}
+            {wcStep === 1 && (
+              <>
+                <div className="form-group">
+                  <label className="form-label">Staging Domain *</label>
+                  <input className="form-input" placeholder="subnode1.xyz (bare apex domain, not staging.subnode1.xyz)"
+                    value={wcDomain} onChange={e => { setWcDomain(e.target.value); setWcNSResult(null); }} />
+                  <span className="form-hint">Wildcard cert will cover *.staging.{wcDomain || '<domain>'}</span>
+                </div>
+                <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                  <button className="btn btn-secondary" disabled={!wcDomain || wcNSChecking} onClick={wcCheckNS}>
+                    {wcNSChecking ? 'Checking…' : 'Check nameservers'}
+                  </button>
+                </div>
+                {wcNSResult && (
+                  <div style={{ marginTop: 12, padding: '10px 14px', borderRadius: 8, fontSize: 13, background: wcNSResult.ok && wcNSResult.cloudflare ? 'var(--success-bg, rgba(34,197,94,0.1))' : 'var(--warning-bg, rgba(245,158,11,0.1))' }}>
+                    {wcNSResult.ok ? (
+                      wcNSResult.cloudflare ? (
+                        <span>✓ Your domain's DNS is managed by Cloudflare — wildcard records are supported.</span>
+                      ) : (
+                        <>
+                          <div>✗ This domain's nameservers don't look like Cloudflare's:</div>
+                          <div className="mono" style={{ marginTop: 4 }}>{(wcNSResult.nameservers || []).join(', ') || '(none found)'}</div>
+                          <div style={{ marginTop: 6 }}>Migrate this domain's nameservers to Cloudflare first — this is the one step this wizard can't do for you.</div>
+                        </>
+                      )
+                    ) : (
+                      <span>✗ {wcNSResult.error}</span>
+                    )}
+                  </div>
+                )}
+                <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
+                  <button className="btn btn-primary" disabled={!wcNSResult?.ok || !wcNSResult?.cloudflare} onClick={() => setWcStep(2)}>
+                    Next: API token
+                  </button>
+                </div>
+              </>
+            )}
+
+            {/* Step 2: API token */}
+            {wcStep === 2 && (
+              <>
+                <div className="form-group">
+                  <label className="form-label">Cloudflare API Token *</label>
+                  <input className="form-input" type="password" placeholder="Edit zone DNS token, scoped to this zone"
+                    value={wcToken} onChange={e => { setWcToken(e.target.value); setWcTokenResult(null); }} />
+                  <span className="form-hint">
+                    Create one at Cloudflare → My Profile → API Tokens, using the "Edit zone DNS" template scoped to{' '}
+                    <span className="mono">{wcDomain}</span> — never "All zones".
+                  </span>
+                </div>
+                <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                  <button className="btn btn-secondary" disabled={!wcToken || wcTokenValidating} onClick={wcValidateToken}>
+                    {wcTokenValidating ? 'Validating…' : 'Validate token'}
+                  </button>
+                </div>
+                {wcTokenResult && (
+                  <div style={{ marginTop: 12, padding: '10px 14px', borderRadius: 8, fontSize: 13, background: wcTokenResult.ok ? 'var(--success-bg, rgba(34,197,94,0.1))' : 'var(--warning-bg, rgba(245,158,11,0.1))' }}>
+                    {wcTokenResult.ok ? (
+                      <span>✓ Token is valid and has access to zone <span className="mono">{wcTokenResult.zone_name}</span>.</span>
+                    ) : (
+                      <span>✗ {wcTokenResult.error}</span>
+                    )}
+                  </div>
+                )}
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 16 }}>
+                  <button className="btn btn-secondary" onClick={() => setWcStep(1)}>Back</button>
+                  <button className="btn btn-primary" disabled={!wcTokenResult?.ok} onClick={() => setWcStep(3)}>
+                    Next: Confirm DNS record
+                  </button>
+                </div>
+              </>
+            )}
+
+            {/* Step 3: Confirm the wildcard record */}
+            {wcStep === 3 && (
+              <>
+                <div style={{ marginBottom: 12, fontSize: 13 }}>
+                  Add this record at Cloudflare, then confirm it's propagated:
+                </div>
+                <div style={{ border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden', marginBottom: 12 }}>
+                  <table className="data-table" style={{ margin: 0 }}>
+                    <thead><tr><th style={{ width: 60 }}>Type</th><th>Name</th><th>Points to</th></tr></thead>
+                    <tbody>
+                      <tr>
+                        <td><span className="tag" style={{ fontWeight: 600 }}>{publicIP ? 'A' : 'CNAME'}</span></td>
+                        <td className="mono">*.staging.{wcDomain}</td>
+                        <td className="mono" style={{ color: 'var(--accent, #60a5fa)' }}>{publicAddr || '(no ingress controller detected yet)'}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+                <button className="btn btn-secondary" disabled={!publicAddr || wcRecordChecking} onClick={wcCheckRecord}>
+                  {wcRecordChecking ? 'Checking…' : 'Check now'}
+                </button>
+                {wcRecordResult && (
+                  <div style={{ marginTop: 12, padding: '10px 14px', borderRadius: 8, fontSize: 13, background: wcRecordResult.ok ? 'var(--success-bg, rgba(34,197,94,0.1))' : 'var(--warning-bg, rgba(245,158,11,0.1))' }}>
+                    {wcRecordResult.ok ? (
+                      <span>✓ <span className="mono">{wcRecordResult.probe}</span> resolves correctly — the wildcard record is live.</span>
+                    ) : (
+                      <span>✗ {wcRecordResult.error || 'Record does not resolve to the expected address yet.'}</span>
+                    )}
+                  </div>
+                )}
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 16 }}>
+                  <button className="btn btn-secondary" onClick={() => setWcStep(2)}>Back</button>
+                  <button className="btn btn-primary" disabled={!wcRecordResult?.ok} onClick={() => setWcStep(4)}>
+                    Next: Issue certificate
+                  </button>
+                </div>
+              </>
+            )}
+
+            {/* Step 4: Issue the certificate */}
+            {wcStep === 4 && (
+              <>
+                {wcLogs.length === 0 && (
+                  <>
+                    <div className="form-group">
+                      <label className="form-label">Email *</label>
+                      <input className="form-input" placeholder="admin@example.com" value={wcEmail} onChange={e => setWcEmail(e.target.value)} />
+                    </div>
+                    <label className="deploy-ingress-toggle" style={{ marginTop: 8 }}>
+                      <input type="checkbox" checked={wcUseACMEStaging} onChange={e => setWcUseACMEStaging(e.target.checked)} />
+                      <span className="toggle-track" />
+                      <span style={{ fontSize: 13 }}>Use Let's Encrypt staging server (for testing)</span>
+                    </label>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 16 }}>
+                      <button className="btn btn-secondary" onClick={() => setWcStep(3)}>Back</button>
+                      <button className="btn btn-primary" disabled={!wcEmail || wcInstalling} onClick={wcStartInstall}>
+                        {wcInstalling ? 'Issuing…' : 'Issue certificate'}
+                      </button>
+                    </div>
+                  </>
+                )}
+                {wcLogs.length > 0 && (
+                  <>
+                    <div className="deploy-log" style={{ maxHeight: 240 }}>
+                      {wcLogs.map((log, i) => (
+                        <div key={i} className={`deploy-log-line deploy-log-${log.type}`}>
+                          <span className="deploy-log-icon">{log.type === 'step' ? '→' : log.type === 'error' ? '✗' : '✓'}</span>
+                          <span>{log.message}</span>
+                        </div>
+                      ))}
+                      {wcInstalling && (
+                        <div className="deploy-log-line deploy-log-step">
+                          <span className="deploy-log-icon deploy-log-spinner">◌</span>
+                          <span className="text-dim">Waiting for DNS-01 validation (can take several minutes)…</span>
+                        </div>
+                      )}
+                    </div>
+                    {!wcInstalling && (
+                      <div style={{ marginTop: 8, display: 'flex', gap: 8 }}>
+                        <button className="btn btn-secondary" style={{ fontSize: 12, padding: '4px 10px' }} onClick={closeWildcardWizard}>Close</button>
+                      </div>
+                    )}
+                  </>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* cert-manager status bar */}
       <div className="card" style={{ marginBottom: 16 }}>
