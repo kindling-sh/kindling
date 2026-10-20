@@ -1,4 +1,4 @@
-import { useApi, fetchStagingCertificates, fetchStagingClusterIssuers, fetchTLSStatus, streamTLSInstall, fetchStagingIngressController, checkWildcardNameservers, validateWildcardDNSToken, checkWildcardRecord, streamWildcardTLSInstall } from '../api';
+import { useApi, fetchStagingCertificates, fetchStagingClusterIssuers, fetchTLSStatus, streamTLSInstall, fetchStagingIngressController, checkWildcardNameservers, validateWildcardDNSToken, checkWildcardRecord, streamWildcardTLSInstall, streamEnsureIngressController } from '../api';
 import { useState, useEffect, useRef } from 'react';
 import type { K8sList, K8sIngress, CertificateItem, ClusterIssuerItem, TLSStatus, IngressControllerInfo, WildcardNSCheckResult, WildcardTokenValidationResult, WildcardRecordCheckResult } from '../types';
 import { StatusBadge, EmptyState } from './shared';
@@ -38,9 +38,15 @@ export function StagingTLSPage() {
   const [wcTokenResult, setWcTokenResult] = useState<WildcardTokenValidationResult | null>(null);
   const [wcRecordChecking, setWcRecordChecking] = useState(false);
   const [wcRecordResult, setWcRecordResult] = useState<WildcardRecordCheckResult | null>(null);
+  const [wcExpectedAddr, setWcExpectedAddr] = useState('');
+  const [wcExpectedAddrTouched, setWcExpectedAddrTouched] = useState(false);
   const [wcInstalling, setWcInstalling] = useState(false);
   const [wcLogs, setWcLogs] = useState<{ type: string; message: string }[]>([]);
   const wcAbortRef = useRef<(() => void) | null>(null);
+  const [wcEnsuringIngress, setWcEnsuringIngress] = useState(false);
+  const [wcEnsureIngressLogs, setWcEnsureIngressLogs] = useState<{ type: string; message: string }[]>([]);
+  const [wcIngressPolling, setWcIngressPolling] = useState(false);
+  const wcPollCancelledRef = useRef(false);
 
   const ingItems = ingresses?.items || [];
   const untlsIngresses = ingItems.filter(ing => !ing.spec?.tls?.length);
@@ -52,6 +58,16 @@ export function StagingTLSPage() {
     fetchStagingIngressController().then(ic => setIcInfo(ic)).catch(() => {});
     return () => { abortRef.current?.(); };
   }, []);
+
+  // Pre-fill the wildcard wizard's "expected address" from auto-detection
+  // once it resolves, but only until the user actually edits the field --
+  // auto-detection failing (a common case: this feature's own ingress
+  // controller search only checks a handful of hardcoded namespace/label
+  // combinations) must never permanently block entering one by hand.
+  useEffect(() => {
+    const ic = icInfo?.external_ip || icInfo?.hostname || '';
+    if (ic && !wcExpectedAddrTouched) setWcExpectedAddr(ic);
+  }, [icInfo, wcExpectedAddrTouched]);
 
   function refreshAll() {
     fetchTLSStatus().then(s => setTlsStatus(s)).catch(() => {});
@@ -93,10 +109,12 @@ export function StagingTLSPage() {
     setWcTokenResult(null);
     setWcRecordResult(null);
     setWcLogs([]);
+    wcPollCancelledRef.current = false;
   }
 
   function closeWildcardWizard() {
     if (wcAbortRef.current) wcAbortRef.current();
+    wcPollCancelledRef.current = true;
     setShowWildcardWizard(false);
   }
 
@@ -121,13 +139,55 @@ export function StagingTLSPage() {
   }
 
   function wcCheckRecord() {
-    if (!wcDomain || !publicAddr) return;
+    if (!wcDomain || !wcExpectedAddr) return;
     setWcRecordChecking(true);
     setWcRecordResult(null);
-    checkWildcardRecord(wcDomain, publicAddr)
+    checkWildcardRecord(wcDomain, wcExpectedAddr)
       .then(setWcRecordResult)
       .catch(() => setWcRecordResult({ ok: false, error: 'DNS record check failed' }))
       .finally(() => setWcRecordChecking(false));
+  }
+
+  // No ingress controller has ever been installed on this staging
+  // cluster yet (e.g. TLS is being configured before any deploy has
+  // run there) -- step 3 has nothing to confirm a DNS record against
+  // until one exists. Installs it on demand, then polls for its
+  // external address so wcExpectedAddr gets auto-filled the normal way
+  // -- a single fetch right after install isn't enough, since a cloud
+  // load balancer can take a minute or two to get an external IP after
+  // the Service itself is created.
+  function wcEnsureIngress() {
+    setWcEnsuringIngress(true);
+    setWcEnsureIngressLogs([]);
+    wcPollCancelledRef.current = false;
+    streamEnsureIngressController((msg) => {
+      setWcEnsureIngressLogs(prev => [...prev, msg]);
+      if (msg.type === 'done' || msg.type === 'error') {
+        setWcEnsuringIngress(false);
+        if (msg.type === 'done') pollForIngressAddress();
+      }
+    });
+  }
+
+  function pollForIngressAddress(attempt = 0) {
+    setWcIngressPolling(true);
+    fetchStagingIngressController().then(ic => {
+      if (wcPollCancelledRef.current) return;
+      setIcInfo(ic);
+      const addr = ic.external_ip || ic.hostname;
+      if (addr || attempt >= 24) {
+        setWcIngressPolling(false);
+        return;
+      }
+      setTimeout(() => pollForIngressAddress(attempt + 1), 5000);
+    }).catch(() => {
+      if (wcPollCancelledRef.current) return;
+      if (attempt >= 24) {
+        setWcIngressPolling(false);
+        return;
+      }
+      setTimeout(() => pollForIngressAddress(attempt + 1), 5000);
+    });
   }
 
   function wcStartInstall() {
@@ -277,19 +337,64 @@ export function StagingTLSPage() {
                 <div style={{ marginBottom: 12, fontSize: 13 }}>
                   Add this record at Cloudflare, then confirm it's propagated:
                 </div>
+                <div style={{ marginBottom: 12, padding: '10px 14px', borderRadius: 8, fontSize: 13, background: 'var(--info-bg, rgba(59,130,246,0.08))' }}>
+                  ⏳ DNS propagation isn't instant — it usually takes a few minutes after you add the record,
+                  but can occasionally run longer depending on your registrar/resolver. If "Check now" doesn't
+                  find it right away, that's expected — wait a minute and try again rather than assuming
+                  something's wrong. (Certificate issuance in the next step has its own, separate wait on top of
+                  this — typically 6–8 minutes end to end — so there's no need to rush this check.)
+                </div>
                 <div style={{ border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden', marginBottom: 12 }}>
                   <table className="data-table" style={{ margin: 0 }}>
                     <thead><tr><th style={{ width: 60 }}>Type</th><th>Name</th><th>Points to</th></tr></thead>
                     <tbody>
                       <tr>
-                        <td><span className="tag" style={{ fontWeight: 600 }}>{publicIP ? 'A' : 'CNAME'}</span></td>
+                        <td><span className="tag" style={{ fontWeight: 600 }}>{/^\d{1,3}(\.\d{1,3}){3}$/.test(wcExpectedAddr) ? 'A' : 'CNAME'}</span></td>
                         <td className="mono">*.staging.{wcDomain}</td>
-                        <td className="mono" style={{ color: 'var(--accent, #60a5fa)' }}>{publicAddr || '(no ingress controller detected yet)'}</td>
+                        <td>
+                          <input
+                            className="form-input mono"
+                            style={{ padding: '4px 8px', fontSize: 13 }}
+                            placeholder={wcIngressPolling ? 'waiting for external IP…' : 'ingress controller IP or hostname'}
+                            value={wcExpectedAddr}
+                            onChange={e => { setWcExpectedAddr(e.target.value); setWcExpectedAddrTouched(true); }}
+                          />
+                        </td>
                       </tr>
                     </tbody>
                   </table>
                 </div>
-                <button className="btn btn-secondary" disabled={!publicAddr || wcRecordChecking} onClick={wcCheckRecord}>
+                {!publicAddr && (
+                  <div style={{ marginBottom: 12, padding: '10px 14px', borderRadius: 8, fontSize: 13, background: 'var(--warning-bg, rgba(245,158,11,0.1))' }}>
+                    <div>
+                      No ingress controller was detected on this cluster at all — if TLS is being configured
+                      before any staging deploy has run here, that's expected: nothing has installed one yet.
+                    </div>
+                    <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <button className="btn btn-secondary" style={{ fontSize: 12, padding: '4px 10px' }} disabled={wcEnsuringIngress} onClick={wcEnsureIngress}>
+                        {wcEnsuringIngress ? 'Installing…' : 'Install ingress controller now'}
+                      </button>
+                      <span className="text-dim" style={{ fontSize: 12 }}>or enter the address below by hand once you know it</span>
+                    </div>
+                    {wcEnsureIngressLogs.length > 0 && (
+                      <div className="deploy-log" style={{ maxHeight: 140, marginTop: 8 }}>
+                        {wcEnsureIngressLogs.map((log, i) => (
+                          <div key={i} className={`deploy-log-line deploy-log-${log.type}`}>
+                            <span className="deploy-log-icon">{log.type === 'step' ? '→' : log.type === 'error' ? '✗' : '✓'}</span>
+                            <span>{log.message}</span>
+                          </div>
+                        ))}
+                        {wcIngressPolling && (
+                          <div className="deploy-log-line deploy-log-step">
+                            <span className="deploy-log-icon deploy-log-spinner">◌</span>
+                            <span className="text-dim">Waiting for an external IP/hostname to be assigned (cloud load balancers can take a minute or two)…</span>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+                <button className="btn btn-secondary" disabled={!wcExpectedAddr || wcRecordChecking} onClick={wcCheckRecord}>
                   {wcRecordChecking ? 'Checking…' : 'Check now'}
                 </button>
                 {wcRecordResult && (

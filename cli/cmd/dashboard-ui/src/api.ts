@@ -637,6 +637,36 @@ export function streamWildcardTLSInstall(
   return () => controller.abort();
 }
 
+export function streamEnsureIngressController(
+  onMessage: (msg: { type: string; message: string }) => void,
+): () => void {
+  const controller = new AbortController();
+  fetch(`${API_BASE}/api/staging/tls/wildcard/ensure-ingress`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}',
+    signal: controller.signal,
+  }).then(async (res) => {
+    const reader = res.body?.getReader();
+    if (!reader) return;
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          try { onMessage(JSON.parse(line.slice(6))); } catch { /* skip */ }
+        }
+      }
+    }
+  }).catch(() => { /* aborted */ });
+  return () => controller.abort();
+}
+
 // ── Metrics Stack Management ────────────────────────────────────
 
 export async function fetchMetricsStatus(): Promise<MetricsStackStatus> {

@@ -315,6 +315,19 @@ func handleStagingTLSWildcardInstall(w http.ResponseWriter, r *http.Request) {
 		send("step", "cert-manager already installed")
 	}
 
+	// ── Ingress controller (Traefik) ──────────────────────────────────
+	// The TLSStore applied at the end of this flow must land in the
+	// "traefik" namespace -- which doesn't exist at all if TLS is being
+	// configured before any staging deploy has ever run (the only other
+	// place that currently calls ensureIngressController). Without this,
+	// step 3's "no ingress controller detected" dead-ends into step 4
+	// silently failing to apply the TLSStore against a namespace that was
+	// never created.
+	if err := ensureIngressController(ctx, func(msg string) { send("step", msg) }); err != nil {
+		send("error", "ingress controller setup failed: "+err.Error())
+		return
+	}
+
 	// ── DNS provider token Secret (cert-manager namespace -- see ──────
 	// staging_wildcard.go's own comment on stagingTLSCertManagerNamespace
 	// for why it can't live anywhere else: a ClusterIssuer's
@@ -374,6 +387,47 @@ stringData:
 	}
 
 	send("done", fmt.Sprintf("Wildcard TLS configured — every branch under %s now gets HTTPS automatically, no per-branch setup needed", wildcard))
+}
+
+// ── POST /api/staging/tls/wildcard/ensure-ingress — install Traefik now ─
+//
+// Lets the wizard's step 3 (confirm the DNS record) recover from exactly
+// the dead end above without the user having to wait until step 4 or
+// drop to kubectl: if no ingress controller has ever been installed on
+// this staging cluster (e.g. TLS is being configured before any
+// `snapshot --deploy` has ever run there), there's no address yet for
+// step 3 to confirm a DNS record against at all. This runs the same
+// ensureIngressController install path, streamed, so the frontend can
+// then re-poll /api/staging/ingress-controller and get a real address.
+func handleStagingTLSWildcardEnsureIngress(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, "method not allowed", 405)
+		return
+	}
+	ctx := getStagingContext()
+	if ctx == "" {
+		jsonError(w, "no staging context configured", 400)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		jsonError(w, "streaming not supported", 500)
+		return
+	}
+	send := func(msgType, msg string) {
+		fmt.Fprintf(w, "data: %s\n\n", mustJSON(map[string]string{"type": msgType, "message": msg}))
+		flusher.Flush()
+	}
+
+	if err := ensureIngressController(ctx, func(msg string) { send("step", msg) }); err != nil {
+		send("error", "ingress controller setup failed: "+err.Error())
+		return
+	}
+	send("done", "Ingress controller ready")
 }
 
 // applyYAMLToContext runs `kubectl --context <ctx> apply -f -` with yaml
