@@ -83,3 +83,55 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  # ── Build & push build-agent sidecar image ───────────────────────────────
+  # The snapshot-deploy-capable CIRunnerPool sidecar (spec.enableSnapshotDeploy:
+  # true -- kubectl + helm + crane + kindling CLI, see
+  # snapshot-deploy-runner-sidecar.md). Mirrors the operator image job above
+  # exactly (same tagging scheme, same triggers) -- this is what's actually
+  # supposed to keep ghcr.io/kindling-sh/build-agent:latest real and current;
+  # publish-build-agent.yml is a manual-dispatch-only convenience for ad-hoc
+  # testing builds, not a substitute for this, and defaults to tag "edge" --
+  # not "latest" -- specifically so it can never be mistaken for one.
+  build-agent:
+    name: Push Build-Agent Image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/kindling-sh/build-agent
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
+            type=sha
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: hack/build-agent/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
