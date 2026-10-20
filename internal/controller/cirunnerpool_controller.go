@@ -675,10 +675,25 @@ done
 	buildAgentEnv = append(buildAgentEnv, spec.BuildAgentEnv...)
 
 	buildAgent := corev1.Container{
-		Name:    "build-agent",
-		Image:   buildAgentImage,
-		Command: []string{"/bin/bash", "-c", buildAgentScript},
-		Env:     buildAgentEnv,
+		Name:  "build-agent",
+		Image: buildAgentImage,
+		// IfNotPresent, not the Kubernetes default for a ":latest" tag
+		// (Always): spec.BuildAgentImage/--build-agent-image is
+		// explicitly documented as supporting "a locally built and
+		// kind-loaded tag, for testing hack/build-agent/Dockerfile
+		// changes before it's published" -- with the default Always
+		// policy, kubelet re-attempts a registry pull on every container
+		// start regardless of whatever image was already kind-loaded
+		// under that exact tag, so that documented local-testing path
+		// (and any other locally-loaded override) never actually worked.
+		// Confirmed via a real ImagePullBackOff: ghcr.io/kindling-sh/
+		// build-agent:latest isn't a public image (publish-build-agent.yml
+		// is a manual-dispatch-only workflow, default tag "edge", not
+		// "latest") -- kind-loading a local build is the correct
+		// workaround, and requires this fix to actually take effect.
+		ImagePullPolicy: corev1.PullIfNotPresent,
+		Command:         []string{"/bin/bash", "-c", buildAgentScript},
+		Env:             buildAgentEnv,
 		VolumeMounts: []corev1.VolumeMount{
 			{
 				Name:      "builds",
