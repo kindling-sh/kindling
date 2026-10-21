@@ -67,10 +67,10 @@ export function StagingDeployPage() {
   const [ingressInfo, setIngressInfo] = useState<IngressControllerInfo | null>(null);
   const [ingressLookupFailed, setIngressLookupFailed] = useState(false);
 
-  function loadStatus() {
+  function loadStatus(branchForCreds?: string) {
     return Promise.all([
       fetchSnapshotStatus(),
-      fetchSnapshotCredentials().catch(() => ({ credentials: [], cached_at: '' })),
+      fetchSnapshotCredentials(branchForCreds).catch(() => ({ credentials: [], cached_at: '' })),
     ]).then(([s, creds]) => {
       setStatus(s);
       // Pre-select all services with ingress enabled
@@ -85,10 +85,20 @@ export function StagingDeployPage() {
         setDevCreds(creds.credentials);
         setCachedAt(creds.cached_at || '');
         setShowCredentials(true);
-        // Pre-fill from cache, falling back to dev values
+        // Pre-fill *only* from a legitimately cached (chart-scoped) staging
+        // value -- never from dev_value. dev_value is just an illustrative
+        // hint (shown as the input's placeholder) of what the *dev*
+        // cluster's value looks like; it is never a real staging
+        // credential, and pre-filling the actual submitted value with it
+        // meant every first deploy of a new branch silently submitted that
+        // guess as if the user had typed it -- bypassing this deploy's own
+        // correctly chart-scoped dev-default fallback entirely. Leaving it
+        // blank here lets a field the user never touches fall through to
+        // that fallback instead, exactly like the CLI's own "leave blank to
+        // use dev default" behavior.
         const initial: Record<string, string> = {};
         for (const c of creds.credentials) {
-          initial[c.env_var] = c.cached || c.dev_value || '';
+          if (c.cached) initial[c.env_var] = c.cached;
         }
         setCredValues(initial);
       }
@@ -99,6 +109,16 @@ export function StagingDeployPage() {
     loadStatus().finally(() => setLoading(false));
     fetchStagingContexts().then(setAvailableContexts).catch(() => {});
   }, []);
+
+  // Re-fetch credential hints (dev_value is chart-scoped) whenever the
+  // branch field settles on a new value, so the placeholder text shown
+  // for each credential reflects *this* branch's actual dependency
+  // hostnames instead of the pre-branch-resolution default. Harmless no-op
+  // for the already-submitted credValues themselves (those only ever come
+  // from cache/user input now, never dev_value).
+  function handleBranchBlur() {
+    loadStatus(branch.trim() || undefined);
+  }
 
   async function handleConnect() {
     if (!contextInput) return;
@@ -434,6 +454,7 @@ export function StagingDeployPage() {
                         placeholder="current branch, if unset"
                         value={branch}
                         onChange={e => setBranch(e.target.value)}
+                        onBlur={handleBranchBlur}
                       />
                       <span className="form-hint">Derives the chart name/namespace, same as `kindling snapshot --deploy --branch`</span>
                     </div>

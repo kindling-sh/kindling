@@ -74,15 +74,20 @@ func handleStagingSnapshotCredentials(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// This preview runs before the deploy form necessarily has a branch
-	// typed in yet, so there's no real chart name to key the cache
-	// lookup by -- "kindling-snapshot" (today's pre-branch-derived-naming
-	// default) is the best available guess and is read-only here (this
-	// handler never writes to the cache), so getting it wrong only means
-	// this preview under-reports an already-cached value, never applies
-	// a wrong one to an actual deploy (see handleStagingSnapshotDeploy,
-	// which always uses the real resolved chart name).
-	chartName := "kindling-snapshot"
+	// Derive the chart name exactly like handleStagingSnapshotDeploy does,
+	// from an optional ?branch= query param -- the frontend passes
+	// whatever is currently in the deploy form's Branch field (refetching
+	// as it changes), so the dev-value hints shown here actually match
+	// what a deploy would use. A blank/unresolvable branch falls back to
+	// the same "kindling-snapshot" literal the deploy handler itself
+	// falls back to, so an old caller that never passes ?branch= (or a
+	// fresh page load before the user has typed a branch yet) sees
+	// identical behavior to before this param existed.
+	var slug string
+	if _, s, err := resolveBranchSlug(r.URL.Query().Get("branch")); err == nil {
+		slug = s
+	}
+	chartName, _ := stagingDeployNameDefaults(slug, "")
 	// Strip user prefix to match what the chart will use
 	stripDSEPrefix(dses)
 

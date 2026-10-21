@@ -486,8 +486,9 @@ export interface SnapshotCredentialsResponse {
   cached_at: string;
 }
 
-export async function fetchSnapshotCredentials(): Promise<SnapshotCredentialsResponse> {
-  return apiFetch<SnapshotCredentialsResponse>('/api/staging/snapshot/credentials');
+export async function fetchSnapshotCredentials(branch?: string): Promise<SnapshotCredentialsResponse> {
+  const qs = branch ? `?branch=${encodeURIComponent(branch)}` : '';
+  return apiFetch<SnapshotCredentialsResponse>(`/api/staging/snapshot/credentials${qs}`);
 }
 
 export async function fetchSnapshotStatus(): Promise<SnapshotStatus> {
