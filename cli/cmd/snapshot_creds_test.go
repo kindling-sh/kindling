@@ -242,7 +242,7 @@ func TestCredCacheRoundTrip(t *testing.T) {
 	}
 
 	// Verify file exists with correct permissions
-	cacheFile := credsCacheFile(ctx)
+	cacheFile := credsCacheFile(ctx, chart)
 	info, err := os.Stat(cacheFile)
 	if err != nil {
 		t.Fatalf("cache file not found: %v", err)
@@ -258,7 +258,7 @@ func TestCredCacheRoundTrip(t *testing.T) {
 	}
 
 	// Load
-	loaded := loadCredCache(ctx)
+	loaded := loadCredCache(ctx, chart)
 	if loaded == nil {
 		t.Fatal("loadCredCache returned nil")
 	}
@@ -284,7 +284,7 @@ func TestLoadCredCache_Missing(t *testing.T) {
 	os.Setenv("HOME", t.TempDir())
 	defer os.Setenv("HOME", origHome)
 
-	result := loadCredCache("nonexistent-context")
+	result := loadCredCache("nonexistent-context", "some-chart")
 	if result != nil {
 		t.Error("expected nil for missing cache, got non-nil")
 	}
@@ -297,11 +297,11 @@ func TestLoadCredCache_CorruptedFile(t *testing.T) {
 	defer os.Setenv("HOME", origHome)
 
 	ctx := "corrupt-test"
-	cacheFile := credsCacheFile(ctx)
+	cacheFile := credsCacheFile(ctx, "some-chart")
 	os.MkdirAll(filepath.Dir(cacheFile), 0700)
 	os.WriteFile(cacheFile, []byte("not-valid-encrypted-data-at-all"), 0600)
 
-	result := loadCredCache(ctx)
+	result := loadCredCache(ctx, "some-chart")
 	if result != nil {
 		t.Error("expected nil for corrupted cache file, got non-nil")
 	}
@@ -317,14 +317,48 @@ func TestClearCredCache(t *testing.T) {
 	saveCredCache(ctx, "chart", map[string]string{"KEY": "val"})
 
 	// Verify it exists
-	if loadCredCache(ctx) == nil {
+	if loadCredCache(ctx, "chart") == nil {
 		t.Fatal("cache should exist before clearing")
 	}
 
-	clearCredCache(ctx)
+	clearCredCache(ctx, "chart")
 
-	if loadCredCache(ctx) != nil {
+	if loadCredCache(ctx, "chart") != nil {
 		t.Error("cache should be nil after clearing")
+	}
+}
+
+func TestLoadCredCache_NoCrossChartLeak(t *testing.T) {
+	// Regression test for C4: a cached credential set saved for one
+	// chart/branch must never be returned for a different chart/branch
+	// deployed to the same kube context -- dependency connection strings
+	// are release-scoped (e.g. "<release>-postgres"), so a cross-chart
+	// cache hit is always wrong, not just stale.
+	origHome := os.Getenv("HOME")
+	tmpDir := t.TempDir()
+	os.Setenv("HOME", tmpDir)
+	defer os.Setenv("HOME", origHome)
+
+	ctx := "shared-staging-context"
+	credsA := map[string]string{"DATABASE_URL": "postgres://devuser:devpass@chart-a-postgres:5432/devdb"}
+	if err := saveCredCache(ctx, "chart-a", credsA); err != nil {
+		t.Fatalf("saveCredCache(chart-a) failed: %v", err)
+	}
+
+	// A different chart on the same context must see no cache at all --
+	// not chart-a's (wrong) values.
+	if got := loadCredCache(ctx, "chart-b"); got != nil {
+		t.Errorf("loadCredCache(ctx, %q) = %+v, want nil (must not inherit chart-a's cache)", "chart-b", got)
+	}
+
+	// chart-a itself must still get its own cache back -- same-chart
+	// reuse (e.g. redeploying the same branch) must be unaffected.
+	got := loadCredCache(ctx, "chart-a")
+	if got == nil {
+		t.Fatal("loadCredCache(ctx, \"chart-a\") = nil, want chart-a's own cached creds")
+	}
+	if got.Creds["DATABASE_URL"] != credsA["DATABASE_URL"] {
+		t.Errorf("DATABASE_URL = %q, want %q", got.Creds["DATABASE_URL"], credsA["DATABASE_URL"])
 	}
 }
 
@@ -661,17 +695,35 @@ func TestPluralize(t *testing.T) {
 }
 
 func TestCredsCacheFile_DifferentContexts(t *testing.T) {
-	file1 := credsCacheFile("context-a")
-	file2 := credsCacheFile("context-b")
+	file1 := credsCacheFile("context-a", "chart")
+	file2 := credsCacheFile("context-b", "chart")
 
 	if file1 == file2 {
 		t.Error("different contexts should produce different cache file paths")
 	}
 
 	// Same context should produce same path
-	file1a := credsCacheFile("context-a")
+	file1a := credsCacheFile("context-a", "chart")
 	if file1 != file1a {
 		t.Error("same context should produce same cache file path")
+	}
+}
+
+func TestCredsCacheFile_DifferentChartsSameContext(t *testing.T) {
+	// Regression test for C4: two different charts/branches deployed to
+	// the same shared staging context must never resolve to the same
+	// cache file.
+	file1 := credsCacheFile("shared-context", "chart-a")
+	file2 := credsCacheFile("shared-context", "chart-b")
+
+	if file1 == file2 {
+		t.Error("different charts on the same context should produce different cache file paths")
+	}
+
+	// Same (context, chart) pair should be stable/deterministic.
+	file1a := credsCacheFile("shared-context", "chart-a")
+	if file1 != file1a {
+		t.Error("same (context, chart) should produce the same cache file path across calls")
 	}
 }
 

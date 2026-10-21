@@ -137,8 +137,14 @@ func credsCacheDir() string {
 	return filepath.Join(home, ".kindling", "staging-credentials")
 }
 
-func credsCacheFile(context string) string {
-	h := sha256.Sum256([]byte(context))
+// credsCacheFile derives the cache file path from both the kube context
+// and the chart name. Keying on context alone would let a second
+// chart/branch deployed to the same shared staging cluster silently
+// inherit the first one's cached credentials -- those values are
+// release-scoped (e.g. "<release>-postgres"), so a cache hit from a
+// different chart is never merely stale, it's actively wrong.
+func credsCacheFile(context, chartName string) string {
+	h := sha256.Sum256([]byte(context + "|" + chartName))
 	return filepath.Join(credsCacheDir(), fmt.Sprintf("%x.enc", h[:8]))
 }
 
@@ -187,8 +193,14 @@ func decryptBytes(ciphertext []byte) ([]byte, error) {
 	return gcm.Open(nil, ciphertext[:gcm.NonceSize()], ciphertext[gcm.NonceSize():], nil)
 }
 
-func loadCredCache(context string) *stagingCredCache {
-	data, err := os.ReadFile(credsCacheFile(context))
+// loadCredCache returns the cached credentials for (context, chartName),
+// or nil on any miss -- including a cache file that exists but belongs
+// to a different chart. That last case should already be structurally
+// impossible given credsCacheFile's per-chart keying, but is checked
+// explicitly anyway as a cheap guard against any future caller that
+// computes the cache file path a different way.
+func loadCredCache(context, chartName string) *stagingCredCache {
+	data, err := os.ReadFile(credsCacheFile(context, chartName))
 	if err != nil {
 		return nil
 	}
@@ -198,6 +210,9 @@ func loadCredCache(context string) *stagingCredCache {
 	}
 	var cache stagingCredCache
 	if err := json.Unmarshal(plain, &cache); err != nil {
+		return nil
+	}
+	if cache.Chart != chartName {
 		return nil
 	}
 	return &cache
@@ -222,11 +237,11 @@ func saveCredCache(context, chart string, creds map[string]string) error {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return err
 	}
-	return os.WriteFile(credsCacheFile(context), enc, 0600)
+	return os.WriteFile(credsCacheFile(context, chart), enc, 0600)
 }
 
-func clearCredCache(context string) {
-	os.Remove(credsCacheFile(context))
+func clearCredCache(context, chartName string) {
+	os.Remove(credsCacheFile(context, chartName))
 }
 
 // ── Unified credential resolution ────────────────────────────────
@@ -313,7 +328,7 @@ func resolveDeployCredentials(chartName, context string, dses []snapshotDSE, cre
 			step("🤖", "Non-interactive -- using dev-cluster defaults for anything not in --creds-config")
 		} else {
 			// Check cache
-			cached := loadCredCache(context)
+			cached := loadCredCache(context, chartName)
 
 			var choice string
 			var options []huh.Option[string]
@@ -357,7 +372,7 @@ func resolveDeployCredentials(chartName, context string, dses []snapshotDSE, cre
 				warn("Deploying with dev credentials — not recommended for staging")
 
 			case "cached":
-				step("🔑", "Using cached staging credentials")
+				step("🔑", fmt.Sprintf("Using cached staging credentials for chart %q", chartName))
 				for _, e := range remaining {
 					if v, ok := cached.Creds[e.EnvVarName]; ok && v != "" {
 						creds[e.EnvVarName] = v
