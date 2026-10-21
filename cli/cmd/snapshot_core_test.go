@@ -136,6 +136,78 @@ func TestStripDSEPrefix_StripsIngressRouteServiceNames(t *testing.T) {
 	}
 }
 
+// TestStripDSEPrefixAndApplyBranchIngressHost_SimpleTestShape is a
+// combined regression test for C5: a snapshotDSE fixture shaped exactly
+// like the live "simple-test" app that originally surfaced both the
+// stripDSEPrefix env-var-rewrite mechanism (C5's own "Non-goals" section)
+// and the Ingress host-collision bug (C5's main fix) -- run through both
+// functions together in one test, not just each in isolation, since
+// nothing previously exercised them against a realistic multi-service
+// app in combination, which is exactly the gap that let the original
+// Ingress-collision bug go unnoticed for as long as it did.
+func TestStripDSEPrefixAndApplyBranchIngressHost_SimpleTestShape(t *testing.T) {
+	dses := []snapshotDSE{
+		{Name: "jeff-vincent-gateway", Ingress: &snapshotIngress{Enabled: true, Host: "jeff-vincent-gateway.localhost"},
+			Env: []snapshotEnvVar{
+				{Name: "ORDERS_URL", Value: "http://jeff-vincent-orders:5000"},
+				{Name: "INVENTORY_URL", Value: "http://jeff-vincent-inventory:3000"},
+			}},
+		{Name: "jeff-vincent-orders", Ingress: &snapshotIngress{Enabled: true, Host: "jeff-vincent-orders.localhost"}},
+		{Name: "jeff-vincent-inventory", Ingress: &snapshotIngress{Enabled: true, Host: "jeff-vincent-inventory.localhost"}},
+		{Name: "jeff-vincent-ui", Ingress: &snapshotIngress{Enabled: true, Host: "jeff-vincent-ui.localhost"},
+			Env: []snapshotEnvVar{
+				{Name: "GATEWAY_URL", Value: "http://jeff-vincent-gateway:9090"},
+			}},
+	}
+
+	stripDSEPrefix(dses)
+
+	// (a) Inter-service env var values are correctly stripped to their
+	// short Service-DNS form -- unaffected by this item's Ingress-host
+	// change, confirmed explicitly rather than just assumed.
+	if got := dses[0].Env[0].Value; got != "http://orders:5000" {
+		t.Errorf("gateway ORDERS_URL = %q, want %q", got, "http://orders:5000")
+	}
+	if got := dses[0].Env[1].Value; got != "http://inventory:3000" {
+		t.Errorf("gateway INVENTORY_URL = %q, want %q", got, "http://inventory:3000")
+	}
+	if got := dses[3].Env[0].Value; got != "http://gateway:9090" {
+		t.Errorf("ui GATEWAY_URL = %q, want %q", got, "http://gateway:9090")
+	}
+
+	// All four services selected for public Ingress on this branch deploy
+	// (matching simple-test's own dev-deploy.yml, which enables Ingress
+	// for all four in dev).
+	selected := map[string]bool{"gateway": true, "orders": true, "inventory": true, "ui": true}
+	derived, err := applyBranchIngressHost(dses, selected, "feature-x.staging.example.com")
+	if err != nil {
+		t.Fatalf("applyBranchIngressHost() error: %v", err)
+	}
+
+	// (b) Each of the four now gets its own distinct, service-prefixed
+	// Ingress host -- no collision.
+	wantHosts := map[string]string{
+		"gateway":   "gateway-feature-x.staging.example.com",
+		"orders":    "orders-feature-x.staging.example.com",
+		"inventory": "inventory-feature-x.staging.example.com",
+		"ui":        "ui-feature-x.staging.example.com",
+	}
+	seen := make(map[string]bool, len(dses))
+	for _, dse := range dses {
+		want := wantHosts[dse.Name]
+		if dse.Ingress.Host != want {
+			t.Errorf("%s Ingress.Host = %q, want %q", dse.Name, dse.Ingress.Host, want)
+		}
+		if seen[dse.Ingress.Host] {
+			t.Fatalf("host %q is shared by more than one service -- the exact collision C5 fixes", dse.Ingress.Host)
+		}
+		seen[dse.Ingress.Host] = true
+	}
+	if len(derived) != 4 {
+		t.Errorf("derived = %v, want all 4 service names", derived)
+	}
+}
+
 // ════════════════════════════════════════════════════════════════
 // buildConnectionURL — releasePrefix parameter
 // ════════════════════════════════════════════════════════════════

@@ -346,13 +346,32 @@ func handleStagingSnapshotDeploy(w http.ResponseWriter, r *http.Request) {
 	// comment on IngressHost for why a blank value here must leave
 	// today's pre-existing "blank host for every selected service"
 	// behavior completely unchanged.
+	//
+	// When 2+ services are selected, applyBranchIngressHost gives each
+	// one its own "<service>-<derivedHost>" instead of letting them all
+	// share one host (and therefore one host+path) -- see its own doc
+	// comment for why that's an unresolvable Ingress collision, not
+	// merely a cosmetic naming quirk. Only called when derivedHost is
+	// already non-empty, so it can never hit its own "no host available"
+	// error path here -- this handler's long-standing "no staging domain
+	// -> best-effort blank host, never a hard error" behavior is
+	// preserved exactly for that case.
 	var derivedHost string
 	if body.StagingDomain != "" {
 		if slug == "" {
 			send("step", "staging_domain set but no branch could be resolved — ingress host will not be branch-derived for this deploy")
 		} else {
 			derivedHost = deriveIngressHost(slug, body.StagingDomain)
-			send("step", fmt.Sprintf("Derived Ingress host %s", derivedHost))
+			if derived, err := applyBranchIngressHost(dses, selectedSet, derivedHost); err == nil {
+				for _, name := range derived {
+					for _, dse := range dses {
+						if dse.Name == name && dse.Ingress != nil {
+							send("step", fmt.Sprintf("%s: derived Ingress host %s", name, dse.Ingress.Host))
+							break
+						}
+					}
+				}
+			}
 		}
 	}
 

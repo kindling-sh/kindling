@@ -201,7 +201,8 @@ func TestApplyBranchIngressHost_DerivesFromBranchAndDomain(t *testing.T) {
 	dses := []snapshotDSE{
 		{Name: "gateway", Ingress: &snapshotIngress{Enabled: true, Host: ""}},
 	}
-	derived, err := applyBranchIngressHost(dses, derivedHost)
+	selected := map[string]bool{"gateway": true}
+	derived, err := applyBranchIngressHost(dses, selected, derivedHost)
 	if err != nil {
 		t.Fatalf("applyBranchIngressHost() error: %v", err)
 	}
@@ -218,7 +219,8 @@ func TestApplyBranchIngressHost_NeverOverridesExplicitHost(t *testing.T) {
 	dses := []snapshotDSE{
 		{Name: "gateway", Ingress: &snapshotIngress{Enabled: true, Host: "custom.example.com"}},
 	}
-	derived, err := applyBranchIngressHost(dses, "feature-checkout-retry.staging.example.com")
+	selected := map[string]bool{"gateway": true}
+	derived, err := applyBranchIngressHost(dses, selected, "feature-checkout-retry.staging.example.com")
 	if err != nil {
 		t.Fatalf("applyBranchIngressHost() error: %v", err)
 	}
@@ -240,7 +242,8 @@ func TestApplyBranchIngressHost_OverridesLocalDevLocalhostHost(t *testing.T) {
 	dses := []snapshotDSE{
 		{Name: "frontend", Ingress: &snapshotIngress{Enabled: true, Host: "frontend.localhost"}},
 	}
-	derived, err := applyBranchIngressHost(dses, "feature-checkout-retry.staging.example.com")
+	selected := map[string]bool{"frontend": true}
+	derived, err := applyBranchIngressHost(dses, selected, "feature-checkout-retry.staging.example.com")
 	if err != nil {
 		t.Fatalf("applyBranchIngressHost() error: %v", err)
 	}
@@ -256,7 +259,8 @@ func TestApplyBranchIngressHost_LocalhostHostWithNoStagingDomainErrors(t *testin
 	dses := []snapshotDSE{
 		{Name: "frontend", Ingress: &snapshotIngress{Enabled: true, Host: "frontend.localhost"}},
 	}
-	_, err := applyBranchIngressHost(dses, "")
+	selected := map[string]bool{"frontend": true}
+	_, err := applyBranchIngressHost(dses, selected, "")
 	if err == nil {
 		t.Fatal("expected an error when the only host is the local .localhost convention and no --staging-domain is set, got nil")
 	}
@@ -265,12 +269,16 @@ func TestApplyBranchIngressHost_LocalhostHostWithNoStagingDomainErrors(t *testin
 	}
 }
 
-func TestApplyBranchIngressHost_IgnoresDisabledOrNilIngress(t *testing.T) {
+func TestApplyBranchIngressHost_IgnoresUnselectedServices(t *testing.T) {
+	// Not selected for public Ingress on this deploy -- skipped
+	// regardless of whatever Ingress state they happen to carry over
+	// from dev (nil, disabled, even already enabled with a host).
 	dses := []snapshotDSE{
 		{Name: "worker", Ingress: nil},
 		{Name: "internal-api", Ingress: &snapshotIngress{Enabled: false, Host: ""}},
 	}
-	derived, err := applyBranchIngressHost(dses, "feature-checkout-retry.staging.example.com")
+	selected := map[string]bool{} // nothing selected
+	derived, err := applyBranchIngressHost(dses, selected, "feature-checkout-retry.staging.example.com")
 	if err != nil {
 		t.Fatalf("applyBranchIngressHost() error: %v", err)
 	}
@@ -278,7 +286,31 @@ func TestApplyBranchIngressHost_IgnoresDisabledOrNilIngress(t *testing.T) {
 		t.Errorf("derived = %v, want none", derived)
 	}
 	if dses[1].Ingress.Host != "" {
-		t.Errorf("Ingress.Host = %q, want unchanged empty (Ingress not enabled)", dses[1].Ingress.Host)
+		t.Errorf("Ingress.Host = %q, want unchanged empty (not selected)", dses[1].Ingress.Host)
+	}
+}
+
+func TestApplyBranchIngressHost_SelectedServiceWithNilIngressGetsOne(t *testing.T) {
+	// A service selected for public Ingress on this deploy may never
+	// have had Ingress configured in dev at all (a newly-selected,
+	// staging-only Ingress) -- it must still get a real Ingress struct
+	// and a derived host, not be silently skipped because Ingress was nil.
+	dses := []snapshotDSE{
+		{Name: "api", Ingress: nil},
+	}
+	selected := map[string]bool{"api": true}
+	derived, err := applyBranchIngressHost(dses, selected, "feature-checkout-retry.staging.example.com")
+	if err != nil {
+		t.Fatalf("applyBranchIngressHost() error: %v", err)
+	}
+	if dses[0].Ingress == nil {
+		t.Fatal("Ingress is still nil, want a struct created for the selected service")
+	}
+	if want := "feature-checkout-retry.staging.example.com"; dses[0].Ingress.Host != want {
+		t.Errorf("Ingress.Host = %q, want %q", dses[0].Ingress.Host, want)
+	}
+	if len(derived) != 1 || derived[0] != "api" {
+		t.Errorf(`derived = %v, want ["api"]`, derived)
 	}
 }
 
@@ -286,7 +318,8 @@ func TestApplyBranchIngressHost_ErrorsWithNoHostAvailable(t *testing.T) {
 	dses := []snapshotDSE{
 		{Name: "gateway", Ingress: &snapshotIngress{Enabled: true, Host: ""}},
 	}
-	_, err := applyBranchIngressHost(dses, "")
+	selected := map[string]bool{"gateway": true}
+	_, err := applyBranchIngressHost(dses, selected, "")
 	if err == nil {
 		t.Fatal("expected an error when no --staging-domain and no explicit host are available, got nil")
 	}
@@ -298,6 +331,84 @@ func TestApplyBranchIngressHost_ErrorsWithNoHostAvailable(t *testing.T) {
 	}
 }
 
+func TestApplyBranchIngressHost_SingleSelected_BareHost(t *testing.T) {
+	// Exactly one service selected -- today's long-standing behavior,
+	// unchanged: the bare derived host, no service-name prefix.
+	dses := []snapshotDSE{
+		{Name: "gateway", Ingress: &snapshotIngress{Enabled: true, Host: ""}},
+		{Name: "orders", Ingress: &snapshotIngress{Enabled: false, Host: ""}},
+	}
+	selected := map[string]bool{"gateway": true}
+	derived, err := applyBranchIngressHost(dses, selected, "feature-x.staging.example.com")
+	if err != nil {
+		t.Fatalf("applyBranchIngressHost() error: %v", err)
+	}
+	if dses[0].Ingress.Host != "feature-x.staging.example.com" {
+		t.Errorf("gateway Ingress.Host = %q, want bare derived host", dses[0].Ingress.Host)
+	}
+	if len(derived) != 1 || derived[0] != "gateway" {
+		t.Errorf(`derived = %v, want ["gateway"]`, derived)
+	}
+}
+
+func TestApplyBranchIngressHost_MultiSelected_ServicePrefixedHosts(t *testing.T) {
+	// Regression test for C5: 2+ services selected for public Ingress on
+	// the same branch must each get their own distinct host -- sharing
+	// one host (and the default "/" path) produces an unresolvable
+	// Ingress host+path collision (Bad Gateway), found live deploying a
+	// real multi-service app (simple-test: gateway/inventory/orders/ui).
+	dses := []snapshotDSE{
+		{Name: "gateway", Ingress: &snapshotIngress{Enabled: true, Host: ""}},
+		{Name: "ui", Ingress: &snapshotIngress{Enabled: true, Host: ""}},
+		{Name: "orders", Ingress: &snapshotIngress{Enabled: false, Host: ""}}, // not selected
+	}
+	selected := map[string]bool{"gateway": true, "ui": true}
+	derived, err := applyBranchIngressHost(dses, selected, "feature-x.staging.example.com")
+	if err != nil {
+		t.Fatalf("applyBranchIngressHost() error: %v", err)
+	}
+	if want := "gateway-feature-x.staging.example.com"; dses[0].Ingress.Host != want {
+		t.Errorf("gateway Ingress.Host = %q, want %q", dses[0].Ingress.Host, want)
+	}
+	if want := "ui-feature-x.staging.example.com"; dses[1].Ingress.Host != want {
+		t.Errorf("ui Ingress.Host = %q, want %q", dses[1].Ingress.Host, want)
+	}
+	if dses[0].Ingress.Host == dses[1].Ingress.Host {
+		t.Fatal("gateway and ui ended up with the identical host -- the exact collision this item fixes")
+	}
+	if dses[2].Ingress.Host != "" {
+		t.Errorf("orders (not selected) Ingress.Host = %q, want unchanged empty", dses[2].Ingress.Host)
+	}
+	if len(derived) != 2 {
+		t.Errorf("derived = %v, want exactly 2 entries (gateway, ui)", derived)
+	}
+}
+
+func TestApplyBranchIngressHost_MultiSelected_ExplicitHostStillNeverOverridden(t *testing.T) {
+	// Even when 2+ services are selected, a genuinely explicit,
+	// non-localhost host on one of them is still never touched --
+	// only its sibling(s) without a meaningful host of their own get the
+	// service-prefixed derived treatment.
+	dses := []snapshotDSE{
+		{Name: "gateway", Ingress: &snapshotIngress{Enabled: true, Host: "gateway.custom.example.com"}},
+		{Name: "ui", Ingress: &snapshotIngress{Enabled: true, Host: ""}},
+	}
+	selected := map[string]bool{"gateway": true, "ui": true}
+	derived, err := applyBranchIngressHost(dses, selected, "feature-x.staging.example.com")
+	if err != nil {
+		t.Fatalf("applyBranchIngressHost() error: %v", err)
+	}
+	if dses[0].Ingress.Host != "gateway.custom.example.com" {
+		t.Errorf("gateway Ingress.Host = %q, want unchanged explicit host", dses[0].Ingress.Host)
+	}
+	if want := "ui-feature-x.staging.example.com"; dses[1].Ingress.Host != want {
+		t.Errorf("ui Ingress.Host = %q, want %q", dses[1].Ingress.Host, want)
+	}
+	if len(derived) != 1 || derived[0] != "ui" {
+		t.Errorf(`derived = %v, want ["ui"] (gateway's explicit host is not "derived")`, derived)
+	}
+}
+
 func TestApplyBranchIngressHost_MixedServices(t *testing.T) {
 	dses := []snapshotDSE{
 		{Name: "gateway", Ingress: &snapshotIngress{Enabled: true, Host: ""}},
@@ -305,18 +416,25 @@ func TestApplyBranchIngressHost_MixedServices(t *testing.T) {
 		{Name: "frontend", Ingress: &snapshotIngress{Enabled: true, Host: "frontend.localhost"}},
 		{Name: "worker", Ingress: nil},
 	}
-	derived, err := applyBranchIngressHost(dses, "feature-checkout-retry.staging.example.com")
+	// gateway/admin/frontend selected (3, so service-prefixed naming
+	// applies to whichever of them lack a meaningful host of their own);
+	// worker is not selected at all, matching its nil Ingress.
+	selected := map[string]bool{"gateway": true, "admin": true, "frontend": true}
+	derived, err := applyBranchIngressHost(dses, selected, "feature-checkout-retry.staging.example.com")
 	if err != nil {
 		t.Fatalf("applyBranchIngressHost() error: %v", err)
 	}
-	if dses[0].Ingress.Host != "feature-checkout-retry.staging.example.com" {
-		t.Errorf("gateway Ingress.Host = %q, want derived host", dses[0].Ingress.Host)
+	if want := "gateway-feature-checkout-retry.staging.example.com"; dses[0].Ingress.Host != want {
+		t.Errorf("gateway Ingress.Host = %q, want %q", dses[0].Ingress.Host, want)
 	}
 	if dses[1].Ingress.Host != "admin.example.com" {
 		t.Errorf("admin Ingress.Host = %q, want unchanged", dses[1].Ingress.Host)
 	}
-	if dses[2].Ingress.Host != "feature-checkout-retry.staging.example.com" {
-		t.Errorf("frontend Ingress.Host = %q, want the local .localhost convention replaced with the derived host", dses[2].Ingress.Host)
+	if want := "frontend-feature-checkout-retry.staging.example.com"; dses[2].Ingress.Host != want {
+		t.Errorf("frontend Ingress.Host = %q, want the local .localhost convention replaced with the service-prefixed derived host %q", dses[2].Ingress.Host, want)
+	}
+	if dses[3].Ingress != nil {
+		t.Errorf("worker Ingress = %+v, want still nil (not selected)", dses[3].Ingress)
 	}
 	if len(derived) != 2 {
 		t.Errorf(`derived = %v, want ["gateway", "frontend"]`, derived)
