@@ -4,6 +4,12 @@ name: Publish Build-Agent Image
 # capable build-agent sidecar image (kubectl + helm + crane + kindling CLI).
 # Used by CIRunnerPool pods with spec.enableSnapshotDeploy: true --
 # see snapshot-deploy-runner-sidecar.md. Mirrors publish-operator.yml.
+#
+# Production releases (including the "latest" tag the operator defaults
+# spec.buildAgentImage to) are handled by release.yml (triggered on v*
+# tags), same as the operator image -- this workflow's default tag is
+# deliberately "edge", never "latest", so an ad-hoc run here can never be
+# mistaken for (or silently substitute for) a real release.
 on:
   workflow_dispatch:
     inputs:

@@ -205,6 +205,25 @@ var _ = Describe("buildRunnerDeployment with EnableSnapshotDeploy", func() {
 		Expect(c.Env).To(BeEmpty())
 	})
 
+	It("always uses IfNotPresent, never the :latest-tag Kubernetes default of Always", func() {
+		// Regression test for a real ImagePullBackOff: with the
+		// Kubernetes default (Always, implied by the ":latest" tag),
+		// kubelet re-attempts a registry pull on every container start
+		// regardless of an already kind-loaded local image -- breaking
+		// the documented "locally built and kind-loaded tag" override
+		// workflow (spec.BuildAgentImage/--build-agent-image) entirely,
+		// and leaving no way to work around ghcr.io/kindling-sh/
+		// build-agent:latest not being a public image.
+		cr := newTestRunnerPool("test-pool", "jeff", "jeff/repo")
+		c := buildAgentContainer(cr)
+		Expect(c.ImagePullPolicy).To(Equal(corev1.PullIfNotPresent))
+
+		cr.Spec.EnableSnapshotDeploy = true
+		cr.Spec.LocalClusterName = "kindling"
+		c = buildAgentContainer(cr)
+		Expect(c.ImagePullPolicy).To(Equal(corev1.PullIfNotPresent))
+	})
+
 	It("uses the snapshot-deploy-capable image and script when enabled", func() {
 		cr := newTestRunnerPool("test-pool", "jeff", "jeff/repo")
 		cr.Spec.EnableSnapshotDeploy = true
