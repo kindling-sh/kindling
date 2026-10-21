@@ -74,6 +74,14 @@ func handleStagingSnapshotCredentials(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// This preview runs before the deploy form necessarily has a branch
+	// typed in yet, so there's no real chart name to key the cache
+	// lookup by -- "kindling-snapshot" (today's pre-branch-derived-naming
+	// default) is the best available guess and is read-only here (this
+	// handler never writes to the cache), so getting it wrong only means
+	// this preview under-reports an already-cached value, never applies
+	// a wrong one to an actual deploy (see handleStagingSnapshotDeploy,
+	// which always uses the real resolved chart name).
 	chartName := "kindling-snapshot"
 	// Strip user prefix to match what the chart will use
 	stripDSEPrefix(dses)
@@ -86,7 +94,7 @@ func handleStagingSnapshotCredentials(w http.ResponseWriter, r *http.Request) {
 	var cachedCreds map[string]string
 	var cachedAt string
 	if ctx := getStagingContext(); ctx != "" {
-		if cached := loadCredCache(ctx); cached != nil && len(cached.Creds) > 0 {
+		if cached := loadCredCache(ctx, chartName); cached != nil && len(cached.Creds) > 0 {
 			cachedCreds = cached.Creds
 			cachedAt = cached.UpdatedAt.Format(time.RFC3339)
 		}
@@ -362,14 +370,16 @@ func handleStagingSnapshotDeploy(w http.ResponseWriter, r *http.Request) {
 		// Cache for future deploys
 		_ = saveCredCache(stagingCtx, chartName, credentials)
 	} else {
-		// Auto-apply cached credentials if available
-		cached := loadCredCache(stagingCtx)
+		// Auto-apply cached credentials if available -- scoped to this
+		// exact chart, never a different one deployed to the same shared
+		// staging context (see loadCredCache).
+		cached := loadCredCache(stagingCtx, chartName)
 		if cached != nil && len(cached.Creds) > 0 {
 			entries := detectDevCredentials(chartName, dses)
 			secretEntries := detectUserSecrets(dses)
 			entries = append(entries, secretEntries...)
 			credOverrides = buildOverrideMap(entries, dses, cached.Creds)
-			send("step", fmt.Sprintf("Using %d cached staging credential(s)", len(cached.Creds)))
+			send("step", fmt.Sprintf("Using %d cached staging credential(s) for chart %q", len(cached.Creds), chartName))
 		}
 	}
 
@@ -521,8 +531,13 @@ func handleStagingSnapshotSecretsUpdate(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	// Cache the updated credentials
-	chartName := "kindling-snapshot"
+	// Cache the updated credentials -- keyed by namespace, which equals
+	// the chart/release name by this flow's own branch-derived naming
+	// convention (stagingDeployNameDefaults: ns defaults to the branch
+	// slug, same value used as the Helm release name). Using a stale
+	// hardcoded chart name here would (re-)poison the cache for whatever
+	// chart/branch actually owns this namespace.
+	chartName := ns
 	_ = saveCredCache(stagingCtx, chartName, body.Credentials)
 
 	jsonResponse(w, map[string]interface{}{
