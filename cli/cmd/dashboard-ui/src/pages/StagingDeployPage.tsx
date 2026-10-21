@@ -67,10 +67,10 @@ export function StagingDeployPage() {
   const [ingressInfo, setIngressInfo] = useState<IngressControllerInfo | null>(null);
   const [ingressLookupFailed, setIngressLookupFailed] = useState(false);
 
-  function loadStatus(branchForCreds?: string) {
+  function loadStatus() {
     return Promise.all([
       fetchSnapshotStatus(),
-      fetchSnapshotCredentials(branchForCreds).catch(() => ({ credentials: [], cached_at: '' })),
+      fetchSnapshotCredentials().catch(() => ({ credentials: [], cached_at: '' })),
     ]).then(([s, creds]) => {
       setStatus(s);
       // Pre-select all services with ingress enabled
@@ -79,30 +79,45 @@ export function StagingDeployPage() {
         if (svc.ingress?.enabled) ing.add(svc.name);
       }
       setSelectedIngress(ing);
-
-      // Set up credential state
-      if (creds.credentials?.length) {
-        setDevCreds(creds.credentials);
-        setCachedAt(creds.cached_at || '');
-        setShowCredentials(true);
-        // Pre-fill *only* from a legitimately cached (chart-scoped) staging
-        // value -- never from dev_value. dev_value is just an illustrative
-        // hint (shown as the input's placeholder) of what the *dev*
-        // cluster's value looks like; it is never a real staging
-        // credential, and pre-filling the actual submitted value with it
-        // meant every first deploy of a new branch silently submitted that
-        // guess as if the user had typed it -- bypassing this deploy's own
-        // correctly chart-scoped dev-default fallback entirely. Leaving it
-        // blank here lets a field the user never touches fall through to
-        // that fallback instead, exactly like the CLI's own "leave blank to
-        // use dev default" behavior.
-        const initial: Record<string, string> = {};
-        for (const c of creds.credentials) {
-          if (c.cached) initial[c.env_var] = c.cached;
-        }
-        setCredValues(initial);
-      }
+      applyCredentialsResponse(creds, /* resetUntouchedFields */ true);
     }).catch(() => {});
+  }
+
+  // Shared by loadStatus (full page (re)load -- resets every untouched
+  // credential field, including dev-default ones, back to whatever's now
+  // cached) and refreshCredentialHints (branch-change only -- see there
+  // for why it must *not* reuse loadStatus wholesale).
+  function applyCredentialsResponse(creds: { credentials: SnapshotCredential[]; cached_at: string }, resetUntouchedFields: boolean) {
+    if (!creds.credentials?.length) return;
+    setDevCreds(creds.credentials);
+    setCachedAt(creds.cached_at || '');
+    setShowCredentials(true);
+    // Pre-fill *only* from a legitimately cached (chart-scoped) staging
+    // value -- never from dev_value. dev_value is just an illustrative
+    // hint (shown as the input's placeholder) of what the *dev*
+    // cluster's value looks like; it is never a real staging
+    // credential, and pre-filling the actual submitted value with it
+    // meant every first deploy of a new branch silently submitted that
+    // guess as if the user had typed it -- bypassing this deploy's own
+    // correctly chart-scoped dev-default fallback entirely. Leaving it
+    // blank here lets a field the user never touches fall through to
+    // that fallback instead, exactly like the CLI's own "leave blank to
+    // use dev default" behavior.
+    setCredValues(prev => {
+      const next = resetUntouchedFields ? {} : { ...prev };
+      for (const c of creds.credentials) {
+        if (!c.cached) continue;
+        // Never clobber a value the user already typed into this field
+        // (relevant for the branch-change refresh path, where the user
+        // may well have started filling the form in before adjusting
+        // Branch -- re-deriving the dev-value hint must not wipe that
+        // out from under them).
+        if (resetUntouchedFields || !(c.env_var in prev)) {
+          next[c.env_var] = c.cached;
+        }
+      }
+      return next;
+    });
   }
 
   useEffect(() => {
@@ -113,11 +128,21 @@ export function StagingDeployPage() {
   // Re-fetch credential hints (dev_value is chart-scoped) whenever the
   // branch field settles on a new value, so the placeholder text shown
   // for each credential reflects *this* branch's actual dependency
-  // hostnames instead of the pre-branch-resolution default. Harmless no-op
-  // for the already-submitted credValues themselves (those only ever come
-  // from cache/user input now, never dev_value).
+  // hostnames instead of the pre-branch-resolution default.
+  //
+  // Deliberately does NOT call loadStatus() -- loadStatus also resets
+  // selectedIngress back to "whatever's enabled in dev" on every call,
+  // which would silently undo a user's manual Ingress-service selection
+  // the moment they next blur the Branch field after checking/unchecking
+  // boxes (confirmed live: exactly this caused an unintended multi-
+  // Ingress host collision on a deploy the user believed had only one
+  // service selected). This fetches credential hints in isolation
+  // instead, leaving selectedIngress and any already-typed credential
+  // values alone.
   function handleBranchBlur() {
-    loadStatus(branch.trim() || undefined);
+    fetchSnapshotCredentials(branch.trim() || undefined)
+      .then(creds => applyCredentialsResponse(creds, /* resetUntouchedFields */ false))
+      .catch(() => {});
   }
 
   async function handleConnect() {
