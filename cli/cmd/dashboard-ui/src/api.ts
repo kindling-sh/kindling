@@ -708,3 +708,94 @@ export function streamMetricsInstall(
 export async function uninstallMetricsStack(): Promise<ActionResult> {
   return apiPost('/api/staging/metrics/uninstall');
 }
+
+// ── PR-preview / promote (C6) ────────────────────────────────────
+
+export interface GitHubPRConfig {
+  configured: boolean;
+  owner: string;
+  repo: string;
+  owner_override: string;
+  repo_override: string;
+  gitops_repo: string;
+  gitops_path: string;
+  gitops_base_branch: string;
+  workflow: string;
+}
+
+export async function fetchGitHubPRConfig(): Promise<GitHubPRConfig> {
+  return apiFetch<GitHubPRConfig>('/api/staging/github/config');
+}
+
+export async function saveGitHubPRConfig(body: {
+  token?: string;
+  owner?: string;
+  repo?: string;
+  gitops_repo?: string;
+  gitops_path?: string;
+  gitops_base_branch?: string;
+  workflow?: string;
+}): Promise<ActionResult> {
+  return apiPost('/api/staging/github/config', body);
+}
+
+export interface PRInfo {
+  number: number;
+  title: string;
+  branch: string;
+  url: string;
+  has_preview: boolean;
+  artifact_created_at?: string;
+}
+
+export async function fetchStagingPRs(): Promise<{ prs: PRInfo[] }> {
+  return apiFetch<{ prs: PRInfo[] }>('/api/staging/prs');
+}
+
+export interface DiffLine {
+  type: 'same' | 'add' | 'remove';
+  text: string;
+}
+
+export interface PRDiffResult {
+  pr_number: number;
+  old: string;
+  new: string;
+  diff_lines: DiffLine[];
+}
+
+export async function fetchStagingPRDiff(prNumber: number): Promise<PRDiffResult> {
+  return apiFetch<PRDiffResult>(`/api/staging/prs/${prNumber}/diff`);
+}
+
+export function streamStagingPRPromote(
+  prNumber: number,
+  onMessage: (msg: { type: string; message: string }) => void,
+): () => void {
+  const controller = new AbortController();
+  fetch(`${API_BASE}/api/staging/prs/${prNumber}/promote`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}',
+    signal: controller.signal,
+  }).then(async (res) => {
+    const reader = res.body?.getReader();
+    if (!reader) return;
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          try { onMessage(JSON.parse(line.slice(6))); } catch { /* skip */ }
+        }
+      }
+    }
+  }).catch(() => { /* aborted */ });
+  return () => controller.abort();
+}
+

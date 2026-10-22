@@ -5427,3 +5427,34 @@ details[open] summary {
 .api-explorer-compact .api-endpoint-method {
   font-size: 10px;
 }
+
+/* ── PR-preview diff view (C6) ──────────────────────────────── */
+
+.diff-view {
+  max-height: 480px;
+  overflow: auto;
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 8px 0;
+}
+
+.diff-line {
+  padding: 0 8px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.diff-add {
+  background: var(--green-muted);
+  color: var(--green);
+}
+
+.diff-remove {
+  background: var(--red-muted);
+  color: var(--red);
+}
+
+.diff-same {
+  color: var(--text-tertiary);
+}
+

@@ -466,6 +466,58 @@ Closing a PR without merging never triggers this job at all, since the
 
 ---
 
+## promote-pr.yml (manual promote, for the dashboard's "Promote now")
+
+The kindling dashboard's PR-preview page (see its own docs) can trigger a
+promote **without** waiting for a real merge event — useful for testing
+the GitOps wiring itself, re-promoting after fixing an unrelated problem,
+or promoting a branch that won't go through a normal PR-merge flow. It
+does this by dispatching a `workflow_dispatch`-triggered workflow that
+calls the *exact same* `kindling-gitops-handoff` action the merge-
+triggered job above already uses — the dashboard never talks to the
+GitOps repo directly, and never re-implements the artifact-fetch/commit
+logic itself, so a manual promote and a real merge's automatic one are
+provably identical (same action, same inputs, same artifact).
+
+Add this workflow to any repo you want the dashboard's "Promote now"
+button to work against — the dashboard looks for a workflow file named
+exactly `promote-pr.yml` by default (configurable from the dashboard's
+own GitHub settings if you need a different filename):
+
+```yaml
+# .github/workflows/promote-pr.yml
+name: Promote PR (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number to promote (must already have a kindling-pr-preview artifact)"
+        required: true
+
+permissions:
+  actions: read
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: kindling-sh/kindling/.github/actions/kindling-gitops-handoff@main
+        with:
+          pr-number: ${{ inputs.pr_number }}
+          gitops-repo: myorg/gitops-production
+          gitops-token: ${{ secrets.GITOPS_PAT }}
+```
+
+The dashboard dispatches this workflow via the GitHub API
+(`POST /repos/{owner}/{repo}/actions/workflows/promote-pr.yml/dispatches`),
+then polls the resulting run until it completes, surfacing the same
+`promoted` outcome the merge-triggered job above would have produced for
+an identical PR number — because it's the same action, retrieving the
+same `values-<pr-number>` artifact, either way.
+
+---
+
 ## Complete workflow example
 
 A full workflow using both actions:
