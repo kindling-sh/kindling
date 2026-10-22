@@ -211,25 +211,55 @@ func deriveIngressHost(slug, domain string) string {
 	return fmt.Sprintf("%s.staging.%s", slug, domain)
 }
 
-// applyBranchIngressHost fills in the Ingress host for any DSE that has
-// Ingress enabled but no *meaningful* host set, using derivedHost
-// (typically "<branch-slug>.<staging-domain>"). A host is considered
-// meaningful — and left untouched — only if it's non-empty and isn't the
-// local dev convention (<name>.localhost, carried straight over from the
-// local Kind cluster's DSE). That local host is never resolvable outside
-// Kind and is frequently identical across branches, so treating it as
+// applyBranchIngressHost fills in the Ingress host for every DSE
+// *selected* for public Ingress on this deploy that has no *meaningful*
+// host of its own already, using derivedHost (typically
+// "<branch-slug>.<staging-domain>"). A host is considered meaningful —
+// and left untouched — only if it's non-empty and isn't the local dev
+// convention (<name>.localhost, carried straight over from the local
+// Kind cluster's DSE). That local host is never resolvable outside Kind
+// and is frequently identical across branches, so treating it as
 // "explicit intent" would silently keep every branch colliding on the
 // same host — the exact bug this function exists to fix. A genuinely
-// custom, non-localhost host is still never overridden. Returns the
-// names of the DSEs that got a host filled in, for caller-side logging.
-// If a DSE needs a host and derivedHost is empty (no --staging-domain and
-// no meaningful explicit host), returns an error naming that DSE rather
-// than silently falling through to an unreachable/colliding environment.
-func applyBranchIngressHost(dses []snapshotDSE, derivedHost string) ([]string, error) {
+// custom, non-localhost host is still never overridden.
+//
+// When exactly one service is selected, it gets derivedHost bare
+// (today's long-standing behavior, unchanged). When two or more
+// services are selected, each instead gets "<service>-<derivedHost>" —
+// otherwise every selected service would share not just the same host
+// but the same default "/" path too, which produces an unresolvable
+// Ingress host+path collision (Bad Gateway), not merely a stale value —
+// found live deploying a real multi-service app with more than one
+// public-facing service. selected must reflect the *actual* services
+// getting a public Ingress on this deploy (not just "Ingress enabled in
+// dev") — a service selected here that had no Ingress config at all in
+// dev still gets a host derived for it; the caller is responsible for
+// resolving the true selection before calling this (see runSnapshot/
+// handleStagingSnapshotDeploy, both of which now resolve Ingress
+// selection before calling this, not after).
+//
+// Returns the names of the DSEs that got a host filled in, for
+// caller-side logging. If a selected DSE needs a host and derivedHost is
+// empty (no --staging-domain and no meaningful explicit host), returns
+// an error naming that DSE rather than silently falling through to an
+// unreachable/colliding environment.
+func applyBranchIngressHost(dses []snapshotDSE, selected map[string]bool, derivedHost string) ([]string, error) {
+	multi := len(selected) > 1
 	var derived []string
 	for i := range dses {
-		if dses[i].Ingress == nil || !dses[i].Ingress.Enabled {
+		if !selected[dses[i].Name] {
 			continue
+		}
+		// A service selected for public Ingress here may never have had
+		// Ingress configured in dev at all (e.g. a newly-selected,
+		// staging-only Ingress) -- give it a real Ingress struct rather
+		// than skipping it, so it still gets a derived host below instead
+		// of silently falling back to the single bare derivedHost later
+		// (which would reintroduce the exact collision this function
+		// exists to prevent whenever such a service coexists with others
+		// in a multi-selection).
+		if dses[i].Ingress == nil {
+			dses[i].Ingress = &snapshotIngress{Enabled: true, Path: "/", PathType: "Prefix"}
 		}
 		host := dses[i].Ingress.Host
 		if host != "" && !strings.HasSuffix(host, ".localhost") {
@@ -238,7 +268,11 @@ func applyBranchIngressHost(dses []snapshotDSE, derivedHost string) ([]string, e
 		if derivedHost == "" {
 			return nil, fmt.Errorf("no Ingress host available for %q — set --staging-domain, or set spec.ingress.host explicitly in the DSE", dses[i].Name)
 		}
-		dses[i].Ingress.Host = derivedHost
+		newHost := derivedHost
+		if multi {
+			newHost = fmt.Sprintf("%s-%s", dses[i].Name, derivedHost)
+		}
+		dses[i].Ingress.Host = newHost
 		derived = append(derived, dses[i].Name)
 	}
 	return derived, nil
@@ -651,20 +685,56 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 		step("✂️", fmt.Sprintf("Stripping user prefix %q from service names", strings.TrimSuffix(userPrefix, "-")))
 	}
 
-	// ── Branch-derived Ingress host ──────────────────────────────
-	// Any DSE that already has Ingress enabled but no host set gets the
-	// same branch-derived treatment as --name/--namespace — an explicit
-	// spec.ingress.host is never overridden. Without --staging-domain,
-	// a genuinely missing host fails the build instead of silently
-	// producing an unreachable environment (the previous "# TODO: set
-	// your staging hostname" placeholder behavior).
+	// ── Ingress selector ──────────────────────────────────────
+	// Resolved here — before the branch-derived Ingress host block below,
+	// not after it — so that block knows whether 1 or 2+ services are
+	// actually getting a public Ingress on *this* deploy, and can give
+	// each one its own derived host instead of all of them colliding on
+	// one (see applyBranchIngressHost). Resolution order: explicit
+	// --ingress-services (skips any prompt) -> non-interactive default
+	// (whatever was already enabled in dev, no prompt) -> interactive
+	// multi-select, pre-selected the same way.
+	var selectedIngress []string
+	selectedSet := make(map[string]bool)
 	if snapshotDeploy {
-		derived, err := applyBranchIngressHost(dses, derivedIngressHost)
+		var serr error
+		selectedIngress, serr = resolveIngressSelection(cmd, dses, interactive)
+		if serr != nil {
+			return serr
+		}
+		for _, svc := range selectedIngress {
+			selectedSet[svc] = true
+		}
+		if len(selectedIngress) > 0 {
+			step("🌐", fmt.Sprintf("Ingress enabled for: %s", strings.Join(selectedIngress, ", ")))
+		} else {
+			step("🌐", "No services selected for public ingress")
+		}
+	}
+
+	// ── Branch-derived Ingress host ──────────────────────────────
+	// Any DSE *selected for public Ingress* that has no meaningful host
+	// set gets the same branch-derived treatment as --name/--namespace —
+	// an explicit spec.ingress.host is never overridden. Without
+	// --staging-domain, a genuinely missing host fails the build instead
+	// of silently producing an unreachable environment (the previous
+	// "# TODO: set your staging hostname" placeholder behavior). When 2+
+	// services are selected, each gets its own "<service>-<derivedHost>"
+	// rather than sharing one host (and therefore one host+path) with
+	// every other selected service — see applyBranchIngressHost's own
+	// doc comment.
+	if snapshotDeploy {
+		derived, err := applyBranchIngressHost(dses, selectedSet, derivedIngressHost)
 		if err != nil {
 			return err
 		}
 		for _, name := range derived {
-			step("🌐", fmt.Sprintf("%s: derived Ingress host %s", name, derivedIngressHost))
+			for _, dse := range dses {
+				if dse.Name == name && dse.Ingress != nil {
+					step("🌐", fmt.Sprintf("%s: derived Ingress host %s", name, dse.Ingress.Host))
+					break
+				}
+			}
 		}
 	}
 
@@ -810,26 +880,6 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 		step("🌐", msg)
 	}); err != nil {
 		warn(fmt.Sprintf("Could not ensure ingress controller: %v", err))
-	}
-
-	// ── Ingress selector ──────────────────────────────────────
-	// Resolution order: explicit --ingress-services (skips any prompt) ->
-	// non-interactive default (whatever was already enabled in dev, no
-	// prompt) -> interactive multi-select, pre-selected the same way.
-	selectedIngress, err := resolveIngressSelection(cmd, dses, interactive)
-	if err != nil {
-		return err
-	}
-
-	// Build a set of selected ingress services for quick lookup
-	selectedSet := make(map[string]bool)
-	for _, svc := range selectedIngress {
-		selectedSet[svc] = true
-	}
-	if len(selectedIngress) > 0 {
-		step("🌐", fmt.Sprintf("Ingress enabled for: %s", strings.Join(selectedIngress, ", ")))
-	} else {
-		step("🌐", "No services selected for public ingress")
 	}
 
 	// Detect the IngressClass on the target cluster

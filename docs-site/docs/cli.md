@@ -482,7 +482,7 @@ Export a Helm chart or Kustomize overlay from the current cluster state, optiona
 
 **Steps:** read all DSEs → strip actor prefix from names → generate chart with `values.yaml` (clean defaults) + `values-live.yaml` (dev values) → optionally push images via `crane copy` → optionally `helm install` on staging cluster.
 
-With `--deploy`, unless `--name`/`--namespace` are set explicitly, both are derived from the current git branch (or `--branch`) via a stable slug — so concurrent branches deployed to the same shared staging cluster (e.g. multiple open PRs) never collide. Any DSE with Ingress enabled but no host set gets a branch-derived host too, via `--staging-domain` (result: `<branch-slug>.staging.<domain>`) — an explicit `spec.ingress.host` always wins over the derived one, and `--deploy` fails fast if neither is available rather than producing an unreachable environment.
+With `--deploy`, unless `--name`/`--namespace` are set explicitly, both are derived from the current git branch (or `--branch`) via a stable slug — so concurrent branches deployed to the same shared staging cluster (e.g. multiple open PRs) never collide. Any DSE with Ingress enabled but no host set gets a branch-derived host too, via `--staging-domain`: `<branch-slug>.staging.<domain>` when exactly one service is selected for public Ingress, or `<service>-<branch-slug>.staging.<domain>` (one distinct host per service) when two or more are — sharing a single host across multiple services would also mean sharing its default `/` path, an unresolvable Ingress collision (Bad Gateway), not merely a cosmetic naming clash. An explicit `spec.ingress.host` always wins over either derived form, and `--deploy` fails fast if neither is available rather than producing an unreachable environment.
 
 Unless `--tag` is set explicitly, `--registry` pushes (with or without `--deploy`) auto-detect the next sequential `<branch-slug>-N` tag for the current branch, so concurrent branches pushing to the same shared registry get their own tag sequence instead of colliding on a single `snapshot-N` one.
 
@@ -534,6 +534,13 @@ kindling snapshot -r ghcr.io/myorg --deploy --context do-staging
 # ...with a branch-derived, resolvable Ingress host too
 # (-> feature-checkout-retry.staging.example.com)
 kindling snapshot -r ghcr.io/myorg --deploy --context do-staging --staging-domain example.com
+
+# Multi-service app, more than one public-facing service selected
+# -> each gets its own host, not one shared (and colliding) host:
+#    gateway-feature-checkout-retry.staging.example.com
+#    ui-feature-checkout-retry.staging.example.com
+kindling snapshot -r ghcr.io/myorg --deploy --context do-staging \
+  --staging-domain example.com --ingress-services gateway,ui
 
 # Push images and also write values-prod.yaml, pinned to the pushed digest
 # (no deploy — kindling never touches a production cluster or credential)
