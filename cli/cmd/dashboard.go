@@ -172,6 +172,20 @@ func runDashboard(cmd *cobra.Command, args []string) error {
 	mux.HandleFunc("/api/staging/snapshot/deploy", handleStagingSnapshotDeploy)
 	mux.HandleFunc("/api/staging/snapshot/secrets/update", handleStagingSnapshotSecretsUpdate)
 
+	// PR-preview / promote (C6)
+	mux.HandleFunc("/api/staging/github/config", handleGitHubPRConfig)
+	mux.HandleFunc("/api/staging/prs", handleStagingPRs)
+	mux.HandleFunc("/api/staging/prs/", func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/diff"):
+			handleStagingPRDiff(w, r)
+		case strings.HasSuffix(r.URL.Path, "/promote"):
+			handleStagingPRPromote(w, r)
+		default:
+			jsonError(w, "usage: /api/staging/prs/{number}/diff or /promote", 400)
+		}
+	})
+
 	// TLS management
 	mux.HandleFunc("/api/staging/tls/status", handleStagingTLSStatus)
 	mux.HandleFunc("/api/staging/tls/install", handleStagingTLSInstall)

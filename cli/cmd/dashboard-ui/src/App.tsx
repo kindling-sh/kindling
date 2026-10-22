@@ -16,6 +16,7 @@ import { StagingNetworkPage } from './pages/StagingNetworkPage';
 import { StagingMetricsPage } from './pages/StagingMetricsPage';
 import { StagingDeployPage } from './pages/StagingDeployPage';
 import { StagingTLSPage } from './pages/StagingTLSPage';
+import { PullRequestsPage } from './pages/PullRequestsPage';
 import type { K8sList, K8sIngress, IngressControllerInfo } from './types';
 
 interface ContextsInfo {
@@ -36,7 +37,8 @@ type Page =
   | 'staging-network'
   | 'staging-tls'
   | 'staging-metrics'
-  | 'staging-deploy';
+  | 'staging-deploy'
+  | 'staging-prs';
 
 interface NavGroup {
   label: string;
@@ -69,6 +71,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { page: 'staging-overview', icon: '⬢', label: 'Overview' },
       { page: 'staging-deploy', icon: '▷', label: 'Deploy' },
+      { page: 'staging-prs', icon: '⇄', label: 'Pull Requests' },
       { page: 'staging-workloads', icon: '□', label: 'Workloads' },
       { page: 'staging-network', icon: '◎', label: 'Network' },
       { page: 'staging-tls', icon: '◈', label: 'TLS' },
@@ -91,6 +94,7 @@ const PAGES: Record<Page, () => ReactNode> = {
   'staging-tls': StagingTLSPage,
   'staging-metrics': StagingMetricsPage,
   'staging-deploy': StagingDeployPage,
+  'staging-prs': PullRequestsPage,
 };
 
 function App() {
